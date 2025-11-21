@@ -1,0 +1,20 @@
+# Mail settings
+MailHost=imap.mail.server.example
+MailPort=993
+MailUseSsl=true
+MailLogin=youremail@example.com
+MailPassword=yourpassword
+ImapFolder=INBOX
+
+# Filter
+FilterRecipient=uc_fk@roskazna.ru
+FilterSubjectPrefix=Сертификат №
+
+# Firebird settings
+FirebirdDbPath=E:\DB\certs.fdb
+FbUser=SYSDBA
+FbPassword=masterkey
+FbDialect=3
+
+# App behavior
+CheckIntervalSeconds=60

@@ -1,0 +1,570 @@
+﻿using ImapCertWatcher.Data;
+using ImapCertWatcher.Models;
+using ImapCertWatcher.Utils;
+using MailKit;
+using MailKit.Net.Imap;
+using MailKit.Search;
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.IO.Compression;
+using System.Linq;
+using System.Text.RegularExpressions;
+
+namespace ImapCertWatcher.Services
+{
+    public class ImapWatcher
+    {
+        private readonly AppSettings _settings;
+        private readonly DbHelper _db;
+        private readonly string _attachmentsBasePath;
+
+        private static Regex certNumberRegex = new Regex(@"Сертификат №\s*(?<number>[0-9A-F]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static Regex fioRegex = new Regex(@"ФИО:\s*(?<fio>[\p{L}\s\-]+?)(?:\.|\n|$)", RegexOptions.Compiled);
+        private static Regex datesRegex = new Regex(@"с\s*(?<ds>\d{2}\.\d{2}\.\d{4}\s+\d{2}:\d{2}:\d{2})\s*по\s*(?<de>\d{2}\.\d{2}\.\d{4}\s+\d{2}:\d{2}:\d{2})", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static Regex fioRegexAlt1 = new Regex(@"ФИО:\s*(?<fio>[\p{L}\s\-]+)\s*$", RegexOptions.Compiled | RegexOptions.Multiline);
+        private static Regex fioRegexAlt2 = new Regex(@"ФИО\s*=\s*(?<fio>[\p{L}\s\-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static Regex datesRegexAlt1 = new Regex(@"с\s*(?<ds>\d{2}\.\d{2}\.\d{4}\s+\d{2}:\d{2}:\d{2}).*?по\s*(?<de>\d{2}\.\d{2}\.\d{4}\s+\d{2}:\d{2}:\d{2})", RegexOptions.Compiled | RegexOptions.Singleline);
+        private static Regex datesRegexAlt2 = new Regex(@"Срок действия сертификата:\s*с\s*(?<ds>\d{2}\.\d{2}\.\d{4}\s+\d{2}:\d{2}:\d{2})\s*по\s*(?<de>\d{2}\.\d{2}\.\d{4}\s+\d{2}:\d{2}:\d{2})", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        public ImapWatcher(AppSettings settings, DbHelper db)
+        {
+            _settings = settings;
+            _db = db;
+            _attachmentsBasePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Certs");
+
+            // Создаем папку для архивов, если ее нет
+            if (!Directory.Exists(_attachmentsBasePath))
+                Directory.CreateDirectory(_attachmentsBasePath);
+        }
+
+        public List<CertEntry> CheckMail(bool checkAllMessages = false)
+        {
+            var results = new List<CertEntry>();
+            using (var client = new ImapClient())
+            {
+                client.Timeout = 60 * 1000;
+
+                try
+                {
+                    System.Diagnostics.Debug.WriteLine($"Подключаемся к {_settings.MailHost}:{_settings.MailPort} (SSL: {_settings.MailUseSsl})");
+
+                    if (_settings.MailUseSsl)
+                        client.Connect(_settings.MailHost, _settings.MailPort, MailKit.Security.SecureSocketOptions.SslOnConnect);
+                    else
+                        client.Connect(_settings.MailHost, _settings.MailPort, MailKit.Security.SecureSocketOptions.StartTlsWhenAvailable);
+
+                    System.Diagnostics.Debug.WriteLine("Подключение успешно");
+
+                    client.Authenticate(_settings.MailLogin, _settings.MailPassword);
+                    System.Diagnostics.Debug.WriteLine("Аутентификация успешна");
+
+                    var mainFolder = GetFolderRecursive(client, _settings.ImapFolder);
+                    if (mainFolder == null)
+                    {
+                        throw new Exception($"Не удалось найти папку: {_settings.ImapFolder}");
+                    }
+
+                    System.Diagnostics.Debug.WriteLine($"Основная папка: {mainFolder.FullName}");
+
+                    var allFolders = GetAllSubfoldersRecursive(mainFolder);
+                    allFolders.Insert(0, mainFolder);
+
+                    System.Diagnostics.Debug.WriteLine($"Будет проверено папок: {allFolders.Count}");
+
+                    foreach (var folder in allFolders)
+                    {
+                        try
+                        {
+                            System.Diagnostics.Debug.WriteLine($"Проверяем папку: {folder.FullName}");
+                            folder.Open(FolderAccess.ReadOnly);
+
+                            System.Diagnostics.Debug.WriteLine($"В папке {folder.FullName}: {folder.Count} писем");
+
+                            // Создаем запрос в зависимости от режима
+                            SearchQuery query;
+                            if (checkAllMessages)
+                            {
+                                // Все письма
+                                query = SearchQuery.SubjectContains("Сертификат №")
+                                            .And(SearchQuery.FromContains(_settings.FilterRecipient));
+                                System.Diagnostics.Debug.WriteLine("Режим: проверка ВСЕХ писем");
+                            }
+                            else
+                            {
+                                // Только письма за последние 3 дня
+                                var threeDaysAgo = DateTime.Now.AddDays(-3);
+                                query = SearchQuery.SubjectContains("Сертификат №")
+                                            .And(SearchQuery.FromContains(_settings.FilterRecipient))
+                                            .And(SearchQuery.DeliveredAfter(threeDaysAgo));
+                                System.Diagnostics.Debug.WriteLine($"Режим: проверка писем за последние 3 дня (с {threeDaysAgo:dd.MM.yyyy})");
+                            }
+
+                            var uids = folder.Search(query);
+                            System.Diagnostics.Debug.WriteLine($"В папке {folder.FullName} найдено писем для обработки: {uids.Count}");
+
+                            foreach (var uid in uids)
+                            {
+                                try
+                                {
+                                    var msg = folder.GetMessage(uid);
+                                    var subject = msg.Subject ?? "";
+                                    var fromAddress = msg.From.Mailboxes.FirstOrDefault()?.Address ?? "";
+                                    var body = GetMessageBody(msg);
+                                    var messageDate = msg.Date.UtcDateTime.ToLocalTime();
+
+                                    System.Diagnostics.Debug.WriteLine($"Обрабатываем письмо из папки {folder.FullName}: {subject}, От: {fromAddress}, Дата: {messageDate:dd.MM.yyyy HH:mm}");
+
+                                    if (!subject.StartsWith("Сертификат №", StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        System.Diagnostics.Debug.WriteLine($"Пропускаем письмо - тема не начинается с 'Сертификат №': {subject}");
+                                        continue;
+                                    }
+
+                                    if (!fromAddress.Contains(_settings.FilterRecipient))
+                                    {
+                                        System.Diagnostics.Debug.WriteLine($"Пропускаем письмо - отправитель не совпадает: {fromAddress}");
+                                        continue;
+                                    }
+
+                                    var certNumber = ExtractCertNumber(subject);
+                                    var fio = ExtractFio(body);
+                                    var dates = ExtractDates(body);
+
+                                    if (string.IsNullOrEmpty(fio))
+                                    {
+                                        System.Diagnostics.Debug.WriteLine($"Не найден ФИО в письме {uid}");
+                                        continue;
+                                    }
+
+                                    if (dates.start == DateTime.MinValue || dates.end == DateTime.MinValue)
+                                    {
+                                        System.Diagnostics.Debug.WriteLine($"Не найдены даты в письме {uid}");
+                                        continue;
+                                    }
+
+                                    // Сохраняем вложения (ZIP архивы)
+                                    string archivePath = SaveAttachments(msg, fio, certNumber);
+
+                                    var daysLeft = (int)Math.Ceiling((dates.end - DateTime.Now).TotalDays);
+                                    if (daysLeft < 0) daysLeft = 0;
+
+                                    var entry = new CertEntry
+                                    {
+                                        MailUid = uid.ToString(),
+                                        Fio = fio,
+                                        DateStart = dates.start,
+                                        DateEnd = dates.end,
+                                        DaysLeft = daysLeft,
+                                        Subject = subject,
+                                        Received = msg.Date.UtcDateTime.ToLocalTime(),
+                                        CertNumber = certNumber,
+                                        FromAddress = fromAddress,
+                                        FolderPath = folder.FullName,
+                                        ArchivePath = archivePath,
+                                        MessageDate = messageDate
+                                    };
+
+                                    try
+                                    {
+                                        _db.InsertOrUpdate(entry);
+                                        System.Diagnostics.Debug.WriteLine($"Успешно обработано письмо из папки {folder.FullName}: {fio}, {dates.start:dd.MM.yyyy} - {dates.end:dd.MM.yyyy}, Сертификат: {certNumber}");
+                                        results.Add(entry);
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        System.Diagnostics.Debug.WriteLine($"Ошибка сохранения в БД: {ex.Message}");
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    System.Diagnostics.Debug.WriteLine($"Ошибка обработки письма {uid}: {ex.Message}");
+                                }
+                            }
+
+                            folder.Close();
+                        }
+                        catch (Exception ex)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"Ошибка при работе с папкой {folder.FullName}: {ex.Message}");
+                        }
+                    }
+
+                    client.Disconnect(true);
+                    System.Diagnostics.Debug.WriteLine($"Обработка завершена. Проверено папок: {allFolders.Count}, Успешно обработано: {results.Count} писем");
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Ошибка работы с почтовым сервером: {ex.Message}");
+                    throw new Exception($"Ошибка работы с почтовым сервером: {ex.Message}", ex);
+                }
+            }
+
+            return results;
+        }
+
+        private string SaveAttachments(MimeKit.MimeMessage msg, string fio, string certNumber)
+        {
+            try
+            {
+                if (!msg.Attachments.Any())
+                    return null;
+
+                // Создаем безопасное имя папки для ФИО
+                var safeFio = MakeValidFileName(fio);
+                var certFolder = Path.Combine(_attachmentsBasePath, safeFio);
+
+                if (!Directory.Exists(certFolder))
+                    Directory.CreateDirectory(certFolder);
+
+                string savedArchivePath = null;
+
+                foreach (var attachment in msg.Attachments)
+                {
+                    var fileName = attachment.ContentDisposition?.FileName ?? attachment.ContentType.Name;
+
+                    if (string.IsNullOrEmpty(fileName))
+                        continue;
+
+                    // Сохраняем только ZIP архивы
+                    if (fileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var filePath = Path.Combine(certFolder, $"{certNumber}_{fileName}");
+
+                        using (var stream = File.Create(filePath))
+                        {
+                            if (attachment is MimeKit.MessagePart)
+                            {
+                                var part = (MimeKit.MessagePart)attachment;
+                                part.Message.WriteTo(stream);
+                            }
+                            else
+                            {
+                                var part = (MimeKit.MimePart)attachment;
+                                part.Content.DecodeTo(stream);
+                            }
+                        }
+
+                        savedArchivePath = filePath;
+                        System.Diagnostics.Debug.WriteLine($"Сохранен архив: {filePath}");
+                    }
+                }
+
+                return savedArchivePath;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Ошибка при сохранении вложений: {ex.Message}");
+                return null;
+            }
+        }
+
+        private string MakeValidFileName(string name)
+        {
+            var invalidChars = Path.GetInvalidFileNameChars();
+            return new string(name.Where(ch => !invalidChars.Contains(ch)).ToArray());
+        }
+
+        // Метод для распаковки архива
+        public bool ExtractArchive(string archivePath, string fio)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(archivePath) || !File.Exists(archivePath))
+                    return false;
+
+                var safeFio = MakeValidFileName(fio);
+                var extractPath = Path.Combine(_attachmentsBasePath, safeFio, "extracted");
+
+                if (Directory.Exists(extractPath))
+                    Directory.Delete(extractPath, true);
+
+                Directory.CreateDirectory(extractPath);
+
+                // Используем полное имя с указанием пространства имен
+                System.IO.Compression.ZipFile.ExtractToDirectory(archivePath, extractPath);
+                System.Diagnostics.Debug.WriteLine($"Архив распакован: {archivePath} -> {extractPath}");
+
+                // Открываем папку с распакованными файлами
+                System.Diagnostics.Process.Start("explorer.exe", extractPath);
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Ошибка при распаковке архива: {ex.Message}");
+                return false;
+            }
+        }
+
+        private string ExtractFio(string body)
+        {
+            // Пробуем разные варианты регулярных выражений
+            var match = fioRegex.Match(body);
+            if (match.Success)
+                return match.Groups["fio"].Value.Trim();
+
+            match = fioRegexAlt1.Match(body);
+            if (match.Success)
+                return match.Groups["fio"].Value.Trim();
+
+            match = fioRegexAlt2.Match(body);
+            if (match.Success)
+                return match.Groups["fio"].Value.Trim();
+
+            // Дополнительная попытка найти ФИО в формате "ФИО: Имя Отчество Фамилия"
+            var fioPatterns = new[]
+            {
+                @"ФИО[:\s]+([А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+)",
+                @"ФИО[:\s]+([А-ЯЁ][а-яё]+\s+[А-ЯЁ][\.]\s*[А-ЯЁ][\.])",
+                @"ФИО\s*=\s*([^\.\r\n]+)"
+            };
+
+            foreach (var pattern in fioPatterns)
+            {
+                match = Regex.Match(body, pattern, RegexOptions.IgnoreCase);
+                if (match.Success)
+                    return match.Groups[1].Value.Trim();
+            }
+
+            return null;
+        }
+
+        private (DateTime start, DateTime end) ExtractDates(string body)
+        {
+            // Пробуем разные варианты регулярных выражений для дат
+            var match = datesRegex.Match(body);
+            if (match.Success)
+            {
+                if (TryParseDate(match.Groups["ds"].Value, out DateTime start) &&
+                    TryParseDate(match.Groups["de"].Value, out DateTime end))
+                {
+                    return (start, end);
+                }
+            }
+
+            match = datesRegexAlt1.Match(body);
+            if (match.Success)
+            {
+                if (TryParseDate(match.Groups["ds"].Value, out DateTime start) &&
+                    TryParseDate(match.Groups["de"].Value, out DateTime end))
+                {
+                    return (start, end);
+                }
+            }
+
+            match = datesRegexAlt2.Match(body);
+            if (match.Success)
+            {
+                if (TryParseDate(match.Groups["ds"].Value, out DateTime start) &&
+                    TryParseDate(match.Groups["de"].Value, out DateTime end))
+                {
+                    return (start, end);
+                }
+            }
+
+            // Дополнительная попытка найти даты в других форматах
+            var datePatterns = new[]
+            {
+                @"с\s*(\d{2}\.\d{2}\.\d{4}\s+\d{2}:\d{2}:\d{2}).*?по\s*(\d{2}\.\d{2}\.\d{4}\s+\d{2}:\d{2}:\d{2})",
+                @"Срок действия[^:]*:\s*с\s*(\d{2}\.\d{2}\.\d{4}\s+\d{2}:\d{2}:\d{2})\s*по\s*(\d{2}\.\d{2}\.\d{4}\s+\d{2}:\d{2}:\d{2})"
+            };
+
+            foreach (var pattern in datePatterns)
+            {
+                match = Regex.Match(body, pattern, RegexOptions.Singleline | RegexOptions.IgnoreCase);
+                if (match.Success && match.Groups.Count >= 3)
+                {
+                    if (TryParseDate(match.Groups[1].Value, out DateTime start) &&
+                        TryParseDate(match.Groups[2].Value, out DateTime end))
+                    {
+                        return (start, end);
+                    }
+                }
+            }
+
+            return (DateTime.MinValue, DateTime.MinValue);
+        }
+
+        private bool TryParseDate(string dateString, out DateTime result)
+        {
+            // Пробуем разные форматы дат
+            var formats = new[]
+            {
+                "dd.MM.yyyy HH:mm:ss",
+                "dd.MM.yyyy H:mm:ss",
+                "d.MM.yyyy HH:mm:ss",
+                "d.MM.yyyy H:mm:ss"
+            };
+
+            foreach (var format in formats)
+            {
+                if (DateTime.TryParseExact(dateString.Trim(), format,
+                    System.Globalization.CultureInfo.GetCultureInfo("ru-RU"),
+                    System.Globalization.DateTimeStyles.None, out result))
+                {
+                    return true;
+                }
+            }
+
+            result = DateTime.MinValue;
+            return false;
+        }
+
+        // Остальные методы без изменений
+        private IMailFolder GetFolderRecursive(ImapClient client, string folderName)
+        {
+            try
+            {
+                var folder = client.GetFolder(folderName);
+                if (folder != null)
+                    return folder;
+            }
+            catch (FolderNotFoundException)
+            {
+                System.Diagnostics.Debug.WriteLine($"Папка '{folderName}' не найдена, начинаем рекурсивный поиск...");
+            }
+
+            var personal = client.GetFolder(client.PersonalNamespaces[0]);
+            return FindFolderRecursive(personal, folderName);
+        }
+
+        private IMailFolder FindFolderRecursive(IMailFolder parent, string folderName)
+        {
+            try
+            {
+                var subfolders = parent.GetSubfolders(false);
+
+                foreach (var folder in subfolders)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Проверяем папку: {folder.FullName}");
+
+                    if (folder.FullName.Equals(folderName, StringComparison.OrdinalIgnoreCase) ||
+                        folder.Name.Equals(folderName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Найдена папка: {folder.FullName}");
+                        return folder;
+                    }
+
+                    try
+                    {
+                        var foundFolder = FindFolderRecursive(folder, folderName);
+                        if (foundFolder != null)
+                            return foundFolder;
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Ошибка при поиске в папке {folder.Name}: {ex.Message}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Ошибка при получении подпапок для {parent.Name}: {ex.Message}");
+            }
+
+            return null;
+        }
+
+        private List<IMailFolder> GetAllSubfoldersRecursive(IMailFolder parent)
+        {
+            var folders = new List<IMailFolder>();
+
+            try
+            {
+                var subfolders = parent.GetSubfolders(false);
+                foreach (var folder in subfolders)
+                {
+                    folders.Add(folder);
+                    folders.AddRange(GetAllSubfoldersRecursive(folder));
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Ошибка при получении подпапок из {parent.FullName}: {ex.Message}");
+            }
+
+            return folders;
+        }
+
+        public List<CertEntry> ProcessAllExistingEmails()
+        {
+            return CheckMail(true);
+        }
+
+        private string GetMessageBody(MimeKit.MimeMessage msg)
+        {
+            var textPart = msg.TextBody;
+            if (!string.IsNullOrEmpty(textPart))
+                return textPart;
+
+            var htmlPart = msg.HtmlBody;
+            if (!string.IsNullOrEmpty(htmlPart))
+            {
+                return System.Text.RegularExpressions.Regex.Replace(htmlPart, "<.*?>", string.Empty);
+            }
+
+            return msg.Body?.ToString() ?? "";
+        }
+
+        private string ExtractCertNumber(string subject)
+        {
+            var match = certNumberRegex.Match(subject);
+            return match.Success ? match.Groups["number"].Value.Trim() : "Неизвестно";
+        }
+
+        public static List<string> GetMailFolders(AppSettings settings)
+        {
+            var folders = new List<string>();
+
+            using (var client = new ImapClient())
+            {
+                client.Timeout = 15 * 1000;
+
+                if (settings.MailUseSsl)
+                    client.Connect(settings.MailHost, settings.MailPort,
+                                 MailKit.Security.SecureSocketOptions.SslOnConnect);
+                else
+                    client.Connect(settings.MailHost, settings.MailPort,
+                                 MailKit.Security.SecureSocketOptions.StartTlsWhenAvailable);
+
+                client.Authenticate(settings.MailLogin, settings.MailPassword);
+
+                var personal = client.GetFolder(client.PersonalNamespaces[0]);
+                var allFolders = GetAllFoldersRecursiveStatic(personal);
+
+                foreach (var folder in allFolders)
+                {
+                    folders.Add(folder.FullName);
+                }
+
+                folders.Sort();
+                client.Disconnect(true);
+            }
+
+            return folders;
+        }
+
+        private static List<IMailFolder> GetAllFoldersRecursiveStatic(IMailFolder parent)
+        {
+            var folders = new List<IMailFolder>();
+
+            try
+            {
+                var subfolders = parent.GetSubfolders(false);
+                folders.AddRange(subfolders);
+
+                foreach (var folder in subfolders)
+                {
+                    folders.AddRange(GetAllFoldersRecursiveStatic(folder));
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Ошибка при получении папок из {parent.Name}: {ex.Message}");
+            }
+
+            return folders;
+        }
+    }
+}

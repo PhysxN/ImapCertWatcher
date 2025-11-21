@@ -1,0 +1,219 @@
+﻿<Window x:Class="ImapCertWatcher.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:ImapCertWatcher"
+        Title="Watcher ЭЦП" Height="600" Width="1200">
+
+    <!-- УБИРАЕМ Window.Resources - конвертер будет создаваться автоматически -->
+
+    <Grid Margin="8">
+        <TabControl>
+            <!-- Вкладка с сертификатами -->
+            <TabItem Header="Сертификаты">
+                <Grid Margin="8">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- Панель управления -->
+                    <StackPanel Orientation="Horizontal" Grid.Row="0" Margin="0,0,0,8">
+                        <Button x:Name="btnManualCheck" Content="Проверить сейчас" Margin="0,0,8,0" Padding="8,4" Click="BtnManualCheck_Click"/>
+                        <Button x:Name="btnProcessAll" Content="Обработать все письма" Margin="0,0,8,0" Padding="8,4" Click="BtnProcessAll_Click"/>
+                        <TextBlock Text="Интервал (сек):" VerticalAlignment="Center" Margin="8,0,4,0"/>
+                        <TextBlock x:Name="txtInterval" VerticalAlignment="Center" Margin="0,0,16,0"/>
+
+                        <Button x:Name="btnDeleteSelected" Content="Пометить на удаление" Margin="0,0,8,0" Padding="8,4" Click="BtnDeleteSelected_Click"/>
+                        <Button x:Name="btnRestoreSelected" Content="Восстановить" Margin="0,0,8,0" Padding="8,4" Click="BtnRestoreSelected_Click"/>
+                    </StackPanel>
+
+                    <!-- Фильтры -->
+                    <StackPanel Orientation="Horizontal" Grid.Row="1" Margin="0,0,0,8">
+                        <TextBlock Text="Фильтр по зданию:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <RadioButton x:Name="rbAllBuildings" Content="Все" GroupName="BuildingFilter" IsChecked="True" Checked="BuildingFilter_Checked"/>
+                        <RadioButton x:Name="rbKrasnoflotskaya" Content="Краснофлотская" GroupName="BuildingFilter" Margin="8,0,0,0" Checked="BuildingFilter_Checked"/>
+                        <RadioButton x:Name="rbPionerskaya" Content="Пионерская" GroupName="BuildingFilter" Margin="8,0,0,0" Checked="BuildingFilter_Checked"/>
+
+                        <CheckBox x:Name="chkShowDeleted" Content="Показывать удаленные" Margin="16,0,0,0" VerticalAlignment="Center" Checked="ChkShowDeleted_Changed" Unchecked="ChkShowDeleted_Changed"/>
+                    </StackPanel>
+
+                    <!-- Таблица сертификатов -->
+                    <DataGrid x:Name="dgCerts" Grid.Row="2" AutoGenerateColumns="False" 
+                              IsReadOnly="False" SelectionMode="Single"
+                              CanUserSortColumns="True" CanUserResizeColumns="True"
+                              LoadingRow="DgCerts_LoadingRow" MouseDoubleClick="DgCerts_MouseDoubleClick">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="ФИО" Binding="{Binding Fio}" Width="2*"/>
+                            <DataGridTextColumn Header="Сертификат" Binding="{Binding CertNumber}" Width="*"/>
+                            <DataGridTextColumn Header="Начало" Binding="{Binding DateStart, StringFormat=dd.MM.yyyy}" Width="*"/>
+                            <DataGridTextColumn Header="Окончание" Binding="{Binding DateEnd, StringFormat=dd.MM.yyyy}" Width="*"/>
+                            <DataGridTextColumn Header="Осталось дней" Binding="{Binding DaysLeft}" Width="*"/>
+                            <DataGridTextColumn Header="Папка" Binding="{Binding FolderPath}" Width="1.5*"/>
+                            <DataGridTemplateColumn Header="Архив" Width="*">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <Button Content="📁 Открыть" 
+                    Click="BtnOpenArchive_Click" 
+                    Padding="4,2"
+                    ToolTip="Распаковать и открыть архив">
+                                            <Button.Style>
+                                                <Style TargetType="Button">
+                                                    <Setter Property="IsEnabled" Value="True"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding ArchivePath}" Value="{x:Null}">
+                                                            <Setter Property="IsEnabled" Value="False"/>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding ArchivePath}" Value="">
+                                                            <Setter Property="IsEnabled" Value="False"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Button.Style>
+                                        </Button>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                            <DataGridTemplateColumn Header="Здание" Width="*">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <ComboBox SelectedItem="{Binding Building, UpdateSourceTrigger=PropertyChanged}"
+                                                  SelectionChanged="BuildingComboBox_SelectionChanged">
+                                            <ComboBoxItem Content=""/>
+                                            <ComboBoxItem Content="Краснофлотская"/>
+                                            <ComboBoxItem Content="Пионерская"/>
+                                        </ComboBox>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                            <DataGridTemplateColumn Header="Примечание" Width="2*">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBox Text="{Binding Note, UpdateSourceTrigger=PropertyChanged}" 
+                                                 LostFocus="NoteTextBox_LostFocus"
+                                                 BorderThickness="0" Background="Transparent"/>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                            <DataGridCheckBoxColumn Header="Удален" Binding="{Binding IsDeleted}" Width="*"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+
+                    <StatusBar Grid.Row="3" Margin="0,8,0,0">
+                        <StatusBarItem>
+                            <TextBlock x:Name="statusText">Готов</TextBlock>
+                        </StatusBarItem>
+                    </StatusBar>
+                </Grid>
+            </TabItem>
+
+            <!-- Вкладка с настройками почты -->
+            <TabItem Header="Настройки почты">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="8" Width="450">
+                        <GroupBox Header="Почтовый сервер" Margin="0,0,0,10">
+                            <StackPanel Margin="4">
+                                <TextBlock Text="Хост IMAP:" Margin="0,2"/>
+                                <TextBox x:Name="txtMailHost" Text="{Binding MailHost}" Margin="0,2,0,8"/>
+
+                                <TextBlock Text="Порт:" Margin="0,2"/>
+                                <TextBox x:Name="txtMailPort" Text="{Binding MailPort}" Margin="0,2,0,8"/>
+
+                                <CheckBox x:Name="chkMailUseSsl" Content="Использовать SSL" IsChecked="{Binding MailUseSsl}" Margin="0,2,0,8"/>
+                            </StackPanel>
+                        </GroupBox>
+
+                        <GroupBox Header="Учетные данные" Margin="0,0,0,10">
+                            <StackPanel Margin="4">
+                                <TextBlock Text="Логин:" Margin="0,2"/>
+                                <TextBox x:Name="txtMailLogin" Text="{Binding MailLogin}" Margin="0,2,0,8"/>
+
+                                <TextBlock Text="Пароль:" Margin="0,2"/>
+                                <PasswordBox x:Name="pwdMailPassword" Margin="0,2,0,8"/>
+
+                                <TextBlock Text="Папка IMAP:" Margin="0,2"/>
+                                <StackPanel Orientation="Horizontal">
+                                    <ComboBox x:Name="cmbImapFolder" 
+                                              Text="{Binding ImapFolder}"
+                                              IsEditable="True"
+                                              Margin="0,2,4,8" 
+                                              Width="300"
+                                              ToolTip="Выберите папку из списка или введите вручную"/>
+                                    <Button x:Name="btnRefreshFolders" Content="Обновить" 
+                                            Click="BtnRefreshFolders_Click" 
+                                            Padding="6,2" Width="60"/>
+                                </StackPanel>
+                                <TextBlock x:Name="txtFoldersStatus" Text="Нажмите 'Обновить' для загрузки списка папок с сервера" 
+                                           FontStyle="Italic" FontSize="10" Foreground="Gray"/>
+                            </StackPanel>
+                        </GroupBox>
+
+                        <GroupBox Header="Фильтрация писем" Margin="0,0,0,10">
+                            <StackPanel Margin="4">
+                                <TextBlock Text="Адрес отправителя (например: uc_fk@roskazna.ru):" Margin="0,2"/>
+                                <TextBox x:Name="txtFilterRecipient" Text="{Binding FilterRecipient}" Margin="0,2,0,8"/>
+                                <TextBlock Text="Проверяются входящие письма ОТ указанного отправителя с темой 'Сертификат №'" 
+                                           FontStyle="Italic" FontSize="10" Foreground="Gray"/>
+
+                                <TextBlock Text="Префикс темы (например: Сертификат №):" Margin="0,2"/>
+                                <TextBox x:Name="txtFilterSubjectPrefix" Text="{Binding FilterSubjectPrefix}" Margin="0,2,0,8"/>
+                                <TextBlock Text="Письма фильтруются по теме формата: 'Сертификат № &lt;номер&gt; готов'" 
+                                           FontStyle="Italic" FontSize="10" Foreground="Gray"/>
+                            </StackPanel>
+                        </GroupBox>
+
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                            <Button x:Name="btnSaveMailSettings" Content="Сохранить" Click="BtnSaveMailSettings_Click" 
+                                    Padding="10,4" Margin="0,0,8,0"/>
+                            <Button x:Name="btnTestMailConnection" Content="Тест подключения" 
+                                    Click="BtnTestMailConnection_Click" Padding="10,4"/>
+                        </StackPanel>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- Вкладка с настройками Firebird -->
+            <TabItem Header="Настройки БД">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="8" Width="450">
+                        <GroupBox Header="База данных Firebird" Margin="0,0,0,10">
+                            <StackPanel Margin="4">
+                                <TextBlock Text="Путь к файлу БД:" Margin="0,2"/>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBox x:Name="txtFirebirdDbPath" Text="{Binding FirebirdDbPath}" 
+                                             Margin="0,2,4,8" Width="300"/>
+                                    <Button x:Name="btnBrowseDbPath" Content="..." Click="BtnBrowseDbPath_Click" 
+                                            Padding="6,2" Width="30"/>
+                                </StackPanel>
+
+                                <TextBlock Text="Пользователь:" Margin="0,2"/>
+                                <TextBox x:Name="txtFbUser" Text="{Binding FbUser}" Margin="0,2,0,8"/>
+
+                                <TextBlock Text="Пароль:" Margin="0,2"/>
+                                <PasswordBox x:Name="pwdFbPassword" Margin="0,2,0,8"/>
+
+                                <TextBlock Text="Диалект:" Margin="0,2"/>
+                                <TextBox x:Name="txtFbDialect" Text="{Binding FbDialect}" Margin="0,2,0,8"/>
+                            </StackPanel>
+                        </GroupBox>
+
+                        <GroupBox Header="Поведение приложения" Margin="0,0,0,10">
+                            <StackPanel Margin="4">
+                                <TextBlock Text="Интервал проверки (секунды):" Margin="0,2"/>
+                                <TextBox x:Name="txtCheckInterval" Text="{Binding CheckIntervalSeconds}" Margin="0,2,0,8"/>
+                            </StackPanel>
+                        </GroupBox>
+
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                            <Button x:Name="btnSaveDbSettings" Content="Сохранить" Click="BtnSaveDbSettings_Click" 
+                                    Padding="10,4" Margin="0,0,8,0"/>
+                            <Button x:Name="btnTestDbConnection" Content="Тест подключения" 
+                                    Click="BtnTestDbConnection_Click" Padding="10,4"/>
+                        </StackPanel>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+        </TabControl>
+    </Grid>
+</Window>
