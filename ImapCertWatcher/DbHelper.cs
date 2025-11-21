@@ -179,7 +179,7 @@ namespace ImapCertWatcher.Data
 
                 using (var cmd = conn.CreateCommand())
                 {
-                    // Ищем существующую запись с таким же ФИО
+                    // Ищем существующую запись с таким же ФИО и номером сертификата
                     cmd.CommandText = @"SELECT ID, MESSAGE_DATE FROM CERTS WHERE FIO = @fio AND CERT_NUMBER = @certNumber";
                     cmd.Parameters.AddWithValue("@fio", entry.Fio);
                     cmd.Parameters.AddWithValue("@certNumber", entry.CertNumber ?? "");
@@ -190,13 +190,19 @@ namespace ImapCertWatcher.Data
                         {
                             // Запись существует - проверяем дату
                             int existingId = reader.GetInt32(0);
-                            DateTime existingDate = reader.GetDateTime(1);
+
+                            // Безопасное чтение MESSAGE_DATE (может быть NULL)
+                            DateTime existingDate = DateTime.MinValue;
+                            if (!reader.IsDBNull(1))
+                            {
+                                existingDate = reader.GetDateTime(1);
+                            }
+
+                            reader.Close();
 
                             // Если новое письмо более свежее - обновляем
                             if (entry.MessageDate > existingDate)
                             {
-                                reader.Close();
-
                                 cmd.Parameters.Clear();
                                 cmd.CommandText =
                                     @"UPDATE CERTS SET 
