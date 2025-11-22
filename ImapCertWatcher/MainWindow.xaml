@@ -272,6 +272,7 @@
     <Grid Margin="8" Background="{DynamicResource WindowBackgroundBrush}">
         <TabControl Style="{StaticResource ModernTabControlStyle}">
             <!-- Вкладка с сертификатами -->
+            <!-- Вкладка с сертификатами -->
             <TabItem Header="Сертификаты" Style="{StaticResource ModernTabItemStyle}">
                 <Grid Margin="8">
                     <Grid.RowDefinitions>
@@ -280,76 +281,81 @@
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
                         <RowDefinition Height="Auto"/>
+                        <!-- Мини-лог -->
+                        <RowDefinition Height="Auto"/>
+                        <!-- Прогресс-бар -->
+                        <RowDefinition Height="Auto"/>
+                        <!-- Статус бар -->
                     </Grid.RowDefinitions>
 
                     <!-- Панель управления -->
                     <StackPanel Orientation="Horizontal" Grid.Row="0" Margin="0,0,0,8">
                         <Button x:Name="btnManualCheck" Content="Проверить сейчас" 
-                                Style="{StaticResource ModernButtonStyle}" 
-                                Click="BtnManualCheck_Click"/>
+                    Style="{StaticResource ModernButtonStyle}" 
+                    Click="BtnManualCheck_Click"/>
                         <Button x:Name="btnProcessAll" Content="Обработать все письма" 
-                                Style="{StaticResource ModernButtonStyle}" 
-                                Click="BtnProcessAll_Click"/>
+                    Style="{StaticResource ModernButtonStyle}" 
+                    Click="BtnProcessAll_Click"/>
                         <Button x:Name="btnExportExcel" Content="Экспорт в Excel" 
-                                Style="{StaticResource ModernButtonStyle}" 
-                                Click="BtnExportExcel_Click"/>
+                    Style="{StaticResource ModernButtonStyle}" 
+                    Click="BtnExportExcel_Click"/>
                         <TextBlock Text="Интервал (сек):" VerticalAlignment="Center" Margin="8,0,4,0"
-                                   Foreground="{DynamicResource TextColorBrush}"/>
+                       Foreground="{DynamicResource TextColorBrush}"/>
                         <TextBlock x:Name="txtInterval" VerticalAlignment="Center" Margin="0,0,16,0"
-                                   Foreground="{DynamicResource TextColorBrush}"/>
+                       Foreground="{DynamicResource TextColorBrush}"/>
 
                         <Button x:Name="btnDeleteSelected" Content="Пометить на удаление" 
-                                Style="{StaticResource ModernButtonStyle}" 
-                                Click="BtnDeleteSelected_Click"/>
+                    Style="{StaticResource ModernButtonStyle}" 
+                    Click="BtnDeleteSelected_Click"/>
                         <Button x:Name="btnRestoreSelected" Content="Восстановить" 
-                                Style="{StaticResource ModernButtonStyle}" 
-                                Click="BtnRestoreSelected_Click"/>
+                    Style="{StaticResource ModernButtonStyle}" 
+                    Click="BtnRestoreSelected_Click"/>
                     </StackPanel>
 
                     <!-- Поиск по ФИО -->
                     <StackPanel Orientation="Horizontal" Grid.Row="1" Margin="0,0,0,8">
                         <TextBlock Text="Поиск по ФИО:" VerticalAlignment="Center" Margin="0,0,8,0"
-                                   Foreground="{DynamicResource TextColorBrush}"/>
+                       Foreground="{DynamicResource TextColorBrush}"/>
                         <TextBox x:Name="txtSearchFio" Width="300" 
-                                 Style="{StaticResource ModernTextBoxStyle}"
-                                 TextChanged="TxtSearchFio_TextChanged"
-                                 VerticalAlignment="Center"
-                                 ToolTip="Введите ФИО для поиска"/>
+                     Style="{StaticResource ModernTextBoxStyle}"
+                     TextChanged="TxtSearchFio_TextChanged"
+                     VerticalAlignment="Center"
+                     ToolTip="Введите ФИО для поиска"/>
                         <Button x:Name="btnClearSearch" Content="Очистить" 
-                                Style="{StaticResource ModernButtonStyle}" 
-                                Click="BtnClearSearch_Click"
-                                ToolTip="Очистить поиск"/>
+                    Style="{StaticResource ModernButtonStyle}" 
+                    Click="BtnClearSearch_Click"
+                    ToolTip="Очистить поиск"/>
                     </StackPanel>
 
                     <!-- Фильтры -->
                     <StackPanel Orientation="Horizontal" Grid.Row="2" Margin="0,0,0,8">
                         <TextBlock Text="Фильтр по зданию:" VerticalAlignment="Center" Margin="0,0,8,0"
-                                   Foreground="{DynamicResource TextColorBrush}"/>
+                       Foreground="{DynamicResource TextColorBrush}"/>
                         <RadioButton x:Name="rbAllBuildings" Content="Все" GroupName="BuildingFilter" 
-                                     Style="{StaticResource ModernRadioButtonStyle}" 
-                                     IsChecked="True" Checked="BuildingFilter_Checked"/>
+                         Style="{StaticResource ModernRadioButtonStyle}" 
+                         IsChecked="True" Checked="BuildingFilter_Checked"/>
                         <RadioButton x:Name="rbKrasnoflotskaya" Content="Краснофлотская" GroupName="BuildingFilter" 
-                                     Style="{StaticResource ModernRadioButtonStyle}" 
-                                     Checked="BuildingFilter_Checked"/>
+                         Style="{StaticResource ModernRadioButtonStyle}" 
+                         Checked="BuildingFilter_Checked"/>
                         <RadioButton x:Name="rbPionerskaya" Content="Пионерская" GroupName="BuildingFilter" 
-                                     Style="{StaticResource ModernRadioButtonStyle}" 
-                                     Checked="BuildingFilter_Checked"/>
+                         Style="{StaticResource ModernRadioButtonStyle}" 
+                         Checked="BuildingFilter_Checked"/>
 
                         <CheckBox x:Name="chkShowDeleted" Content="Показывать удаленные" 
-                                  Style="{StaticResource ModernCheckBoxStyle}" 
-                                  Checked="ChkShowDeleted_Changed" Unchecked="ChkShowDeleted_Changed"/>
+                      Style="{StaticResource ModernCheckBoxStyle}" 
+                      Checked="ChkShowDeleted_Changed" Unchecked="ChkShowDeleted_Changed"/>
                     </StackPanel>
 
                     <!-- Таблица сертификатов -->
                     <DataGrid x:Name="dgCerts" Grid.Row="3" 
-                              Style="{StaticResource ModernDataGridStyle}"
-                              IsReadOnly="False" SelectionMode="Single"
-                              CanUserSortColumns="True" CanUserResizeColumns="True"
-                              LoadingRow="DgCerts_LoadingRow"
-                              ContextMenuOpening="DgCerts_ContextMenuOpening"
-                              CellEditEnding="DgCerts_CellEditEnding"
-                              BeginningEdit="DgCerts_BeginningEdit"
-                              PreparingCellForEdit="DgCerts_PreparingCellForEdit">
+                  Style="{StaticResource ModernDataGridStyle}"
+                  IsReadOnly="False" SelectionMode="Single"
+                  CanUserSortColumns="True" CanUserResizeColumns="True"
+                  LoadingRow="DgCerts_LoadingRow"
+                  ContextMenuOpening="DgCerts_ContextMenuOpening"
+                  CellEditEnding="DgCerts_CellEditEnding"
+                  BeginningEdit="DgCerts_BeginningEdit"
+                  PreparingCellForEdit="DgCerts_PreparingCellForEdit">
                         <DataGrid.ContextMenu>
                             <ContextMenu Style="{StaticResource ModernContextMenuStyle}">
                                 <MenuItem Header="Добавить архив с подписью" Click="AddArchiveMenuItem_Click"/>
@@ -359,23 +365,23 @@
                         </DataGrid.ContextMenu>
                         <DataGrid.Columns>
                             <DataGridTextColumn Header="ФИО" Binding="{Binding Fio}" Width="2*"
-                        ElementStyle="{StaticResource DataGridTextBlockStyle}"/>
+                                    ElementStyle="{StaticResource DataGridTextBlockStyle}"/>
                             <DataGridTextColumn Header="Сертификат" Binding="{Binding CertNumber}" Width="*"
-                        ElementStyle="{StaticResource DataGridTextBlockStyle}"/>
+                                    ElementStyle="{StaticResource DataGridTextBlockStyle}"/>
                             <DataGridTextColumn Header="Начало" Binding="{Binding DateStart, StringFormat=dd.MM.yyyy}" Width="*"
-                        ElementStyle="{StaticResource DataGridTextBlockStyle}"/>
+                                    ElementStyle="{StaticResource DataGridTextBlockStyle}"/>
                             <DataGridTextColumn Header="Окончание" Binding="{Binding DateEnd, StringFormat=dd.MM.yyyy}" Width="*"
-                        ElementStyle="{StaticResource DataGridTextBlockStyle}"/>
+                                    ElementStyle="{StaticResource DataGridTextBlockStyle}"/>
                             <DataGridTextColumn Header="Осталось дней" Binding="{Binding DaysLeft}" Width="*"
-                        ElementStyle="{StaticResource DataGridTextBlockStyle}"/>
+                                    ElementStyle="{StaticResource DataGridTextBlockStyle}"/>
 
                             <DataGridTemplateColumn Header="Архив с ЭЦП" Width="*">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <Button Content="Открыть" 
-                                                Click="BtnOpenArchive_Click" 
-                                                Padding="4,2"
-                                                ToolTip="Распаковать и открыть архив">
+                                    Click="BtnOpenArchive_Click" 
+                                    Padding="4,2"
+                                    ToolTip="Распаковать и открыть архив">
                                             <Button.Style>
                                                 <Style TargetType="Button" BasedOn="{StaticResource ModernButtonStyle}">
                                                     <Setter Property="IsEnabled" Value="True"/>
@@ -401,18 +407,18 @@
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <TextBlock Text="{Binding Building}" 
-                           Style="{StaticResource DataGridTextBlockStyle}"/>
+                                       Style="{StaticResource DataGridTextBlockStyle}"/>
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                                 <DataGridTemplateColumn.CellEditingTemplate>
                                     <DataTemplate>
                                         <ComboBox x:Name="cmbBuildingEdit"
-                          SelectedItem="{Binding Building, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                          DisplayMemberPath="."
-                          LostFocus="BuildingComboBox_LostFocus"
-                          DropDownOpened="BuildingComboBox_DropDownOpened"
-                          SelectionChanged="BuildingComboBox_SelectionChanged"
-                          Style="{StaticResource DataGridComboBoxStyle}"/>
+                                      SelectedItem="{Binding Building, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                      DisplayMemberPath="."
+                                      LostFocus="BuildingComboBox_LostFocus"
+                                      DropDownOpened="BuildingComboBox_DropDownOpened"
+                                      SelectionChanged="BuildingComboBox_SelectionChanged"
+                                      Style="{StaticResource DataGridComboBoxStyle}"/>
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellEditingTemplate>
                             </DataGridTemplateColumn>
@@ -421,29 +427,49 @@
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <TextBox Text="{Binding Note, UpdateSourceTrigger=PropertyChanged}" 
-                         LostFocus="NoteTextBox_LostFocus"
-                         Style="{StaticResource DataGridTextBoxStyle}"/>
+                                     LostFocus="NoteTextBox_LostFocus"
+                                     Style="{StaticResource DataGridTextBoxStyle}"/>
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
 
-
                             <DataGridCheckBoxColumn Header="Удален" Binding="{Binding IsDeleted}" Width="*" IsReadOnly="True"
-                        ElementStyle="{StaticResource DataGridCheckBoxStyle}"/>
+                                        ElementStyle="{StaticResource DataGridCheckBoxStyle}"/>
                         </DataGrid.Columns>
                     </DataGrid>
 
-                    <StatusBar Grid.Row="4" Margin="0,8,0,0" Background="{DynamicResource ControlBackgroundBrush}">
+                    <!-- Мини-лог -->
+                    <Border Grid.Row="4" Margin="0,8,0,4" BorderBrush="{DynamicResource BorderColorBrush}" BorderThickness="1"
+                        Background="{DynamicResource ControlBackgroundBrush}" CornerRadius="4">
+                        <TextBlock x:Name="txtMiniLog" 
+                           Margin="4,2"
+                           FontSize="10" 
+                           FontFamily="Consolas"
+                           Foreground="{DynamicResource TextColorBrush}"
+                           TextWrapping="NoWrap"
+                           ToolTip="Последние действия"
+                           Text="Мини-лог готов"/>
+                    </Border>
+
+                    <!-- Прогресс-бар проверки почты -->
+                    <ProgressBar x:Name="progressMailCheck" Grid.Row="5" 
+                     Height="6" Margin="0,4,0,2"
+                     Visibility="Collapsed"
+                     IsIndeterminate="True"
+                     Background="{DynamicResource ControlBackgroundBrush}"
+                     Foreground="{DynamicResource AccentColorBrush}"/>
+
+                    <StatusBar Grid.Row="6" Margin="0,8,0,0" Background="{DynamicResource ControlBackgroundBrush}">
                         <StatusBarItem>
                             <TextBlock x:Name="statusText" Foreground="{DynamicResource TextColorBrush}">Готов</TextBlock>
                         </StatusBarItem>
                         <StatusBarItem>
                             <TextBlock x:Name="searchStatusText" Margin="20,0,0,0" 
-                                       Foreground="{DynamicResource TextColorBrush}"/>
+                           Foreground="{DynamicResource TextColorBrush}"/>
                         </StatusBarItem>
                         <StatusBarItem>
                             <ProgressBar x:Name="exportProgress" Width="100" Height="16" Margin="20,0,0,0"
-                                       Visibility="Collapsed"/>
+                           Visibility="Collapsed"/>
                         </StatusBarItem>
                     </StatusBar>
                 </Grid>

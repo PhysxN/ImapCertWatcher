@@ -14,6 +14,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using System.Diagnostics;
+using System.Security.Authentication;
 
 // Альтернатива Excel без использования Office Interop
 using System.Data;
@@ -30,6 +31,8 @@ namespace ImapCertWatcher
         private ObservableCollection<Models.CertRecord> _allItems = new ObservableCollection<Models.CertRecord>();
         private Timer _timer;
         private ObservableCollection<string> _availableFolders = new ObservableCollection<string>();
+        private ObservableCollection<string> _miniLogMessages = new ObservableCollection<string>();
+        private const int MAX_MINI_LOG_LINES = 3;
 
         private string _currentBuildingFilter = "Все";
         private bool _showDeleted = false;
@@ -51,6 +54,10 @@ namespace ImapCertWatcher
             {
                 InitializeComponent();
 
+                // Инициализация мини-лога
+                _miniLogMessages = new ObservableCollection<string>();
+                AddToMiniLog("Приложение запущено");
+
                 var settingsPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "settings.txt");
                 _settings = SettingsLoader.Load(settingsPath);
 
@@ -67,8 +74,9 @@ namespace ImapCertWatcher
 
                 try
                 {
-                    _db = new DbHelper(_settings);
-                    _watcher = new ImapWatcher(_settings, _db);
+                    // Передаем ссылку на метод AddToMiniLog
+                    _db = new DbHelper(_settings, AddToMiniLog);
+                    _watcher = new ImapWatcher(_settings, _db, AddToMiniLog);
 
                     dgCerts.CanUserAddRows = false;
                     dgCerts.ItemsSource = _items;
@@ -96,6 +104,58 @@ namespace ImapCertWatcher
                                MessageBoxButton.OK, MessageBoxImage.Error);
                 Application.Current.Shutdown();
                 return;
+            }
+        }
+
+        private void AddToMiniLog(string message)
+        {
+            try
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    // Добавляем новое сообщение
+                    _miniLogMessages.Insert(0, $"{DateTime.Now:HH:mm:ss} - {message}");
+
+                    // Ограничиваем количество строк
+                    while (_miniLogMessages.Count > MAX_MINI_LOG_LINES)
+                    {
+                        _miniLogMessages.RemoveAt(_miniLogMessages.Count - 1);
+                    }
+
+                    // Обновляем текстовый блок только если он инициализирован
+                    if (txtMiniLog != null)
+                    {
+                        UpdateMiniLogDisplay();
+                    }
+                    else
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Мини-лог (txtMiniLog null): {message}");
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Ошибка в AddToMiniLog: {ex.Message}");
+            }
+        }
+
+        private void UpdateMiniLogDisplay()
+        {
+            try
+            {
+                if (txtMiniLog != null)
+                {
+                    txtMiniLog.Text = string.Join(Environment.NewLine, _miniLogMessages);
+                }
+                else
+                {
+                    // Если txtMiniLog еще не инициализирован, просто выводим в Debug
+                    System.Diagnostics.Debug.WriteLine("Мини-лог обновлен: " + string.Join("; ", _miniLogMessages));
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Ошибка обновления мини-лога: {ex.Message}");
             }
         }
 
@@ -195,6 +255,7 @@ namespace ImapCertWatcher
             {
                 exportProgress.Visibility = Visibility.Visible;
                 statusText.Text = "Подготовка экспорта...";
+                AddToMiniLog("Начат экспорт в Excel"); // ← ДОБАВИТЬ
 
                 var dataToExport = exportSelectedOnly && dgCerts.SelectedItem != null
                     ? new ObservableCollection<Models.CertRecord> { (Models.CertRecord)dgCerts.SelectedItem }
@@ -204,20 +265,62 @@ namespace ImapCertWatcher
                 {
                     MessageBox.Show("Нет данных для экспорта", "Информация",
                                   MessageBoxButton.OK, MessageBoxImage.Information);
+                    AddToMiniLog("Экспорт: нет данных"); // ← ДОБАВИТЬ
                     return;
                 }
 
-                await Task.Run(() => GenerateExcelFile(dataToExport, exportSelectedOnly));
+                // Диалог выбора файла - в UI потоке
+                var saveFileDialog = new SaveFileDialog
+                {
+                    Filter = "CSV files (*.csv)|*.csv|Excel files (*.xlsx)|*.xlsx",
+                    FileName = $"Сертификаты_ЭЦП_{DateTime.Now:yyyy-MM-dd_HH-mm}" +
+                              (exportSelectedOnly ? "_выделенный" : "") + ".csv"
+                };
+
+                if (saveFileDialog.ShowDialog() != true)
+                {
+                    return; // Пользователь отменил
+                }
+
+                string filePath = saveFileDialog.FileName;
+
+                // Генерация файла в фоновом потоке
+                await Task.Run(() =>
+                {
+                    string fileExtension = Path.GetExtension(filePath).ToLower();
+                    if (fileExtension == ".csv")
+                    {
+                        GenerateCsvFile(dataToExport, filePath);
+                    }
+                    else
+                    {
+                        TryGenerateExcelWithClosedXML(dataToExport, filePath);
+                    }
+                });
+
+                // Сообщение об успехе
+                var openResult = MessageBox.Show("Файл успешно экспортирован. Открыть файл?",
+                                               "Экспорт завершен",
+                                               MessageBoxButton.YesNo,
+                                               MessageBoxImage.Question);
+
+                if (openResult == MessageBoxResult.Yes)
+                {
+                    Process.Start(filePath);
+                }
 
                 statusText.Text = exportSelectedOnly
-                    ? "Выделенная запись экспортирована"
-                    : $"Экспортировано записей: {dataToExport.Count}";
+            ? "Выделенная запись экспортирована"
+            : $"Экспортировано записей: {dataToExport.Count}";
+
+                AddToMiniLog($"Экспорт завершен: {dataToExport.Count} записей"); // ← ДОБАВИТЬ
             }
             catch (Exception ex)
             {
                 MessageBox.Show($"Ошибка при экспорте: {ex.Message}", "Ошибка",
                               MessageBoxButton.OK, MessageBoxImage.Error);
                 Log($"Ошибка экспорта: {ex.Message}");
+                AddToMiniLog($"Ошибка экспорта: {ex.Message}"); // ← ДОБАВИТЬ
             }
             finally
             {
@@ -225,61 +328,7 @@ namespace ImapCertWatcher
             }
         }
 
-        private void GenerateExcelFile(ObservableCollection<Models.CertRecord> data, bool isSelectedOnly)
-        {
-            try
-            {
-                var saveFileDialog = new SaveFileDialog
-                {
-                    Filter = "CSV files (*.csv)|*.csv|Excel files (*.xlsx)|*.xlsx",
-                    FileName = $"Сертификаты_ЭЦП_{DateTime.Now:yyyy-MM-dd_HH-mm}" +
-                              (isSelectedOnly ? "_выделенный" : "") + ".csv"
-                };
 
-                bool? result = null;
-                Dispatcher.Invoke(() =>
-                {
-                    result = saveFileDialog.ShowDialog();
-                });
-
-                if (result != true) return;
-
-                string filePath = saveFileDialog.FileName;
-                string fileExtension = Path.GetExtension(filePath).ToLower();
-
-                if (fileExtension == ".csv")
-                {
-                    GenerateCsvFile(data, filePath);
-                }
-                else
-                {
-                    // Попробуем использовать ClosedXML если установлен
-                    TryGenerateExcelWithClosedXML(data, filePath);
-                }
-
-                Dispatcher.Invoke(() =>
-                {
-                    var openResult = MessageBox.Show("Файл успешно экспортирован. Открыть файл?",
-                                                   "Экспорт завершен",
-                                                   MessageBoxButton.YesNo,
-                                                   MessageBoxImage.Question);
-
-                    if (openResult == MessageBoxResult.Yes)
-                    {
-                        Process.Start(filePath);
-                    }
-                });
-            }
-            catch (Exception ex)
-            {
-                Dispatcher.Invoke(() =>
-                {
-                    MessageBox.Show($"Ошибка при создании файла: {ex.Message}", "Ошибка",
-                                  MessageBoxButton.OK, MessageBoxImage.Error);
-                });
-                throw;
-            }
-        }
 
         private void GenerateCsvFile(ObservableCollection<Models.CertRecord> data, string filePath)
         {
@@ -480,6 +529,7 @@ namespace ImapCertWatcher
             txtSearchFio.Text = "";
             _searchText = "";
             ApplySearchFilter();
+            AddToMiniLog("Поиск очищен"); // ← ДОБАВИТЬ
         }
 
         private async Task DoCheckAsync(bool checkAllMessages)
@@ -490,37 +540,65 @@ namespace ImapCertWatcher
                 return;
             }
 
-            Dispatcher.Invoke(() => statusText.Text = checkAllMessages ? "Обработка всех писем..." : "Проверка почты...");
+            // Показываем прогресс-бар
+            Dispatcher.Invoke(() =>
+            {
+                statusText.Text = checkAllMessages ? "Обработка всех писем..." : "Проверка почты...";
+                progressMailCheck.Visibility = Visibility.Visible;
+                AddToMiniLog(checkAllMessages ? "Начата обработка всех писем" : "Начата проверка почты");
+            });
 
             try
             {
                 var entries = await Task.Run(() => _watcher.CheckMail(checkAllMessages));
-                if (entries != null && entries.Any())
+
+                // Всегда обновляем данные из БД, даже если не было новых писем
+                var newList = _db?.LoadAll(_showDeleted, _currentBuildingFilter);
+                if (newList != null)
                 {
-                    var newList = _db?.LoadAll(_showDeleted, _currentBuildingFilter);
-                    if (newList != null)
+                    Dispatcher.Invoke(() =>
                     {
-                        Dispatcher.Invoke(() =>
+                        _allItems.Clear();
+                        foreach (var e in newList) _allItems.Add(e);
+                        ApplySearchFilter();
+
+                        if (entries != null && entries.Any())
                         {
-                            _allItems.Clear();
-                            foreach (var e in newList) _allItems.Add(e);
-                            ApplySearchFilter();
                             statusText.Text = checkAllMessages
                                 ? $"Обработано всех писем: {entries.Count} шт. ({DateTime.Now})"
                                 : $"Найдено/обновлено: {entries.Count} шт. ({DateTime.Now})";
-                        });
-                    }
-                }
-                else
-                {
-                    Dispatcher.Invoke(() => statusText.Text = checkAllMessages
-                        ? $"Обработка завершена: подходящих писем не найдено ({DateTime.Now})"
-                        : $"Проверка завершена: новых писем нет ({DateTime.Now})");
+                            AddToMiniLog(checkAllMessages
+                                ? $"Обработано писем: {entries.Count}"
+                                : $"Найдено новых: {entries.Count}");
+                        }
+                        else
+                        {
+                            statusText.Text = checkAllMessages
+                                ? $"Обработка завершена: подходящих писем не найдено ({DateTime.Now})"
+                                : $"Проверка завершена: новых писем нет ({DateTime.Now})";
+                            AddToMiniLog(checkAllMessages
+                                ? "Подходящих писем не найдено"
+                                : "Новых писем нет");
+                        }
+                    });
                 }
             }
             catch (Exception ex)
             {
-                Dispatcher.Invoke(() => statusText.Text = "Ошибка при проверке: " + ex.Message);
+                Dispatcher.Invoke(() =>
+                {
+                    statusText.Text = "Ошибка при проверке почты";
+                    AddToMiniLog($"Ошибка проверки: {ex.Message}");
+                    Log($"Ошибка при проверке почты: {ex.Message}");
+                });
+            }
+            finally
+            {
+                // Скрываем прогресс-бар
+                Dispatcher.Invoke(() =>
+                {
+                    progressMailCheck.Visibility = Visibility.Collapsed;
+                });
             }
         }
 
@@ -544,12 +622,14 @@ namespace ImapCertWatcher
                 _currentBuildingFilter = "Пионерская";
 
             LoadFromDb();
+            AddToMiniLog($"Фильтр: {_currentBuildingFilter}"); // ← ДОБАВИТЬ
         }
 
         private void ChkShowDeleted_Changed(object sender, RoutedEventArgs e)
         {
             _showDeleted = chkShowDeleted.IsChecked == true;
             LoadFromDb();
+            AddToMiniLog(_showDeleted ? "Показаны удаленные" : "Скрыты удаленные"); // ← ДОБАВИТЬ
         }
 
         private void NoteTextBox_LostFocus(object sender, RoutedEventArgs e)
@@ -560,11 +640,13 @@ namespace ImapCertWatcher
                 {
                     _db.UpdateNote(record.Id, textBox.Text);
                     statusText.Text = "Примечание сохранено";
+                    AddToMiniLog($"Обновлено примечание: {record.Fio}"); // ← ДОБАВИТЬ
                 }
                 catch (Exception ex)
                 {
                     MessageBox.Show($"Ошибка сохранения примечания: {ex.Message}", "Ошибка",
                                   MessageBoxButton.OK, MessageBoxImage.Error);
+                    AddToMiniLog($"Ошибка примечания: {ex.Message}");
                 }
             }
         }
@@ -662,12 +744,14 @@ namespace ImapCertWatcher
                 {
                     _db.UpdateBuilding(record.Id, record.Building);
                     statusText.Text = $"Здание сохранено: {record.Building}";
+                    AddToMiniLog($"Обновлено здание: {record.Fio} -> {record.Building}"); // ← ДОБАВИТЬ
                 }
             }
             catch (Exception ex)
             {
                 MessageBox.Show($"Ошибка сохранения здания: {ex.Message}", "Ошибка",
                               MessageBoxButton.OK, MessageBoxImage.Error);
+                AddToMiniLog($"Ошибка здания: {ex.Message}");
             }
         }
 
@@ -680,11 +764,13 @@ namespace ImapCertWatcher
                     _db.MarkAsDeleted(record.Id, true);
                     LoadFromDb();
                     statusText.Text = "Запись помечена на удаление";
+                    AddToMiniLog($"Удален: {record.Fio}"); // ← ДОБАВИТЬ ЭТУ СТРОКУ
                 }
                 catch (Exception ex)
                 {
                     MessageBox.Show($"Ошибка при пометке на удаление: {ex.Message}", "Ошибка",
                                   MessageBoxButton.OK, MessageBoxImage.Error);
+                    AddToMiniLog($"Ошибка удаления: {ex.Message}"); // ← И ЭТУ ДЛЯ ОШИБОК
                 }
             }
             else
@@ -703,11 +789,13 @@ namespace ImapCertWatcher
                     _db.MarkAsDeleted(record.Id, false);
                     LoadFromDb();
                     statusText.Text = "Запись восстановлена";
+                    AddToMiniLog($"Восстановлен: {record.Fio}"); // ← ДОБАВИТЬ
                 }
                 catch (Exception ex)
                 {
                     MessageBox.Show($"Ошибка при восстановлении: {ex.Message}", "Ошибка",
                                   MessageBoxButton.OK, MessageBoxImage.Error);
+                    AddToMiniLog($"Ошибка восстановления: {ex.Message}");
                 }
             }
             else
@@ -721,7 +809,26 @@ namespace ImapCertWatcher
         {
             if (sender is Button button && button.DataContext is Models.CertRecord record)
             {
-                OpenArchive(record);
+                try
+                {
+                    if (_watcher.ExtractArchive(record.ArchivePath, record.Fio))
+                    {
+                        statusText.Text = "Архив распакован и открыт";
+                        AddToMiniLog($"Открыт архив: {record.Fio}"); // ← ДОБАВИТЬ
+                    }
+                    else
+                    {
+                        MessageBox.Show("Не удалось распаковать архив", "Ошибка",
+                                      MessageBoxButton.OK, MessageBoxImage.Error);
+                        AddToMiniLog($"Ошибка открытия архива: {record.Fio}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show($"Ошибка при работе с архивом: {ex.Message}", "Ошибка",
+                                  MessageBoxButton.OK, MessageBoxImage.Error);
+                    AddToMiniLog($"Ошибка архива: {ex.Message}");
+                }
             }
         }
 
@@ -848,11 +955,13 @@ namespace ImapCertWatcher
                         LoadFromDb();
 
                         statusText.Text = "Архив успешно прикреплен";
+                        AddToMiniLog($"Добавлен архив для: {record.Fio}"); // ← ДОБАВИТЬ
                     }
                     catch (Exception ex)
                     {
                         MessageBox.Show($"Ошибка при прикреплении архива: {ex.Message}", "Ошибка",
                                       MessageBoxButton.OK, MessageBoxImage.Error);
+                        AddToMiniLog($"Ошибка добавления архива: {ex.Message}");
                     }
                 }
             }
@@ -1005,11 +1114,13 @@ namespace ImapCertWatcher
                 SaveSettings();
                 MessageBox.Show("Настройки почты сохранены!", "Успех",
                               MessageBoxButton.OK, MessageBoxImage.Information);
+                AddToMiniLog("Сохранены настройки почты"); // ← ДОБАВИТЬ
             }
             catch (Exception ex)
             {
                 MessageBox.Show($"Ошибка сохранения настроек почты: {ex.Message}", "Ошибка",
                               MessageBoxButton.OK, MessageBoxImage.Error);
+                AddToMiniLog($"Ошибка настроек почты: {ex.Message}");
             }
         }
 
@@ -1031,15 +1142,18 @@ namespace ImapCertWatcher
                 {
                     MessageBox.Show($"Настройки сохранены, но ошибка переподключения к БД: {dbEx.Message}",
                                   "Предупреждение", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    AddToMiniLog($"Ошибка переподключения БД: {dbEx.Message}");
                 }
 
                 MessageBox.Show("Настройки базы данных сохранены!", "Успех",
                               MessageBoxButton.OK, MessageBoxImage.Information);
+                AddToMiniLog("Сохранены настройки БД"); // ← ДОБАВИТЬ
             }
             catch (Exception ex)
             {
                 MessageBox.Show($"Ошибка сохранения настроек БД: {ex.Message}", "Ошибка",
                               MessageBoxButton.OK, MessageBoxImage.Error);
+                AddToMiniLog($"Ошибка настроек БД: {ex.Message}");
             }
         }
 
@@ -1184,6 +1298,7 @@ namespace ImapCertWatcher
         private void BtnRefreshLogs_Click(object sender, RoutedEventArgs e)
         {
             LoadLogs();
+            AddToMiniLog("Логи обновлены"); // ← ДОБАВИТЬ
         }
 
         private void BtnClearLogs_Click(object sender, RoutedEventArgs e)
@@ -1215,11 +1330,13 @@ namespace ImapCertWatcher
                               MessageBoxButton.OK, MessageBoxImage.Information);
 
                 LoadLogs();
+                AddToMiniLog($"Очищено логов: {deletedCount}"); // ← ДОБАВИТЬ
             }
             catch (Exception ex)
             {
                 MessageBox.Show($"Ошибка при очистке логов: {ex.Message}", "Ошибка",
                               MessageBoxButton.OK, MessageBoxImage.Error);
+                AddToMiniLog($"Ошибка очистки логов: {ex.Message}");
             }
         }
 
@@ -1244,13 +1361,16 @@ namespace ImapCertWatcher
         {
             try
             {
-                string logDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "LOG");
+                string logDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "LOG", DateTime.Now.ToString("yyyy-MM-dd"));
                 if (!Directory.Exists(logDirectory))
                     Directory.CreateDirectory(logDirectory);
 
-                string logFile = Path.Combine(logDirectory, $"log_{DateTime.Now:yyyy-MM-dd}.log");
+                string logFile = Path.Combine(logDirectory, $"log_{DateTime.Now:yyyy-MM-dd_HH-mm-ss}.log");
                 string logEntry = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} - [MainWindow] {message}{Environment.NewLine}";
                 File.AppendAllText(logFile, logEntry, System.Text.Encoding.UTF8);
+
+                // Также пишем в мини-лог
+                AddToMiniLog($"[MainWindow] {message}");
 
                 System.Diagnostics.Debug.WriteLine($"[MainWindow] {message}");
             }

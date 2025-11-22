@@ -12,12 +12,14 @@ namespace ImapCertWatcher.Data
         private readonly AppSettings _settings;
         private readonly string _connectionString;
         private readonly string _logDirectory;
+        private readonly Action<string> _addToMiniLog;
 
-        public DbHelper(AppSettings settings)
+        public DbHelper(AppSettings settings, Action<string> addToMiniLog = null)
         {
             _settings = settings;
             _connectionString = BuildConnectionString();
             _logDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "LOG");
+            _addToMiniLog = addToMiniLog;
 
             if (!Directory.Exists(_logDirectory))
                 Directory.CreateDirectory(_logDirectory);
@@ -457,9 +459,16 @@ namespace ImapCertWatcher.Data
         {
             try
             {
-                string logFile = Path.Combine(_logDirectory, $"log_{DateTime.Now:yyyy-MM-dd}.log");
+                string logDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "LOG", DateTime.Now.ToString("yyyy-MM-dd"));
+                if (!Directory.Exists(logDirectory))
+                    Directory.CreateDirectory(logDirectory);
+
+                string logFile = Path.Combine(logDirectory, $"log_{DateTime.Now:yyyy-MM-dd_HH-mm-ss}.log");
                 string logEntry = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} - [DbHelper] {message}{Environment.NewLine}";
                 File.AppendAllText(logFile, logEntry, System.Text.Encoding.UTF8);
+
+                // Также пишем в мини-лог через переданный делегат
+                _addToMiniLog?.Invoke($"[DbHelper] {message}");
 
                 System.Diagnostics.Debug.WriteLine($"[DbHelper] {message}");
             }
