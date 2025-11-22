@@ -67,7 +67,7 @@ namespace ImapCertWatcher
                 pwdFbPassword.Password = _settings.FbPassword;
 
                 cmbImapFolder.ItemsSource = _availableFolders;
-                txtInterval.Text = _settings.CheckIntervalSeconds.ToString();
+                txtInterval.Text = _settings.CheckIntervalHours.ToString(); // Изменили
 
                 // Загрузка темы
                 LoadThemeSettings();
@@ -88,8 +88,13 @@ namespace ImapCertWatcher
                     LoadFromDb();
                     LoadLogs();
 
-                    _timer = new Timer(async _ => await DoCheckAsync(false),
-                        null, TimeSpan.Zero, TimeSpan.FromSeconds(_settings.CheckIntervalSeconds));
+                    // Инициализация таймера с часами
+                    if (_settings.CheckIntervalHours > 0)
+                    {
+                        var intervalMs = _settings.CheckIntervalHours * 60 * 60 * 1000;
+                        _timer = new Timer(async _ => await DoCheckAsync(false),
+                            null, TimeSpan.Zero, TimeSpan.FromMilliseconds(intervalMs));
+                    }
                 }
                 catch (Exception dbEx)
                 {
@@ -1465,19 +1470,21 @@ namespace ImapCertWatcher
                     $"FbDialect={_settings.FbDialect}",
                     "",
                     "# App behavior",
-                    $"CheckIntervalSeconds={_settings.CheckIntervalSeconds}"
+                    $"CheckIntervalHours={_settings.CheckIntervalHours}"
                 };
 
                 File.WriteAllLines(settingsPath, lines, System.Text.Encoding.UTF8);
 
                 _timer?.Dispose();
-                if (_settings.CheckIntervalSeconds > 0)
+                if (_settings.CheckIntervalHours > 0)
                 {
+                    // Конвертируем часы в миллисекунды для таймера
+                    var intervalMs = _settings.CheckIntervalHours * 60 * 60 * 1000;
                     _timer = new Timer(async _ => await DoCheckAsync(false),
-                        null, TimeSpan.Zero, TimeSpan.FromSeconds(_settings.CheckIntervalSeconds));
+                        null, TimeSpan.Zero, TimeSpan.FromMilliseconds(intervalMs));
                 }
 
-                txtInterval.Text = _settings.CheckIntervalSeconds.ToString();
+                txtInterval.Text = _settings.CheckIntervalHours.ToString(); // Обновляем отображение
             }
             catch (Exception ex)
             {

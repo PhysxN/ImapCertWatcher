@@ -210,25 +210,25 @@
                 <Setter.Value>
                     <ControlTemplate TargetType="TabItem">
                         <Grid>
-                            <Border Name="Border" Background="{TemplateBinding Background}"
-                                    BorderBrush="{TemplateBinding BorderBrush}"
-                                    BorderThickness="1,1,1,0"
-                                    CornerRadius="4,4,0,0"
-                                    Margin="2,2,2,0">
+                            <Border Name="Border" 
+                            Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="1,1,1,0"
+                            CornerRadius="4,4,0,0"
+                            Margin="2,2,2,0">
                                 <ContentPresenter x:Name="ContentSite"
-                                                VerticalAlignment="Center"
-                                                HorizontalAlignment="Center"
-                                                ContentSource="Header"
-                                                Margin="{TemplateBinding Padding}"/>
+                                        VerticalAlignment="Center"
+                                        HorizontalAlignment="Center"
+                                        ContentSource="Header"
+                                        Margin="{TemplateBinding Padding}"/>
                             </Border>
                         </Grid>
                         <ControlTemplate.Triggers>
+                            <!-- Только один триггер - для выделенной вкладки -->
                             <Trigger Property="IsSelected" Value="True">
                                 <Setter TargetName="Border" Property="Background" Value="{DynamicResource AccentColorBrush}"/>
-                                <Setter TargetName="ContentSite" Property="TextBlock.Foreground" Value="White"/>
-                            </Trigger>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Border" Property="Background" Value="{DynamicResource HoverColorBrush}"/>
+                                <Setter TargetName="Border" Property="BorderBrush" Value="{DynamicResource AccentColorBrush}"/>
+                                <Setter TargetName="ContentSite" Property="TextElement.Foreground" Value="White"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -299,10 +299,10 @@
                         <Button x:Name="btnExportExcel" Content="Экспорт в Excel" 
                     Style="{StaticResource ModernButtonStyle}" 
                     Click="BtnExportExcel_Click"/>
-                        <TextBlock Text="Интервал (сек):" VerticalAlignment="Center" Margin="8,0,4,0"
-                       Foreground="{DynamicResource TextColorBrush}"/>
+                        <TextBlock Text="Интервал (часы):" VerticalAlignment="Center" Margin="8,0,4,0"
+                        Foreground="{DynamicResource TextColorBrush}"/>
                         <TextBlock x:Name="txtInterval" VerticalAlignment="Center" Margin="0,0,16,0"
-                       Foreground="{DynamicResource TextColorBrush}"/>
+                        Foreground="{DynamicResource TextColorBrush}"/>
 
                         <Button x:Name="btnDeleteSelected" Content="Пометить на удаление" 
                     Style="{StaticResource ModernButtonStyle}" 
@@ -590,13 +590,16 @@
 
                         <GroupBox Header="Поведение приложения" Style="{StaticResource ModernGroupBoxStyle}">
                             <StackPanel Margin="4">
-                                <TextBlock Text="Интервал проверки (секунды):" Margin="0,2" Foreground="{DynamicResource TextColorBrush}"/>
-                                <TextBox x:Name="txtCheckInterval" Text="{Binding CheckIntervalSeconds}" 
-                                         Style="{StaticResource ModernTextBoxStyle}"/>
+                                <TextBlock Text="Интервал проверки (часы):" Margin="0,2" Foreground="{DynamicResource TextColorBrush}"/>
+                                <TextBox x:Name="txtCheckInterval" Text="{Binding CheckIntervalHours}" 
+                                Style="{StaticResource ModernTextBoxStyle}"/>
+                                <TextBlock Text="Рекомендуется: 1-24 часа" 
+                                FontStyle="Italic" FontSize="10" 
+                                Foreground="{DynamicResource TextColorBrush}"/>
 
                                 <CheckBox x:Name="chkDarkTheme" Content="Темная тема" 
-                                          Style="{StaticResource ModernCheckBoxStyle}"
-                                          Checked="ChkDarkTheme_Changed" Unchecked="ChkDarkTheme_Changed"/>
+                                Style="{StaticResource ModernCheckBoxStyle}"
+                                Checked="ChkDarkTheme_Changed" Unchecked="ChkDarkTheme_Changed"/>
                             </StackPanel>
                         </GroupBox>
 

@@ -19,7 +19,7 @@ namespace ImapCertWatcher.Utils
         public string FbServer { get; set; } = "127.0.0.1";
         public string FbUser { get; set; } = "SYSDBA";
         public string FbPassword { get; set; } = "masterkey";
-        public int CheckIntervalSeconds { get; set; } = 60;
+        public int CheckIntervalHours { get; set; } = 1;
         public int FbDialect { get; set; } = 3;
     }
 
@@ -56,7 +56,7 @@ namespace ImapCertWatcher.Utils
                     case "FbServer": s.FbServer = val; break;
                     case "FbUser": s.FbUser = val; break;
                     case "FbPassword": s.FbPassword = val; break;
-                    case "CheckIntervalSeconds": s.CheckIntervalSeconds = int.Parse(val); break;
+                    case "CheckIntervalHours": s.CheckIntervalHours = int.Parse(val); break; // Изменили
                     case "FbDialect": s.FbDialect = int.Parse(val); break;
                 }
             }
