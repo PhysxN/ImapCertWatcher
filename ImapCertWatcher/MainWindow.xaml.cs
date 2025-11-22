@@ -211,6 +211,10 @@ namespace ImapCertWatcher
                 resources["BorderColorBrush"] = resources["DarkBorderColor"];
                 resources["AccentColorBrush"] = resources["DarkAccentColor"];
                 resources["HoverColorBrush"] = resources["DarkHoverColor"];
+
+                // Явно устанавливаем цвет текста для PasswordBox
+                pwdMailPassword.Foreground = Brushes.White;
+                pwdFbPassword.Foreground = Brushes.White;
             }
             else
             {
@@ -221,6 +225,10 @@ namespace ImapCertWatcher
                 resources["BorderColorBrush"] = resources["LightBorderColor"];
                 resources["AccentColorBrush"] = resources["LightAccentColor"];
                 resources["HoverColorBrush"] = resources["LightHoverColor"];
+
+                // Явно устанавливаем цвет текста для PasswordBox
+                pwdMailPassword.Foreground = Brushes.Black;
+                pwdFbPassword.Foreground = Brushes.Black;
             }
 
             // Принудительно обновляем стили и перезагружаем данные
