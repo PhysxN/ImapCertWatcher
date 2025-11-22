@@ -355,7 +355,8 @@
                   ContextMenuOpening="DgCerts_ContextMenuOpening"
                   CellEditEnding="DgCerts_CellEditEnding"
                   BeginningEdit="DgCerts_BeginningEdit"
-                  PreparingCellForEdit="DgCerts_PreparingCellForEdit">
+                  PreparingCellForEdit="DgCerts_PreparingCellForEdit"
+                  Loaded="DgCerts_Loaded">
                         <DataGrid.ContextMenu>
                             <ContextMenu Style="{StaticResource ModernContextMenuStyle}">
                                 <MenuItem Header="Добавить архив с подписью" Click="AddArchiveMenuItem_Click"/>

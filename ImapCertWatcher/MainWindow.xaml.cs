@@ -249,6 +249,99 @@ namespace ImapCertWatcher
             await ExportToExcel(true);
         }
 
+        private void DgCerts_Loaded(object sender, RoutedEventArgs e)
+        {
+            AutoFitDataGridColumns();
+        }
+
+        private void AutoFitDataGridColumns()
+        {
+            try
+            {
+                if (dgCerts == null || dgCerts.Columns == null) return;
+
+                // Ждем немного чтобы DataGrid полностью отрисовался
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    try
+                    {
+                        foreach (var column in dgCerts.Columns)
+                        {
+                            // Для каждого типа столбцов свой подход
+                            if (column is DataGridTextColumn textColumn)
+                            {
+                                AutoFitTextColumn(textColumn);
+                            }
+                            else if (column is DataGridTemplateColumn templateColumn)
+                            {
+                                AutoFitTemplateColumn(templateColumn);
+                            }
+                            else if (column is DataGridCheckBoxColumn checkBoxColumn)
+                            {
+                                AutoFitCheckBoxColumn(checkBoxColumn);
+                            }
+                        }
+
+                        // Принудительно обновляем layout
+                        dgCerts.UpdateLayout();
+
+                        AddToMiniLog("Автоподбор ширины столбцов выполнен");
+                    }
+                    catch (Exception ex)
+                    {
+                        Log($"Ошибка автоподбора столбцов: {ex.Message}");
+                    }
+                }), System.Windows.Threading.DispatcherPriority.Background);
+            }
+            catch (Exception ex)
+            {
+                Log($"Ошибка в AutoFitDataGridColumns: {ex.Message}");
+            }
+        }
+
+        private void AutoFitTextColumn(DataGridTextColumn column)
+        {
+            try
+            {
+                // Сбрасываем ширину чтобы применить авто-размер
+                column.Width = DataGridLength.Auto;
+
+                // Принудительно обновляем
+                column.Width = new DataGridLength(1, DataGridLengthUnitType.Auto);
+            }
+            catch (Exception ex)
+            {
+                Log($"Ошибка автоподбора TextColumn: {ex.Message}");
+            }
+        }
+
+        private void AutoFitTemplateColumn(DataGridTemplateColumn column)
+        {
+            try
+            {
+                // Для TemplateColumn используем авто-размер
+                column.Width = DataGridLength.Auto;
+                column.Width = new DataGridLength(1, DataGridLengthUnitType.Auto);
+            }
+            catch (Exception ex)
+            {
+                Log($"Ошибка автоподбора TemplateColumn: {ex.Message}");
+            }
+        }
+
+        private void AutoFitCheckBoxColumn(DataGridCheckBoxColumn column)
+        {
+            try
+            {
+                // Для CheckBoxColumn фиксированная ширина
+                column.Width = new DataGridLength(80); // Фиксированная ширина для чекбокса
+            }
+            catch (Exception ex)
+            {
+                Log($"Ошибка автоподбора CheckBoxColumn: {ex.Message}");
+            }
+        }
+
         private async Task ExportToExcel(bool exportSelectedOnly)
         {
             try
@@ -621,6 +714,12 @@ namespace ImapCertWatcher
                     }
                     searchStatusText.Text = $"Найдено: {_items.Count} из {_allItems.Count}";
                 }
+
+                // Автоподбор столбцов после применения фильтра
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    AutoFitDataGridColumns();
+                }), System.Windows.Threading.DispatcherPriority.Background);
             }
             catch (Exception ex)
             {
@@ -673,34 +772,44 @@ namespace ImapCertWatcher
                         foreach (var e in newList) _allItems.Add(e);
                         ApplySearchFilter();
 
-                        if (updatedCount > 0 || addedCount > 0)
+                        Dispatcher.Invoke(() =>
                         {
-                            string message = "";
-                            if (addedCount > 0 && updatedCount > 0)
-                            {
-                                message = $"Добавлено: {addedCount}, Обновлено: {updatedCount} ({DateTime.Now})";
-                            }
-                            else if (addedCount > 0)
-                            {
-                                message = $"Добавлено: {addedCount} ({DateTime.Now})";
-                            }
-                            else if (updatedCount > 0)
-                            {
-                                message = $"Обновлено: {updatedCount} ({DateTime.Now})";
-                            }
+                            _allItems.Clear();
+                            foreach (var e in newList) _allItems.Add(e);
+                            ApplySearchFilter();
 
-                            statusText.Text = message;
-                            AddToMiniLog(message);
-                        }
-                        else
-                        {
-                            statusText.Text = checkAllMessages
-                                ? $"Обработка завершена: изменений нет ({DateTime.Now})"
-                                : $"Проверка завершена: новых писем нет ({DateTime.Now})";
-                            AddToMiniLog(checkAllMessages
-                                ? "Обработка завершена: изменений нет"
-                                : "Проверка завершена: новых писем нет");
-                        }
+                            // Автоподбор столбцов
+                            AutoFitDataGridColumns();
+
+                            if (updatedCount > 0 || addedCount > 0)
+                            {
+                                string message = "";
+                                if (addedCount > 0 && updatedCount > 0)
+                                {
+                                    message = $"Добавлено: {addedCount}, Обновлено: {updatedCount} ({DateTime.Now})";
+                                }
+                                else if (addedCount > 0)
+                                {
+                                    message = $"Добавлено: {addedCount} ({DateTime.Now})";
+                                }
+                                else if (updatedCount > 0)
+                                {
+                                    message = $"Обновлено: {updatedCount} ({DateTime.Now})";
+                                }
+
+                                statusText.Text = message;
+                                AddToMiniLog(message);
+                            }
+                            else
+                            {
+                                statusText.Text = checkAllMessages
+                                    ? $"Обработка завершена: изменений нет ({DateTime.Now})"
+                                    : $"Проверка завершена: новых писем нет ({DateTime.Now})";
+                                AddToMiniLog(checkAllMessages
+                                    ? "Обработка завершена: изменений нет"
+                                    : "Проверка завершена: новых писем нет");
+                            }
+                        });
                     });
                 }
             }
