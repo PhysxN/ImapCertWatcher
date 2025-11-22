@@ -212,7 +212,7 @@ namespace ImapCertWatcher.Data
             }
         }
 
-        public void InsertOrUpdate(CertEntry entry)
+        public (bool wasUpdated, bool wasAdded) InsertOrUpdate(CertEntry entry)
         {
             using (var conn = new FbConnection(_connectionString))
             {
@@ -238,6 +238,7 @@ namespace ImapCertWatcher.Data
 
                             reader.Close();
 
+                            // Если письмо новее существующего
                             if (entry.MessageDate > existingDate)
                             {
                                 cmd.Parameters.Clear();
@@ -263,10 +264,12 @@ namespace ImapCertWatcher.Data
 
                                 cmd.ExecuteNonQuery();
                                 Log($"Обновлена запись (более новое письмо): {entry.Fio}, сертификат: {entry.CertNumber}");
+                                return (true, false); // Было обновление
                             }
                             else
                             {
                                 Log($"Пропущена запись (уже есть более новое письмо): {entry.Fio}, сертификат: {entry.CertNumber}");
+                                return (false, false); // Не было изменений
                             }
                         }
                         else
@@ -276,7 +279,7 @@ namespace ImapCertWatcher.Data
                             cmd.Parameters.Clear();
                             cmd.CommandText =
                                 @"INSERT INTO CERTS (FIO, DATE_START, DATE_END, DAYS_LEFT, CERT_NUMBER, FROM_ADDRESS, IS_DELETED, NOTE, BUILDING, FOLDER_PATH, ARCHIVE_PATH, MESSAGE_DATE)
-                          VALUES (@fio, @ds, @de, @dleft, @certNumber, @fromAddress, @isDeleted, @note, @building, @folderPath, @archivePath, @messageDate)";
+                  VALUES (@fio, @ds, @de, @dleft, @certNumber, @fromAddress, @isDeleted, @note, @building, @folderPath, @archivePath, @messageDate)";
 
                             cmd.Parameters.AddWithValue("@fio", entry.Fio);
                             cmd.Parameters.AddWithValue("@ds", entry.DateStart);
@@ -293,6 +296,7 @@ namespace ImapCertWatcher.Data
 
                             cmd.ExecuteNonQuery();
                             Log($"Добавлена новая запись: {entry.Fio}, сертификат: {entry.CertNumber}");
+                            return (false, true); // Было добавление
                         }
                     }
                 }

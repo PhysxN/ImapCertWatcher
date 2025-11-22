@@ -661,7 +661,7 @@ namespace ImapCertWatcher
 
             try
             {
-                var entries = await Task.Run(() => _watcher.CheckMail(checkAllMessages));
+                var (processedEntries, updatedCount, addedCount) = await Task.Run(() => _watcher.CheckMail(checkAllMessages));
 
                 // Всегда обновляем данные из БД, даже если не было новых писем
                 var newList = _db?.LoadAll(_showDeleted, _currentBuildingFilter);
@@ -673,23 +673,33 @@ namespace ImapCertWatcher
                         foreach (var e in newList) _allItems.Add(e);
                         ApplySearchFilter();
 
-                        if (entries != null && entries.Any())
+                        if (updatedCount > 0 || addedCount > 0)
                         {
-                            statusText.Text = checkAllMessages
-                                ? $"Обработано всех писем: {entries.Count} шт. ({DateTime.Now})"
-                                : $"Найдено/обновлено: {entries.Count} шт. ({DateTime.Now})";
-                            AddToMiniLog(checkAllMessages
-                                ? $"Обработано писем: {entries.Count}"
-                                : $"Найдено новых: {entries.Count}");
+                            string message = "";
+                            if (addedCount > 0 && updatedCount > 0)
+                            {
+                                message = $"Добавлено: {addedCount}, Обновлено: {updatedCount} ({DateTime.Now})";
+                            }
+                            else if (addedCount > 0)
+                            {
+                                message = $"Добавлено: {addedCount} ({DateTime.Now})";
+                            }
+                            else if (updatedCount > 0)
+                            {
+                                message = $"Обновлено: {updatedCount} ({DateTime.Now})";
+                            }
+
+                            statusText.Text = message;
+                            AddToMiniLog(message);
                         }
                         else
                         {
                             statusText.Text = checkAllMessages
-                                ? $"Обработка завершена: подходящих писем не найдено ({DateTime.Now})"
+                                ? $"Обработка завершена: изменений нет ({DateTime.Now})"
                                 : $"Проверка завершена: новых писем нет ({DateTime.Now})";
                             AddToMiniLog(checkAllMessages
-                                ? "Подходящих писем не найдено"
-                                : "Новых писем нет");
+                                ? "Обработка завершена: изменений нет"
+                                : "Проверка завершена: новых писем нет");
                         }
                     });
                 }

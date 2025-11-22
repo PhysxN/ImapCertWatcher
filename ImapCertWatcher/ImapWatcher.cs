@@ -49,9 +49,12 @@ namespace ImapCertWatcher.Services
             Log("Инициализация ImapWatcher завершена");
         }
 
-        public List<CertEntry> CheckMail(bool checkAllMessages = false)
+        public (List<CertEntry> processedEntries, int updatedCount, int addedCount) CheckMail(bool checkAllMessages = false)
         {
             var results = new List<CertEntry>();
+            int updatedCount = 0;
+            int addedCount = 0;
+
             Log($"Начало проверки почты. Режим: {(checkAllMessages ? "все письма" : "последние 3 дня")}");
 
             // Проверяем настройки перед подключением
@@ -62,7 +65,7 @@ namespace ImapCertWatcher.Services
             catch (Exception ex)
             {
                 Log($"Ошибка в настройках почты: {ex.Message}");
-                return results; // Возвращаем пустой список вместо исключения
+                return (results, updatedCount, addedCount); // Возвращаем пустой список вместо исключения
             }
 
             const int maxRetries = 3;
@@ -228,8 +231,23 @@ namespace ImapCertWatcher.Services
                                         try
                                         {
                                             Log($"Сохраняем запись в БД: {fio}, сертификат: {certNumber}");
-                                            _db.InsertOrUpdate(entry);
-                                            Log($"Успешно обработано письмо из папки {folder.FullName}: {fio}, {dates.start:dd.MM.yyyy} - {dates.end:dd.MM.yyyy}, Сертификат: {certNumber}");
+                                            var (wasUpdated, wasAdded) = _db.InsertOrUpdate(entry);
+
+                                            if (wasUpdated)
+                                            {
+                                                updatedCount++;
+                                                Log($"Успешно ОБНОВЛЕНО письмо из папки {folder.FullName}: {fio}, {dates.start:dd.MM.yyyy} - {dates.end:dd.MM.yyyy}, Сертификат: {certNumber}");
+                                            }
+                                            else if (wasAdded)
+                                            {
+                                                addedCount++;
+                                                Log($"Успешно ДОБАВЛЕНО письмо из папки {folder.FullName}: {fio}, {dates.start:dd.MM.yyyy} - {dates.end:dd.MM.yyyy}, Сертификат: {certNumber}");
+                                            }
+                                            else
+                                            {
+                                                Log($"Пропущено письмо (дубликат): {fio}, сертификат: {certNumber}");
+                                            }
+
                                             results.Add(entry);
                                         }
                                         catch (Exception ex)
@@ -253,7 +271,7 @@ namespace ImapCertWatcher.Services
                         }
 
                         client.Disconnect(true);
-                        Log($"Обработка завершена. Проверено папок: {allFolders.Count}, Успешно обработано: {results.Count} писем");
+                        Log($"Обработка завершена. Проверено папок: {allFolders.Count}, Обработано писем: {results.Count}, Обновлено: {updatedCount}, Добавлено: {addedCount}");
 
                         // Если дошли до сюда - подключение успешно, выходим из цикла повторных попыток
                         break;
@@ -310,7 +328,7 @@ namespace ImapCertWatcher.Services
                 }
             }
 
-            return results;
+            return (results, updatedCount, addedCount);
         }
 
         private string SaveAttachments(MimeKit.MimeMessage msg, string fio, string certNumber)
@@ -625,7 +643,7 @@ namespace ImapCertWatcher.Services
             return folders;
         }
 
-        public List<CertEntry> ProcessAllExistingEmails()
+        public (List<CertEntry> processedEntries, int updatedCount, int addedCount) ProcessAllExistingEmails()
         {
             return CheckMail(true);
         }

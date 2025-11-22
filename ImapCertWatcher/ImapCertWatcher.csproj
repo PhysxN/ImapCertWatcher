@@ -35,7 +35,7 @@
     <WarningLevel>4</WarningLevel>
   </PropertyGroup>
   <PropertyGroup>
-    <ApplicationIcon>Безымянный-1.ico</ApplicationIcon>
+    <ApplicationIcon>Безымянный-2.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="BouncyCastle.Cryptography, Version=2.0.0.0, Culture=neutral, PublicKeyToken=072edcf4a5328938, processorArchitecture=MSIL">
@@ -167,7 +167,7 @@
     <Resource Include="settings.txt" />
   </ItemGroup>
   <ItemGroup>
-    <Resource Include="Безымянный-1.ico" />
+    <Resource Include="Безымянный-2.ico" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>
