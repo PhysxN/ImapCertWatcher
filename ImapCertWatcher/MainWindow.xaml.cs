@@ -255,7 +255,7 @@ namespace ImapCertWatcher
             {
                 exportProgress.Visibility = Visibility.Visible;
                 statusText.Text = "Подготовка экспорта...";
-                AddToMiniLog("Начат экспорт в Excel"); // ← ДОБАВИТЬ
+                AddToMiniLog("Начат экспорт в Excel");
 
                 var dataToExport = exportSelectedOnly && dgCerts.SelectedItem != null
                     ? new ObservableCollection<Models.CertRecord> { (Models.CertRecord)dgCerts.SelectedItem }
@@ -265,16 +265,16 @@ namespace ImapCertWatcher
                 {
                     MessageBox.Show("Нет данных для экспорта", "Информация",
                                   MessageBoxButton.OK, MessageBoxImage.Information);
-                    AddToMiniLog("Экспорт: нет данных"); // ← ДОБАВИТЬ
+                    AddToMiniLog("Экспорт: нет данных");
                     return;
                 }
 
-                // Диалог выбора файла - в UI потоке
+                // Диалог выбора файла - теперь только Excel
                 var saveFileDialog = new SaveFileDialog
                 {
-                    Filter = "CSV files (*.csv)|*.csv|Excel files (*.xlsx)|*.xlsx",
+                    Filter = "Excel files (*.xlsx)|*.xlsx",
                     FileName = $"Сертификаты_ЭЦП_{DateTime.Now:yyyy-MM-dd_HH-mm}" +
-                              (exportSelectedOnly ? "_выделенный" : "") + ".csv"
+                              (exportSelectedOnly ? "_выделенный" : "") + ".xlsx"
                 };
 
                 if (saveFileDialog.ShowDialog() != true)
@@ -287,40 +287,40 @@ namespace ImapCertWatcher
                 // Генерация файла в фоновом потоке
                 await Task.Run(() =>
                 {
-                    string fileExtension = Path.GetExtension(filePath).ToLower();
-                    if (fileExtension == ".csv")
-                    {
-                        GenerateCsvFile(dataToExport, filePath);
-                    }
-                    else
-                    {
-                        TryGenerateExcelWithClosedXML(dataToExport, filePath);
-                    }
+                    GenerateExcelFile(dataToExport, filePath);
                 });
 
                 // Сообщение об успехе
-                var openResult = MessageBox.Show("Файл успешно экспортирован. Открыть файл?",
+                var openResult = MessageBox.Show("Excel файл успешно экспортирован. Открыть файл?",
                                                "Экспорт завершен",
                                                MessageBoxButton.YesNo,
                                                MessageBoxImage.Question);
 
                 if (openResult == MessageBoxResult.Yes)
                 {
-                    Process.Start(filePath);
+                    try
+                    {
+                        Process.Start(filePath);
+                    }
+                    catch (Exception ex)
+                    {
+                        MessageBox.Show($"Не удалось открыть файл: {ex.Message}", "Ошибка",
+                                      MessageBoxButton.OK, MessageBoxImage.Warning);
+                    }
                 }
 
                 statusText.Text = exportSelectedOnly
-            ? "Выделенная запись экспортирована"
-            : $"Экспортировано записей: {dataToExport.Count}";
+                    ? "Выделенная запись экспортирована в Excel"
+                    : $"Экспортировано записей в Excel: {dataToExport.Count}";
 
-                AddToMiniLog($"Экспорт завершен: {dataToExport.Count} записей"); // ← ДОБАВИТЬ
+                AddToMiniLog($"Excel экспорт завершен: {dataToExport.Count} записей");
             }
             catch (Exception ex)
             {
                 MessageBox.Show($"Ошибка при экспорте: {ex.Message}", "Ошибка",
                               MessageBoxButton.OK, MessageBoxImage.Error);
                 Log($"Ошибка экспорта: {ex.Message}");
-                AddToMiniLog($"Ошибка экспорта: {ex.Message}"); // ← ДОБАВИТЬ
+                AddToMiniLog($"Ошибка экспорта: {ex.Message}");
             }
             finally
             {
@@ -351,6 +351,122 @@ namespace ImapCertWatcher
             }
         }
 
+        private void GenerateExcelFile(ObservableCollection<Models.CertRecord> data, string filePath)
+        {
+            try
+            {
+                // Создаем новую книгу Excel
+                var workbook = new ClosedXML.Excel.XLWorkbook();
+                var worksheet = workbook.Worksheets.Add("Сертификаты ЭЦП");
+
+                // Стили для оформления
+                var headerStyle = workbook.Style;
+                headerStyle.Font.Bold = true;
+                headerStyle.Fill.BackgroundColor = ClosedXML.Excel.XLColor.LightGray;
+                headerStyle.Alignment.Horizontal = ClosedXML.Excel.XLAlignmentHorizontalValues.Center;
+                headerStyle.Border.OutsideBorder = ClosedXML.Excel.XLBorderStyleValues.Thin;
+
+                var normalStyle = workbook.Style;
+                normalStyle.Border.OutsideBorder = ClosedXML.Excel.XLBorderStyleValues.Thin;
+
+                // Заголовок отчета
+                worksheet.Cell(1, 1).Value = "Отчет по сертификатам ЭЦП";
+                worksheet.Range(1, 1, 1, 8).Merge();
+                worksheet.Cell(1, 1).Style.Font.Bold = true;
+                worksheet.Cell(1, 1).Style.Font.FontSize = 14;
+                worksheet.Cell(1, 1).Style.Alignment.Horizontal = ClosedXML.Excel.XLAlignmentHorizontalValues.Center;
+
+                // Подзаголовок с датой
+                worksheet.Cell(2, 1).Value = $"Сформирован: {DateTime.Now:dd.MM.yyyy HH:mm}";
+                worksheet.Range(2, 1, 2, 8).Merge();
+                worksheet.Cell(2, 1).Style.Font.Italic = true;
+                worksheet.Cell(2, 1).Style.Alignment.Horizontal = ClosedXML.Excel.XLAlignmentHorizontalValues.Center;
+
+                // Заголовки столбцов
+                string[] headers = {
+            "ФИО",
+            "Номер сертификата",
+            "Дата начала",
+            "Дата окончания",
+            "Осталось дней",
+            "Здание",
+            "Примечание",
+            "Статус"
+        };
+
+                for (int i = 0; i < headers.Length; i++)
+                {
+                    worksheet.Cell(4, i + 1).Value = headers[i];
+                    worksheet.Cell(4, i + 1).Style = headerStyle;
+                }
+
+                // Данные
+                int row = 5;
+                foreach (var record in data)
+                {
+                    worksheet.Cell(row, 1).Value = record.Fio ?? "";
+                    worksheet.Cell(row, 2).Value = record.CertNumber ?? "";
+                    worksheet.Cell(row, 3).Value = record.DateStart;
+                    worksheet.Cell(row, 3).Style.NumberFormat.Format = "dd.mm.yyyy";
+                    worksheet.Cell(row, 4).Value = record.DateEnd;
+                    worksheet.Cell(row, 4).Style.NumberFormat.Format = "dd.mm.yyyy";
+                    worksheet.Cell(row, 5).Value = record.DaysLeft;
+                    worksheet.Cell(row, 6).Value = record.Building ?? "";
+                    worksheet.Cell(row, 7).Value = record.Note ?? "";
+                    worksheet.Cell(row, 8).Value = record.IsDeleted ? "Удален" : "Активен";
+
+                    // Цветовое кодирование по сроку действия
+                    if (!record.IsDeleted)
+                    {
+                        if (record.DaysLeft <= 10)
+                        {
+                            worksheet.Range(row, 1, row, 8).Style.Fill.BackgroundColor = ClosedXML.Excel.XLColor.LightCoral;
+                        }
+                        else if (record.DaysLeft <= 30)
+                        {
+                            worksheet.Range(row, 1, row, 8).Style.Fill.BackgroundColor = ClosedXML.Excel.XLColor.LightYellow;
+                        }
+                        else
+                        {
+                            worksheet.Range(row, 1, row, 8).Style.Fill.BackgroundColor = ClosedXML.Excel.XLColor.LightGreen;
+                        }
+                    }
+                    else
+                    {
+                        // Для удаленных записей - серый цвет
+                        worksheet.Range(row, 1, row, 8).Style.Fill.BackgroundColor = ClosedXML.Excel.XLColor.LightGray;
+                    }
+
+                    // Применяем стиль границ ко всем ячейкам строки
+                    for (int col = 1; col <= headers.Length; col++)
+                    {
+                        worksheet.Cell(row, col).Style.Border.OutsideBorder = ClosedXML.Excel.XLBorderStyleValues.Thin;
+                    }
+
+                    row++;
+                }
+
+                // Настраиваем ширину столбцов
+                worksheet.Columns().AdjustToContents();
+
+                // Добавляем автофильтр
+                worksheet.Range(4, 1, row - 1, headers.Length).SetAutoFilter();
+
+                // Замораживаем заголовки
+                worksheet.SheetView.FreezeRows(4);
+
+                // Сохраняем файл
+                workbook.SaveAs(filePath);
+
+                AddToMiniLog($"Создан Excel файл: {Path.GetFileName(filePath)}");
+            }
+            catch (Exception ex)
+            {
+                AddToMiniLog($"Ошибка создания Excel: {ex.Message}");
+                throw new Exception($"Ошибка при создании Excel файла: {ex.Message}", ex);
+            }
+        }
+
         private string EscapeCsvField(string field)
         {
             if (field.Contains(";") || field.Contains("\"") || field.Contains("\n") || field.Contains("\r"))
@@ -364,19 +480,14 @@ namespace ImapCertWatcher
         {
             try
             {
-                // Проверяем, доступна ли библиотека ClosedXML
-                var closedXmlType = Type.GetType("ClosedXML.Excel.XLWorkbook, ClosedXML");
-                if (closedXmlType != null)
-                {
-                    GenerateExcelWithClosedXML(data, filePath);
-                    return;
-                }
+                GenerateExcelFile(data, filePath);
             }
-            catch
+            catch (Exception ex)
             {
-                // Если ClosedXML не доступен, создаем CSV
-                GenerateCsvFile(data, Path.ChangeExtension(filePath, ".csv"));
-                throw new Exception("Библиотека ClosedXML не установлена. Создан CSV файл.");
+                // Если не удалось создать XLSX, пробуем создать CSV как запасной вариант
+                string csvPath = Path.ChangeExtension(filePath, ".csv");
+                GenerateCsvFile(data, csvPath);
+                throw new Exception($"Не удалось создать Excel файл: {ex.Message}. Создан CSV файл: {Path.GetFileName(csvPath)}");
             }
         }
 
@@ -1259,31 +1370,50 @@ namespace ImapCertWatcher
         {
             try
             {
-                var logDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "LOG");
-                if (!Directory.Exists(logDirectory))
+                var logBaseDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "LOG");
+                if (!Directory.Exists(logBaseDirectory))
                 {
                     txtLogs.Text = "Папка логов не существует";
                     return;
                 }
 
-                var logFiles = Directory.GetFiles(logDirectory, "*.log")
-                    .OrderByDescending(f => File.GetCreationTime(f))
+                // Ищем все папки с датами и сортируем по убыванию (самые новые первыми)
+                var dateFolders = Directory.GetDirectories(logBaseDirectory)
+                    .Where(dir => System.Text.RegularExpressions.Regex.IsMatch(Path.GetFileName(dir), @"^\d{4}-\d{2}-\d{2}$"))
+                    .OrderByDescending(dir => dir)
                     .ToList();
 
-                if (!logFiles.Any())
+                if (!dateFolders.Any())
                 {
                     txtLogs.Text = "Логи не найдены";
                     return;
                 }
 
+                // Берем самую свежую папку с датой
+                var latestDateFolder = dateFolders.First();
+
+                // Ищем все log файлы в этой папке и сортируем по дате создания (новые первыми)
+                var logFiles = Directory.GetFiles(latestDateFolder, "*.log")
+                    .OrderByDescending(f => File.GetCreationTime(f))
+                    .ToList();
+
+                if (!logFiles.Any())
+                {
+                    txtLogs.Text = "Логи не найдены в папке с датой";
+                    return;
+                }
+
+                // Берем самый свежий лог-файл
                 var latestLog = logFiles.First();
                 var logContent = File.ReadAllText(latestLog);
 
                 Dispatcher.Invoke(() =>
                 {
                     txtLogs.Text = logContent;
-                    logStatusText.Text = $"Загружен файл: {Path.GetFileName(latestLog)}";
+                    logStatusText.Text = $"Загружен файл: {Path.GetFileName(latestDateFolder)}/{Path.GetFileName(latestLog)}";
                 });
+
+                AddToMiniLog($"Загружены логи: {Path.GetFileName(latestLog)}");
             }
             catch (Exception ex)
             {
@@ -1292,6 +1422,7 @@ namespace ImapCertWatcher
                     txtLogs.Text = $"Ошибка загрузки логов: {ex.Message}";
                     logStatusText.Text = "Ошибка загрузки логов";
                 });
+                AddToMiniLog($"Ошибка загрузки логов: {ex.Message}");
             }
         }
 
@@ -1305,8 +1436,8 @@ namespace ImapCertWatcher
         {
             try
             {
-                var logDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "LOG");
-                if (!Directory.Exists(logDirectory))
+                var logBaseDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "LOG");
+                if (!Directory.Exists(logBaseDirectory))
                 {
                     MessageBox.Show("Папка логов не существует", "Информация",
                                   MessageBoxButton.OK, MessageBoxImage.Information);
@@ -1314,23 +1445,40 @@ namespace ImapCertWatcher
                 }
 
                 var cutoffDate = DateTime.Now.AddMonths(-2);
-                var logFiles = Directory.GetFiles(logDirectory, "*.log");
                 int deletedCount = 0;
 
-                foreach (var logFile in logFiles)
+                // Ищем все папки с датами
+                var dateFolders = Directory.GetDirectories(logBaseDirectory)
+                    .Where(dir => System.Text.RegularExpressions.Regex.IsMatch(Path.GetFileName(dir), @"^\d{4}-\d{2}-\d{2}$"));
+
+                foreach (var dateFolder in dateFolders)
                 {
-                    if (File.GetCreationTime(logFile) < cutoffDate)
+                    var folderName = Path.GetFileName(dateFolder);
+                    if (DateTime.TryParseExact(folderName, "yyyy-MM-dd",
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        System.Globalization.DateTimeStyles.None, out DateTime folderDate))
                     {
-                        File.Delete(logFile);
-                        deletedCount++;
+                        if (folderDate < cutoffDate.Date)
+                        {
+                            try
+                            {
+                                Directory.Delete(dateFolder, true);
+                                deletedCount++;
+                                AddToMiniLog($"Удалена папка логов: {folderName}");
+                            }
+                            catch (Exception ex)
+                            {
+                                AddToMiniLog($"Ошибка удаления папки {folderName}: {ex.Message}");
+                            }
+                        }
                     }
                 }
 
-                MessageBox.Show($"Удалено логов: {deletedCount}", "Очистка логов",
+                MessageBox.Show($"Удалено папок с логами: {deletedCount}", "Очистка логов",
                               MessageBoxButton.OK, MessageBoxImage.Information);
 
                 LoadLogs();
-                AddToMiniLog($"Очищено логов: {deletedCount}"); // ← ДОБАВИТЬ
+                AddToMiniLog($"Очищено логов: {deletedCount} папок");
             }
             catch (Exception ex)
             {
@@ -1344,16 +1492,19 @@ namespace ImapCertWatcher
         {
             try
             {
-                var logDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "LOG");
-                if (!Directory.Exists(logDirectory))
-                    Directory.CreateDirectory(logDirectory);
+                var logBaseDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "LOG");
+                if (!Directory.Exists(logBaseDirectory))
+                    Directory.CreateDirectory(logBaseDirectory);
 
-                System.Diagnostics.Process.Start("explorer.exe", logDirectory);
+                // Открываем основную папку LOG (пользователь сам увидит папки с датами)
+                System.Diagnostics.Process.Start("explorer.exe", logBaseDirectory);
+                AddToMiniLog("Открыта папка логов");
             }
             catch (Exception ex)
             {
                 MessageBox.Show($"Ошибка при открытии папки логов: {ex.Message}", "Ошибка",
                               MessageBoxButton.OK, MessageBoxImage.Error);
+                AddToMiniLog($"Ошибка открытия папки логов: {ex.Message}");
             }
         }
 
