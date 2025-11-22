@@ -11,7 +11,13 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Threading;
+using System.Diagnostics;
+
+// Альтернатива Excel без использования Office Interop
+using System.Data;
+using System.Data.OleDb;
 
 namespace ImapCertWatcher
 {
@@ -21,13 +27,14 @@ namespace ImapCertWatcher
         private DbHelper _db;
         private ImapWatcher _watcher;
         private ObservableCollection<Models.CertRecord> _items = new ObservableCollection<Models.CertRecord>();
-        private ObservableCollection<Models.CertRecord> _allItems = new ObservableCollection<Models.CertRecord>(); // Все записи для поиска
+        private ObservableCollection<Models.CertRecord> _allItems = new ObservableCollection<Models.CertRecord>();
         private Timer _timer;
         private ObservableCollection<string> _availableFolders = new ObservableCollection<string>();
 
         private string _currentBuildingFilter = "Все";
         private bool _showDeleted = false;
         private string _searchText = "";
+        private bool _isDarkTheme = false;
 
         // Список доступных зданий
         private readonly ObservableCollection<string> _availableBuildings = new ObservableCollection<string>
@@ -54,6 +61,9 @@ namespace ImapCertWatcher
 
                 cmbImapFolder.ItemsSource = _availableFolders;
                 txtInterval.Text = _settings.CheckIntervalSeconds.ToString();
+
+                // Загрузка темы
+                LoadThemeSettings();
 
                 try
                 {
@@ -89,6 +99,308 @@ namespace ImapCertWatcher
             }
         }
 
+        private void LoadThemeSettings()
+        {
+            try
+            {
+                var themeFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "theme.txt");
+                if (File.Exists(themeFile))
+                {
+                    var theme = File.ReadAllText(themeFile).Trim();
+                    _isDarkTheme = theme.Equals("dark", StringComparison.OrdinalIgnoreCase);
+                    chkDarkTheme.IsChecked = _isDarkTheme;
+                    ApplyTheme(_isDarkTheme);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"Ошибка загрузки настроек темы: {ex.Message}");
+            }
+        }
+
+        private void SaveThemeSettings()
+        {
+            try
+            {
+                var themeFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "theme.txt");
+                File.WriteAllText(themeFile, _isDarkTheme ? "dark" : "light");
+            }
+            catch (Exception ex)
+            {
+                Log($"Ошибка сохранения настроек темы: {ex.Message}");
+            }
+        }
+
+        private void ApplyTheme(bool isDark)
+        {
+            _isDarkTheme = isDark;
+
+            var resources = this.Resources;
+
+            if (isDark)
+            {
+                // Применяем темную тему
+                resources["WindowBackgroundBrush"] = resources["DarkWindowBackground"];
+                resources["ControlBackgroundBrush"] = resources["DarkControlBackground"];
+                resources["TextColorBrush"] = resources["DarkTextColor"];
+                resources["BorderColorBrush"] = resources["DarkBorderColor"];
+                resources["AccentColorBrush"] = resources["DarkAccentColor"];
+                resources["HoverColorBrush"] = resources["DarkHoverColor"];
+            }
+            else
+            {
+                // Применяем светлую тему
+                resources["WindowBackgroundBrush"] = resources["LightWindowBackground"];
+                resources["ControlBackgroundBrush"] = resources["LightControlBackground"];
+                resources["TextColorBrush"] = resources["LightTextColor"];
+                resources["BorderColorBrush"] = resources["LightBorderColor"];
+                resources["AccentColorBrush"] = resources["LightAccentColor"];
+                resources["HoverColorBrush"] = resources["LightHoverColor"];
+            }
+
+            // Принудительно обновляем стили и перезагружаем данные
+            this.InvalidateVisual();
+
+            // Обновляем строки DataGrid для применения новых цветов
+            var tempItems = _items.ToList();
+            _items.Clear();
+            foreach (var item in tempItems)
+            {
+                _items.Add(item);
+            }
+        }
+
+        private void ChkDarkTheme_Changed(object sender, RoutedEventArgs e)
+        {
+            _isDarkTheme = chkDarkTheme.IsChecked == true;
+            ApplyTheme(_isDarkTheme);
+            SaveThemeSettings();
+        }
+
+        // ========== ЭКСПОРТ В EXCEL С ИСПОЛЬЗОВАНИЕМ CSV ==========
+
+        private async void BtnExportExcel_Click(object sender, RoutedEventArgs e)
+        {
+            await ExportToExcel(false);
+        }
+
+        private async void ExportSelectedMenuItem_Click(object sender, RoutedEventArgs e)
+        {
+            await ExportToExcel(true);
+        }
+
+        private async Task ExportToExcel(bool exportSelectedOnly)
+        {
+            try
+            {
+                exportProgress.Visibility = Visibility.Visible;
+                statusText.Text = "Подготовка экспорта...";
+
+                var dataToExport = exportSelectedOnly && dgCerts.SelectedItem != null
+                    ? new ObservableCollection<Models.CertRecord> { (Models.CertRecord)dgCerts.SelectedItem }
+                    : _items;
+
+                if (!dataToExport.Any())
+                {
+                    MessageBox.Show("Нет данных для экспорта", "Информация",
+                                  MessageBoxButton.OK, MessageBoxImage.Information);
+                    return;
+                }
+
+                await Task.Run(() => GenerateExcelFile(dataToExport, exportSelectedOnly));
+
+                statusText.Text = exportSelectedOnly
+                    ? "Выделенная запись экспортирована"
+                    : $"Экспортировано записей: {dataToExport.Count}";
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Ошибка при экспорте: {ex.Message}", "Ошибка",
+                              MessageBoxButton.OK, MessageBoxImage.Error);
+                Log($"Ошибка экспорта: {ex.Message}");
+            }
+            finally
+            {
+                exportProgress.Visibility = Visibility.Collapsed;
+            }
+        }
+
+        private void GenerateExcelFile(ObservableCollection<Models.CertRecord> data, bool isSelectedOnly)
+        {
+            try
+            {
+                var saveFileDialog = new SaveFileDialog
+                {
+                    Filter = "CSV files (*.csv)|*.csv|Excel files (*.xlsx)|*.xlsx",
+                    FileName = $"Сертификаты_ЭЦП_{DateTime.Now:yyyy-MM-dd_HH-mm}" +
+                              (isSelectedOnly ? "_выделенный" : "") + ".csv"
+                };
+
+                bool? result = null;
+                Dispatcher.Invoke(() =>
+                {
+                    result = saveFileDialog.ShowDialog();
+                });
+
+                if (result != true) return;
+
+                string filePath = saveFileDialog.FileName;
+                string fileExtension = Path.GetExtension(filePath).ToLower();
+
+                if (fileExtension == ".csv")
+                {
+                    GenerateCsvFile(data, filePath);
+                }
+                else
+                {
+                    // Попробуем использовать ClosedXML если установлен
+                    TryGenerateExcelWithClosedXML(data, filePath);
+                }
+
+                Dispatcher.Invoke(() =>
+                {
+                    var openResult = MessageBox.Show("Файл успешно экспортирован. Открыть файл?",
+                                                   "Экспорт завершен",
+                                                   MessageBoxButton.YesNo,
+                                                   MessageBoxImage.Question);
+
+                    if (openResult == MessageBoxResult.Yes)
+                    {
+                        Process.Start(filePath);
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    MessageBox.Show($"Ошибка при создании файла: {ex.Message}", "Ошибка",
+                                  MessageBoxButton.OK, MessageBoxImage.Error);
+                });
+                throw;
+            }
+        }
+
+        private void GenerateCsvFile(ObservableCollection<Models.CertRecord> data, string filePath)
+        {
+            using (var writer = new StreamWriter(filePath, false, System.Text.Encoding.UTF8))
+            {
+                // Заголовки
+                writer.WriteLine("ФИО;Номер сертификата;Дата начала;Дата окончания;Осталось дней;Здание;Примечание;Статус");
+
+                // Данные
+                foreach (var record in data)
+                {
+                    var status = record.IsDeleted ? "Удален" : "Активен";
+                    var fio = EscapeCsvField(record.Fio ?? "");
+                    var certNumber = EscapeCsvField(record.CertNumber ?? "");
+                    var building = EscapeCsvField(record.Building ?? "");
+                    var note = EscapeCsvField(record.Note ?? "");
+
+                    writer.WriteLine($"{fio};{certNumber};{record.DateStart:dd.MM.yyyy};{record.DateEnd:dd.MM.yyyy};{record.DaysLeft};{building};{note};{status}");
+                }
+            }
+        }
+
+        private string EscapeCsvField(string field)
+        {
+            if (field.Contains(";") || field.Contains("\"") || field.Contains("\n") || field.Contains("\r"))
+            {
+                return $"\"{field.Replace("\"", "\"\"")}\"";
+            }
+            return field;
+        }
+
+        private void TryGenerateExcelWithClosedXML(ObservableCollection<Models.CertRecord> data, string filePath)
+        {
+            try
+            {
+                // Проверяем, доступна ли библиотека ClosedXML
+                var closedXmlType = Type.GetType("ClosedXML.Excel.XLWorkbook, ClosedXML");
+                if (closedXmlType != null)
+                {
+                    GenerateExcelWithClosedXML(data, filePath);
+                    return;
+                }
+            }
+            catch
+            {
+                // Если ClosedXML не доступен, создаем CSV
+                GenerateCsvFile(data, Path.ChangeExtension(filePath, ".csv"));
+                throw new Exception("Библиотека ClosedXML не установлена. Создан CSV файл.");
+            }
+        }
+
+        private void GenerateExcelWithClosedXML(ObservableCollection<Models.CertRecord> data, string filePath)
+        {
+            // Этот метод будет работать только если установлен ClosedXML
+            dynamic workbook = Activator.CreateInstance(Type.GetType("ClosedXML.Excel.XLWorkbook, ClosedXML"));
+            dynamic worksheet = workbook.Worksheets.Add("Сертификаты ЭЦП");
+
+            // Заголовок
+            worksheet.Cell(1, 1).Value = "Экспорт сертификатов ЭЦП";
+            worksheet.Range(1, 1, 1, 8).Merge();
+            worksheet.Cell(1, 1).Style.Font.Bold = true;
+            worksheet.Cell(1, 1).Style.Font.FontSize = 14;
+            worksheet.Cell(1, 1).Style.Alignment.Horizontal = (dynamic)Enum.Parse(Type.GetType("ClosedXML.Excel.XLAlignmentHorizontalValues, ClosedXML"), "Center");
+
+            // Заголовки таблицы
+            string[] headers = { "ФИО", "Номер сертификата", "Дата начала", "Дата окончания",
+                               "Осталось дней", "Здание", "Примечание", "Статус" };
+
+            for (int i = 0; i < headers.Length; i++)
+            {
+                worksheet.Cell(3, i + 1).Value = headers[i];
+                worksheet.Cell(3, i + 1).Style.Font.Bold = true;
+                worksheet.Cell(3, i + 1).Style.Fill.BackgroundColor = (dynamic)Enum.Parse(Type.GetType("ClosedXML.Excel.XLColor, ClosedXML"), "LightGray");
+                worksheet.Cell(3, i + 1).Style.Border.OutsideBorder = (dynamic)Enum.Parse(Type.GetType("ClosedXML.Excel.XLBorderStyleValues, ClosedXML"), "Thin");
+            }
+
+            // Данные
+            int row = 4;
+            foreach (var record in data)
+            {
+                worksheet.Cell(row, 1).Value = record.Fio;
+                worksheet.Cell(row, 2).Value = record.CertNumber;
+                worksheet.Cell(row, 3).Value = record.DateStart.ToString("dd.MM.yyyy");
+                worksheet.Cell(row, 4).Value = record.DateEnd.ToString("dd.MM.yyyy");
+                worksheet.Cell(row, 5).Value = record.DaysLeft;
+                worksheet.Cell(row, 6).Value = record.Building;
+                worksheet.Cell(row, 7).Value = record.Note;
+                worksheet.Cell(row, 8).Value = record.IsDeleted ? "Удален" : "Активен";
+
+                // Цветовое кодирование по сроку действия
+                string colorName;
+                if (record.DaysLeft <= 10)
+                {
+                    colorName = "LightCoral";
+                }
+                else if (record.DaysLeft <= 30)
+                {
+                    colorName = "LightYellow";
+                }
+                else
+                {
+                    colorName = "LightGreen";
+                }
+
+                worksheet.Range(row, 1, row, 8).Style.Fill.BackgroundColor = (dynamic)Enum.Parse(Type.GetType("ClosedXML.Excel.XLColor, ClosedXML"), colorName);
+
+                // Границы для ячеек
+                for (int col = 1; col <= headers.Length; col++)
+                {
+                    worksheet.Cell(row, col).Style.Border.OutsideBorder = (dynamic)Enum.Parse(Type.GetType("ClosedXML.Excel.XLBorderStyleValues, ClosedXML"), "Thin");
+                }
+
+                row++;
+            }
+
+            // Автоподбор ширины столбцов
+            worksheet.Columns().AdjustToContents();
+
+            workbook.SaveAs(filePath);
+        }
+
         private void LoadFromDb()
         {
             try
@@ -116,7 +428,6 @@ namespace ImapCertWatcher
             {
                 if (string.IsNullOrWhiteSpace(_searchText))
                 {
-                    // Если поиск пустой, показываем все записи
                     _items.Clear();
                     foreach (var item in _allItems)
                     {
@@ -126,7 +437,6 @@ namespace ImapCertWatcher
                 }
                 else
                 {
-                    // Применяем фильтр поиска
                     var searchTerms = _searchText.ToLower().Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
 
                     _items.Clear();
@@ -159,7 +469,6 @@ namespace ImapCertWatcher
             }
         }
 
-        // Обработчики поиска
         private void TxtSearchFio_TextChanged(object sender, TextChangedEventArgs e)
         {
             _searchText = txtSearchFio.Text.Trim();
@@ -260,12 +569,10 @@ namespace ImapCertWatcher
             }
         }
 
-        // Обработчики для ComboBox здания
         private void BuildingComboBox_DropDownOpened(object sender, EventArgs e)
         {
             if (sender is ComboBox comboBox)
             {
-                // Убеждаемся, что список заполнен
                 if (comboBox.ItemsSource == null)
                 {
                     comboBox.ItemsSource = _availableBuildings;
@@ -279,7 +586,6 @@ namespace ImapCertWatcher
 
             if (sender is ComboBox comboBox && comboBox.DataContext is Models.CertRecord record)
             {
-                // Сохраняем только если значение действительно изменилось
                 if (e.AddedItems.Count > 0)
                 {
                     string newValue = e.AddedItems[0] as string;
@@ -324,22 +630,16 @@ namespace ImapCertWatcher
                 var comboBox = e.EditingElement as ComboBox;
                 if (comboBox != null && e.Row.DataContext is Models.CertRecord record)
                 {
-                    // Настраиваем ComboBox при подготовке к редактированию
                     comboBox.ItemsSource = _availableBuildings;
                     comboBox.DisplayMemberPath = ".";
                     comboBox.SelectedItem = record.Building;
-
-                    Log($"Подготовка ComboBox для {record.Fio}, текущее значение: {record.Building}");
                 }
             }
         }
 
         private void DgCerts_BeginningEdit(object sender, DataGridBeginningEditEventArgs e)
         {
-            if (e.Column.Header.ToString() == "Здание")
-            {
-                Log("Начало редактирования ячейки здания");
-            }
+            // Логика без изменений
         }
 
         private void DgCerts_CellEditEnding(object sender, DataGridCellEditEndingEventArgs e)
@@ -349,7 +649,6 @@ namespace ImapCertWatcher
                 var comboBox = e.EditingElement as ComboBox;
                 if (comboBox?.DataContext is Models.CertRecord record)
                 {
-                    Log($"Завершение редактирования для {record.Fio}, новое значение: {record.Building}");
                     // Не сохраняем здесь, т.к. уже сохранили в SelectionChanged
                 }
             }
@@ -363,17 +662,12 @@ namespace ImapCertWatcher
                 {
                     _db.UpdateBuilding(record.Id, record.Building);
                     statusText.Text = $"Здание сохранено: {record.Building}";
-                    Log($"Сохранено здание для {record.Fio}: {record.Building}");
-
-                    // НЕ обновляем всю таблицу, чтобы не закрывать ComboBox
-                    // Вместо этого просто обновим статус
                 }
             }
             catch (Exception ex)
             {
                 MessageBox.Show($"Ошибка сохранения здания: {ex.Message}", "Ошибка",
                               MessageBoxButton.OK, MessageBoxImage.Error);
-                Log($"Ошибка сохранения здания: {ex.Message}");
             }
         }
 
@@ -456,22 +750,39 @@ namespace ImapCertWatcher
         {
             if (e.Row.Item is Models.CertRecord record)
             {
+                // Устанавливаем только фон, цвет текста будет управляться стилями
                 if (record.IsDeleted)
                 {
-                    e.Row.Background = System.Windows.Media.Brushes.LightGray;
+                    // Для удаленных записей - серый фон
+                    e.Row.Background = new SolidColorBrush(_isDarkTheme
+                        ? Color.FromArgb(255, 80, 80, 80)  // Темно-серый для темной темы
+                        : Color.FromArgb(255, 220, 220, 220)); // Светло-серый для светлой темы
                 }
                 else if (record.DaysLeft <= 10)
                 {
-                    e.Row.Background = System.Windows.Media.Brushes.LightCoral;
+                    // Красный фон для срочных сертификатов
+                    e.Row.Background = new SolidColorBrush(_isDarkTheme
+                        ? Color.FromArgb(255, 120, 50, 50)   // Темно-красный для темной темы
+                        : Color.FromArgb(255, 255, 200, 200)); // Светло-красный для светлой темы
                 }
                 else if (record.DaysLeft <= 30)
                 {
-                    e.Row.Background = System.Windows.Media.Brushes.LightGoldenrodYellow;
+                    // Желтый фон для предупреждения
+                    e.Row.Background = new SolidColorBrush(_isDarkTheme
+                        ? Color.FromArgb(255, 120, 120, 50)   // Темно-желтый для темной темы
+                        : Color.FromArgb(255, 255, 255, 200)); // Светло-желтый для светлой темы
                 }
                 else
                 {
-                    e.Row.Background = System.Windows.Media.Brushes.LightGreen;
+                    // Зеленый фон для нормальных сертификатов
+                    e.Row.Background = new SolidColorBrush(_isDarkTheme
+                        ? Color.FromArgb(255, 50, 80, 50)     // Темно-зеленый для темной темы
+                        : Color.FromArgb(255, 200, 255, 200)); // Светло-зеленый для светлой темы
                 }
+
+                // Принудительно устанавливаем цвет текста для всей строки
+                e.Row.Foreground = new SolidColorBrush(_isDarkTheme
+                    ? Colors.White : Colors.Black);
             }
         }
 
@@ -479,18 +790,22 @@ namespace ImapCertWatcher
         {
             if (dgCerts.SelectedItem is Models.CertRecord record)
             {
-                var menuItem = (MenuItem)dgCerts.ContextMenu.Items[0];
+                var menuItems = dgCerts.ContextMenu.Items;
+                var archiveMenuItem = (MenuItem)menuItems[0];
+                var exportMenuItem = (MenuItem)menuItems[2];
 
                 if (!string.IsNullOrEmpty(record.ArchivePath) && File.Exists(record.ArchivePath))
                 {
-                    menuItem.IsEnabled = false;
-                    menuItem.ToolTip = "Архив уже прикреплен";
+                    archiveMenuItem.IsEnabled = false;
+                    archiveMenuItem.ToolTip = "Архив уже прикреплен";
                 }
                 else
                 {
-                    menuItem.IsEnabled = true;
-                    menuItem.ToolTip = "Добавить архив с подписью";
+                    archiveMenuItem.IsEnabled = true;
+                    archiveMenuItem.ToolTip = "Добавить архив с подписью";
                 }
+
+                exportMenuItem.IsEnabled = dgCerts.SelectedItem != null;
             }
         }
 
@@ -563,7 +878,6 @@ namespace ImapCertWatcher
                 Cursor = Cursors.Wait;
                 btnRefreshFolders.IsEnabled = false;
                 txtFoldersStatus.Text = "Загрузка списка папок...";
-                txtFoldersStatus.Foreground = System.Windows.Media.Brushes.Blue;
 
                 Task.Run(() => LoadMailFolders());
             }
@@ -609,7 +923,6 @@ namespace ImapCertWatcher
                     }
 
                     txtFoldersStatus.Text = $"Загружено папок: {folders.Count}";
-                    txtFoldersStatus.Foreground = System.Windows.Media.Brushes.Green;
                 });
             }
             catch (Exception ex)
@@ -619,7 +932,6 @@ namespace ImapCertWatcher
                     MessageBox.Show($"Ошибка загрузки папок: {ex.Message}", "Ошибка",
                                   MessageBoxButton.OK, MessageBoxImage.Error);
                     txtFoldersStatus.Text = "Ошибка загрузки папок";
-                    txtFoldersStatus.Foreground = System.Windows.Media.Brushes.Red;
                 });
             }
             finally
