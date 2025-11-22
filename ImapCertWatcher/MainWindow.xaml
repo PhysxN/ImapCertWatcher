@@ -12,6 +12,7 @@
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
@@ -27,8 +28,21 @@
                         <Button x:Name="btnRestoreSelected" Content="Восстановить" Margin="0,0,8,0" Padding="8,4" Click="BtnRestoreSelected_Click"/>
                     </StackPanel>
 
-                    <!-- Фильтры -->
+                    <!-- Поиск по ФИО -->
                     <StackPanel Orientation="Horizontal" Grid.Row="1" Margin="0,0,0,8">
+                        <TextBlock Text="Поиск по ФИО:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <TextBox x:Name="txtSearchFio" Width="300" 
+                                 TextChanged="TxtSearchFio_TextChanged"
+                                 VerticalAlignment="Center"
+                                 Padding="4,2"
+                                 ToolTip="Введите ФИО для поиска"/>
+                        <Button x:Name="btnClearSearch" Content="Очистить" Margin="8,0,0,0" 
+                                Padding="6,2" Click="BtnClearSearch_Click"
+                                ToolTip="Очистить поиск"/>
+                    </StackPanel>
+
+                    <!-- Фильтры -->
+                    <StackPanel Orientation="Horizontal" Grid.Row="2" Margin="0,0,0,8">
                         <TextBlock Text="Фильтр по зданию:" VerticalAlignment="Center" Margin="0,0,8,0"/>
                         <RadioButton x:Name="rbAllBuildings" Content="Все" GroupName="BuildingFilter" IsChecked="True" Checked="BuildingFilter_Checked"/>
                         <RadioButton x:Name="rbKrasnoflotskaya" Content="Краснофлотская" GroupName="BuildingFilter" Margin="8,0,0,0" Checked="BuildingFilter_Checked"/>
@@ -38,7 +52,7 @@
                     </StackPanel>
 
                     <!-- Таблица сертификатов -->
-                    <DataGrid x:Name="dgCerts" Grid.Row="2" AutoGenerateColumns="False" 
+                    <DataGrid x:Name="dgCerts" Grid.Row="3" AutoGenerateColumns="False" 
                               IsReadOnly="False" SelectionMode="Single"
                               CanUserSortColumns="True" CanUserResizeColumns="True"
                               LoadingRow="DgCerts_LoadingRow"
@@ -119,9 +133,12 @@
                         </DataGrid.Columns>
                     </DataGrid>
 
-                    <StatusBar Grid.Row="3" Margin="0,8,0,0">
+                    <StatusBar Grid.Row="4" Margin="0,8,0,0">
                         <StatusBarItem>
                             <TextBlock x:Name="statusText">Готов</TextBlock>
+                        </StatusBarItem>
+                        <StatusBarItem>
+                            <TextBlock x:Name="searchStatusText" Margin="20,0,0,0"/>
                         </StatusBarItem>
                     </StatusBar>
                 </Grid>

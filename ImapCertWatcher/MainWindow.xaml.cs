@@ -21,11 +21,13 @@ namespace ImapCertWatcher
         private DbHelper _db;
         private ImapWatcher _watcher;
         private ObservableCollection<Models.CertRecord> _items = new ObservableCollection<Models.CertRecord>();
+        private ObservableCollection<Models.CertRecord> _allItems = new ObservableCollection<Models.CertRecord>(); // Все записи для поиска
         private Timer _timer;
         private ObservableCollection<string> _availableFolders = new ObservableCollection<string>();
 
         private string _currentBuildingFilter = "Все";
         private bool _showDeleted = false;
+        private string _searchText = "";
 
         // Список доступных зданий
         private readonly ObservableCollection<string> _availableBuildings = new ObservableCollection<string>
@@ -96,14 +98,79 @@ namespace ImapCertWatcher
                 var list = _db.LoadAll(_showDeleted, _currentBuildingFilter);
                 Dispatcher.Invoke(() =>
                 {
-                    _items.Clear();
-                    foreach (var e in list) _items.Add(e);
+                    _allItems.Clear();
+                    foreach (var e in list) _allItems.Add(e);
+
+                    ApplySearchFilter();
                 });
             }
             catch (Exception ex)
             {
                 Dispatcher.Invoke(() => statusText.Text = "Ошибка загрузки из БД: " + ex.Message);
             }
+        }
+
+        private void ApplySearchFilter()
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(_searchText))
+                {
+                    // Если поиск пустой, показываем все записи
+                    _items.Clear();
+                    foreach (var item in _allItems)
+                    {
+                        _items.Add(item);
+                    }
+                    searchStatusText.Text = $"Всего записей: {_items.Count}";
+                }
+                else
+                {
+                    // Применяем фильтр поиска
+                    var searchTerms = _searchText.ToLower().Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+
+                    _items.Clear();
+                    foreach (var item in _allItems)
+                    {
+                        bool matchesAllTerms = true;
+                        string itemFio = (item.Fio ?? "").ToLower();
+
+                        foreach (var term in searchTerms)
+                        {
+                            if (!itemFio.Contains(term))
+                            {
+                                matchesAllTerms = false;
+                                break;
+                            }
+                        }
+
+                        if (matchesAllTerms)
+                        {
+                            _items.Add(item);
+                        }
+                    }
+                    searchStatusText.Text = $"Найдено: {_items.Count} из {_allItems.Count}";
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"Ошибка применения фильтра поиска: {ex.Message}");
+                searchStatusText.Text = "Ошибка поиска";
+            }
+        }
+
+        // Обработчики поиска
+        private void TxtSearchFio_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            _searchText = txtSearchFio.Text.Trim();
+            ApplySearchFilter();
+        }
+
+        private void BtnClearSearch_Click(object sender, RoutedEventArgs e)
+        {
+            txtSearchFio.Text = "";
+            _searchText = "";
+            ApplySearchFilter();
         }
 
         private async Task DoCheckAsync(bool checkAllMessages)
@@ -126,8 +193,9 @@ namespace ImapCertWatcher
                     {
                         Dispatcher.Invoke(() =>
                         {
-                            _items.Clear();
-                            foreach (var e in newList) _items.Add(e);
+                            _allItems.Clear();
+                            foreach (var e in newList) _allItems.Add(e);
+                            ApplySearchFilter();
                             statusText.Text = checkAllMessages
                                 ? $"Обработано всех писем: {entries.Count} шт. ({DateTime.Now})"
                                 : $"Найдено/обновлено: {entries.Count} шт. ({DateTime.Now})";
