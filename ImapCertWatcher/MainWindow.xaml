@@ -41,8 +41,11 @@
                     <DataGrid x:Name="dgCerts" Grid.Row="2" AutoGenerateColumns="False" 
                               IsReadOnly="False" SelectionMode="Single"
                               CanUserSortColumns="True" CanUserResizeColumns="True"
-                              LoadingRow="DgCerts_LoadingRow" MouseDoubleClick="DgCerts_MouseDoubleClick"
-                              ContextMenuOpening="DgCerts_ContextMenuOpening">
+                              LoadingRow="DgCerts_LoadingRow"
+                              ContextMenuOpening="DgCerts_ContextMenuOpening"
+                              CellEditEnding="DgCerts_CellEditEnding"
+                              BeginningEdit="DgCerts_BeginningEdit"
+                              PreparingCellForEdit="DgCerts_PreparingCellForEdit">
                         <DataGrid.ContextMenu>
                             <ContextMenu>
                                 <MenuItem Header="Добавить архив с подписью" Click="AddArchiveMenuItem_Click"/>
@@ -54,13 +57,14 @@
                             <DataGridTextColumn Header="Начало" Binding="{Binding DateStart, StringFormat=dd.MM.yyyy}" Width="*"/>
                             <DataGridTextColumn Header="Окончание" Binding="{Binding DateEnd, StringFormat=dd.MM.yyyy}" Width="*"/>
                             <DataGridTextColumn Header="Осталось дней" Binding="{Binding DaysLeft}" Width="*"/>
+
                             <DataGridTemplateColumn Header="Архив" Width="*">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <Button Content="📁 Открыть" 
-                    Click="BtnOpenArchive_Click" 
-                    Padding="4,2"
-                    ToolTip="Распаковать и открыть архив">
+                                                Click="BtnOpenArchive_Click" 
+                                                Padding="4,2"
+                                                ToolTip="Распаковать и открыть архив">
                                             <Button.Style>
                                                 <Style TargetType="Button">
                                                     <Setter Property="IsEnabled" Value="True"/>
@@ -78,18 +82,29 @@
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
+
+                            <!-- Исправленный столбец для здания -->
                             <DataGridTemplateColumn Header="Здание" Width="*">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
-                                        <ComboBox SelectedItem="{Binding Building, UpdateSourceTrigger=PropertyChanged}"
-                                                  SelectionChanged="BuildingComboBox_SelectionChanged">
-                                            <ComboBoxItem Content=""/>
-                                            <ComboBoxItem Content="Краснофлотская"/>
-                                            <ComboBoxItem Content="Пионерская"/>
-                                        </ComboBox>
+                                        <TextBlock Text="{Binding Building}" 
+                                                   VerticalAlignment="Center"
+                                                   Padding="4,0"/>
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
+                                <DataGridTemplateColumn.CellEditingTemplate>
+                                    <DataTemplate>
+                                        <ComboBox x:Name="cmbBuildingEdit"
+                                                  SelectedItem="{Binding Building, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                  DisplayMemberPath="."
+                                                  LostFocus="BuildingComboBox_LostFocus"
+                                                  DropDownOpened="BuildingComboBox_DropDownOpened"
+                                                  SelectionChanged="BuildingComboBox_SelectionChanged">
+                                        </ComboBox>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellEditingTemplate>
                             </DataGridTemplateColumn>
+
                             <DataGridTemplateColumn Header="Примечание" Width="2*">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
@@ -99,7 +114,8 @@
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            <DataGridCheckBoxColumn Header="Удален" Binding="{Binding IsDeleted}" Width="*"/>
+
+                            <DataGridCheckBoxColumn Header="Удален" Binding="{Binding IsDeleted}" Width="*" IsReadOnly="True"/>
                         </DataGrid.Columns>
                     </DataGrid>
 
@@ -111,7 +127,7 @@
                 </Grid>
             </TabItem>
 
-            <!-- Вкладка с настройками почты -->
+            <!-- Остальные вкладки без изменений -->
             <TabItem Header="Настройки почты">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="8" Width="450">
@@ -176,7 +192,6 @@
                 </ScrollViewer>
             </TabItem>
 
-            <!-- Вкладка с настройками Firebird -->
             <TabItem Header="Настройки БД">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="8" Width="450">
@@ -189,6 +204,9 @@
                                     <Button x:Name="btnBrowseDbPath" Content="..." Click="BtnBrowseDbPath_Click" 
                                             Padding="6,2" Width="30"/>
                                 </StackPanel>
+
+                                <TextBlock Text="Сервер:" Margin="0,2"/>
+                                <TextBox x:Name="txtFbServer" Text="{Binding FbServer}" Margin="0,2,0,8"/>
 
                                 <TextBlock Text="Пользователь:" Margin="0,2"/>
                                 <TextBox x:Name="txtFbUser" Text="{Binding FbUser}" Margin="0,2,0,8"/>
@@ -218,7 +236,6 @@
                 </ScrollViewer>
             </TabItem>
 
-            <!-- Новая вкладка с логами -->
             <TabItem Header="Логи">
                 <Grid Margin="8">
                     <Grid.RowDefinitions>
@@ -227,14 +244,12 @@
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
 
-                    <!-- Панель управления логами -->
                     <StackPanel Orientation="Horizontal" Grid.Row="0" Margin="0,0,0,8">
                         <Button x:Name="btnRefreshLogs" Content="Обновить логи" Margin="0,0,8,0" Padding="8,4" Click="BtnRefreshLogs_Click"/>
                         <Button x:Name="btnClearLogs" Content="Очистить старые логи" Margin="0,0,8,0" Padding="8,4" Click="BtnClearLogs_Click"/>
                         <Button x:Name="btnOpenLogFolder" Content="Открыть папку логов" Margin="0,0,8,0" Padding="8,4" Click="BtnOpenLogFolder_Click"/>
                     </StackPanel>
 
-                    <!-- Поле для отображения логов -->
                     <TextBox x:Name="txtLogs" Grid.Row="1" 
                              IsReadOnly="True" 
                              VerticalScrollBarVisibility="Auto" 

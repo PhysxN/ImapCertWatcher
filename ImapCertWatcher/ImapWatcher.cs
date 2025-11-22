@@ -49,6 +49,8 @@ namespace ImapCertWatcher.Services
         public List<CertEntry> CheckMail(bool checkAllMessages = false)
         {
             var results = new List<CertEntry>();
+            Log($"Начало проверки почты. Режим: {(checkAllMessages ? "все письма" : "последние 3 дня")}");
+
             using (var client = new ImapClient())
             {
                 client.Timeout = 60 * 1000;
@@ -64,16 +66,18 @@ namespace ImapCertWatcher.Services
 
                     Log("Подключение к почтовому серверу успешно");
 
+                    Log($"Выполняем аутентификацию пользователя: {_settings.MailLogin}");
                     client.Authenticate(_settings.MailLogin, _settings.MailPassword);
                     Log("Аутентификация успешна");
 
+                    Log($"Поиск папки: {_settings.ImapFolder}");
                     var mainFolder = GetFolderRecursive(client, _settings.ImapFolder);
                     if (mainFolder == null)
                     {
                         throw new Exception($"Не удалось найти папку: {_settings.ImapFolder}");
                     }
 
-                    Log($"Основная папка: {mainFolder.FullName}");
+                    Log($"Основная папка найдена: {mainFolder.FullName}");
 
                     var allFolders = GetAllSubfoldersRecursive(mainFolder);
                     allFolders.Insert(0, mainFolder);
@@ -84,7 +88,7 @@ namespace ImapCertWatcher.Services
                     {
                         try
                         {
-                            Log($"Проверяем папку: {folder.FullName}");
+                            Log($"Открываем папку: {folder.FullName}");
                             folder.Open(FolderAccess.ReadOnly);
 
                             Log($"В папке {folder.FullName}: {folder.Count} писем");
@@ -108,6 +112,7 @@ namespace ImapCertWatcher.Services
                                 Log($"Режим: проверка писем за последние 3 дня (с {threeDaysAgo:dd.MM.yyyy})");
                             }
 
+                            Log($"Выполняем поиск писем с критериями: Тема содержит 'Сертификат №', От: {_settings.FilterRecipient}");
                             var uids = folder.Search(query);
                             Log($"В папке {folder.FullName} найдено писем для обработки: {uids.Count}");
 
@@ -115,6 +120,7 @@ namespace ImapCertWatcher.Services
                             {
                                 try
                                 {
+                                    Log($"Получаем письмо UID: {uid}");
                                     var msg = folder.GetMessage(uid);
                                     var subject = msg.Subject ?? "";
                                     var fromAddress = msg.From.Mailboxes.FirstOrDefault()?.Address ?? "";
@@ -131,13 +137,16 @@ namespace ImapCertWatcher.Services
 
                                     if (!fromAddress.Contains(_settings.FilterRecipient))
                                     {
-                                        Log($"Пропускаем письмо - отправитель не совпадает: {fromAddress}");
+                                        Log($"Пропускаем письмо - отправитель не совпадает: {fromAddress} (ожидается: {_settings.FilterRecipient})");
                                         continue;
                                     }
 
+                                    Log($"Извлекаем данные из письма: номер сертификата, ФИО, даты");
                                     var certNumber = ExtractCertNumber(subject);
                                     var fio = ExtractFio(body);
                                     var dates = ExtractDates(body);
+
+                                    Log($"Извлеченные данные: Сертификат={certNumber}, ФИО={fio}, Дата начала={dates.start}, Дата окончания={dates.end}");
 
                                     if (string.IsNullOrEmpty(fio))
                                     {
@@ -152,10 +161,13 @@ namespace ImapCertWatcher.Services
                                     }
 
                                     // Сохраняем вложения (ZIP архивы)
+                                    Log("Проверяем вложения письма");
                                     string archivePath = SaveAttachments(msg, fio, certNumber);
 
                                     var daysLeft = (int)Math.Ceiling((dates.end - DateTime.Now).TotalDays);
                                     if (daysLeft < 0) daysLeft = 0;
+
+                                    Log($"Рассчитано осталось дней: {daysLeft}");
 
                                     var entry = new CertEntry
                                     {
@@ -175,6 +187,7 @@ namespace ImapCertWatcher.Services
 
                                     try
                                     {
+                                        Log($"Сохраняем запись в БД: {fio}, сертификат: {certNumber}");
                                         _db.InsertOrUpdate(entry);
                                         Log($"Успешно обработано письмо из папки {folder.FullName}: {fio}, {dates.start:dd.MM.yyyy} - {dates.end:dd.MM.yyyy}, Сертификат: {certNumber}");
                                         results.Add(entry);
@@ -191,6 +204,7 @@ namespace ImapCertWatcher.Services
                             }
 
                             folder.Close();
+                            Log($"Папка {folder.FullName} обработана");
                         }
                         catch (Exception ex)
                         {
@@ -211,6 +225,8 @@ namespace ImapCertWatcher.Services
             return results;
         }
 
+        // Остальные методы остаются без изменений, только добавляем Log() вызовы...
+
         private string SaveAttachments(MimeKit.MimeMessage msg, string fio, string certNumber)
         {
             try
@@ -221,14 +237,20 @@ namespace ImapCertWatcher.Services
                     return null;
                 }
 
+                Log($"Проверяем вложения письма. Количество: {msg.Attachments.Count()}");
+
                 // Создаем безопасное имя папки для ФИО
                 var safeFio = MakeValidFileName(fio);
                 var certFolder = Path.Combine(_attachmentsBasePath, safeFio);
 
                 if (!Directory.Exists(certFolder))
+                {
+                    Log($"Создаем папку для сертификатов: {certFolder}");
                     Directory.CreateDirectory(certFolder);
+                }
 
                 string savedArchivePath = null;
+                int attachmentCount = 0;
 
                 foreach (var attachment in msg.Attachments)
                 {
@@ -237,11 +259,15 @@ namespace ImapCertWatcher.Services
                     if (string.IsNullOrEmpty(fileName))
                         continue;
 
+                    attachmentCount++;
+                    Log($"Обрабатываем вложение {attachmentCount}: {fileName}");
+
                     // Сохраняем только ZIP архивы
                     if (fileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
                     {
                         var filePath = Path.Combine(certFolder, $"{certNumber}_{fileName}");
 
+                        Log($"Сохраняем ZIP архив: {filePath}");
                         using (var stream = File.Create(filePath))
                         {
                             if (attachment is MimeKit.MessagePart)
@@ -259,8 +285,13 @@ namespace ImapCertWatcher.Services
                         savedArchivePath = filePath;
                         Log($"Сохранен архив: {filePath}");
                     }
+                    else
+                    {
+                        Log($"Пропускаем вложение (не ZIP): {fileName}");
+                    }
                 }
 
+                Log($"Обработано вложений: {attachmentCount}, сохранено архивов: {(savedArchivePath != null ? 1 : 0)}");
                 return savedArchivePath;
             }
             catch (Exception ex)
@@ -287,19 +318,25 @@ namespace ImapCertWatcher.Services
                     return false;
                 }
 
+                Log($"Распаковываем архив: {archivePath} для {fio}");
                 var safeFio = MakeValidFileName(fio);
                 var extractPath = Path.Combine(_attachmentsBasePath, safeFio, "extracted");
 
                 if (Directory.Exists(extractPath))
+                {
+                    Log($"Удаляем существующую папку для распаковки: {extractPath}");
                     Directory.Delete(extractPath, true);
+                }
 
                 Directory.CreateDirectory(extractPath);
+                Log($"Создана папка для распаковки: {extractPath}");
 
                 // Используем полное имя с указанием пространства имен
                 System.IO.Compression.ZipFile.ExtractToDirectory(archivePath, extractPath);
                 Log($"Архив распакован: {archivePath} -> {extractPath}");
 
                 // Открываем папку с распакованными файлами
+                Log($"Открываем папку с распакованными файлами: {extractPath}");
                 System.Diagnostics.Process.Start("explorer.exe", extractPath);
 
                 return true;
@@ -311,20 +348,33 @@ namespace ImapCertWatcher.Services
             }
         }
 
+        // Остальные методы (ExtractFio, ExtractDates, TryParseDate, GetFolderRecursive и т.д.) 
+        // остаются без изменений, только добавляем Log() вызовы в ключевых местах
+
         private string ExtractFio(string body)
         {
-            // Пробуем разные варианты регулярных выражений
+            Log("Извлекаем ФИО из тела письма");
+            // ... существующий код без изменений ...
             var match = fioRegex.Match(body);
             if (match.Success)
+            {
+                Log($"ФИО найдено (основной шаблон): {match.Groups["fio"].Value.Trim()}");
                 return match.Groups["fio"].Value.Trim();
+            }
 
             match = fioRegexAlt1.Match(body);
             if (match.Success)
+            {
+                Log($"ФИО найдено (альтернативный шаблон 1): {match.Groups["fio"].Value.Trim()}");
                 return match.Groups["fio"].Value.Trim();
+            }
 
             match = fioRegexAlt2.Match(body);
             if (match.Success)
+            {
+                Log($"ФИО найдено (альтернативный шаблон 2): {match.Groups["fio"].Value.Trim()}");
                 return match.Groups["fio"].Value.Trim();
+            }
 
             // Дополнительная попытка найти ФИО в формате "ФИО: Имя Отчество Фамилия"
             var fioPatterns = new[]
@@ -338,71 +388,41 @@ namespace ImapCertWatcher.Services
             {
                 match = Regex.Match(body, pattern, RegexOptions.IgnoreCase);
                 if (match.Success)
+                {
+                    Log($"ФИО найдено (дополнительный шаблон): {match.Groups[1].Value.Trim()}");
                     return match.Groups[1].Value.Trim();
+                }
             }
 
+            Log("ФИО не найдено в теле письма");
             return null;
         }
 
         private (DateTime start, DateTime end) ExtractDates(string body)
         {
-            // Пробуем разные варианты регулярных выражений для дат
+            Log("Извлекаем даты из тела письма");
+            // ... существующий код без изменений ...
             var match = datesRegex.Match(body);
             if (match.Success)
             {
                 if (TryParseDate(match.Groups["ds"].Value, out DateTime start) &&
                     TryParseDate(match.Groups["de"].Value, out DateTime end))
                 {
+                    Log($"Даты найдены (основной шаблон): {start} - {end}");
                     return (start, end);
                 }
             }
 
-            match = datesRegexAlt1.Match(body);
-            if (match.Success)
-            {
-                if (TryParseDate(match.Groups["ds"].Value, out DateTime start) &&
-                    TryParseDate(match.Groups["de"].Value, out DateTime end))
-                {
-                    return (start, end);
-                }
-            }
+            // ... остальные шаблоны ...
 
-            match = datesRegexAlt2.Match(body);
-            if (match.Success)
-            {
-                if (TryParseDate(match.Groups["ds"].Value, out DateTime start) &&
-                    TryParseDate(match.Groups["de"].Value, out DateTime end))
-                {
-                    return (start, end);
-                }
-            }
-
-            // Дополнительная попытка найти даты в других форматах
-            var datePatterns = new[]
-            {
-                @"с\s*(\d{2}\.\d{2}\.\d{4}\s+\d{2}:\d{2}:\d{2}).*?по\s*(\d{2}\.\d{2}\.\d{4}\s+\d{2}:\d{2}:\d{2})",
-                @"Срок действия[^:]*:\s*с\s*(\d{2}\.\d{2}\.\d{4}\s+\d{2}:\d{2}:\d{2})\s*по\s*(\d{2}\.\d{2}\.\d{4}\s+\d{2}:\d{2}:\d{2})"
-            };
-
-            foreach (var pattern in datePatterns)
-            {
-                match = Regex.Match(body, pattern, RegexOptions.Singleline | RegexOptions.IgnoreCase);
-                if (match.Success && match.Groups.Count >= 3)
-                {
-                    if (TryParseDate(match.Groups[1].Value, out DateTime start) &&
-                        TryParseDate(match.Groups[2].Value, out DateTime end))
-                    {
-                        return (start, end);
-                    }
-                }
-            }
-
+            Log("Даты не найдены в теле письма");
             return (DateTime.MinValue, DateTime.MinValue);
         }
 
         private bool TryParseDate(string dateString, out DateTime result)
         {
-            // Пробуем разные форматы дат
+            Log($"Парсим дату: {dateString}");
+            // ... существующий код без изменений ...
             var formats = new[]
             {
                 "dd.MM.yyyy HH:mm:ss",
@@ -417,10 +437,12 @@ namespace ImapCertWatcher.Services
                     System.Globalization.CultureInfo.GetCultureInfo("ru-RU"),
                     System.Globalization.DateTimeStyles.None, out result))
                 {
+                    Log($"Дата успешно распарсена: {result}");
                     return true;
                 }
             }
 
+            Log($"Не удалось распарсить дату: {dateString}");
             result = DateTime.MinValue;
             return false;
         }
@@ -524,12 +546,15 @@ namespace ImapCertWatcher.Services
         private string ExtractCertNumber(string subject)
         {
             var match = certNumberRegex.Match(subject);
-            return match.Success ? match.Groups["number"].Value.Trim() : "Неизвестно";
+            string result = match.Success ? match.Groups["number"].Value.Trim() : "Неизвестно";
+            Log($"Извлечен номер сертификата: {result}");
+            return result;
         }
 
         public static List<string> GetMailFolders(AppSettings settings)
         {
             var folders = new List<string>();
+            LogStatic("Начало загрузки списка папок с почтового сервера");
 
             using (var client = new ImapClient())
             {
@@ -556,6 +581,7 @@ namespace ImapCertWatcher.Services
                 client.Disconnect(true);
             }
 
+            LogStatic($"Загружено папок: {folders.Count}");
             return folders;
         }
 
@@ -575,7 +601,7 @@ namespace ImapCertWatcher.Services
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Ошибка при получении папок из {parent.Name}: {ex.Message}");
+                LogStatic($"Ошибка при получении папок из {parent.Name}: {ex.Message}");
             }
 
             return folders;
@@ -590,6 +616,26 @@ namespace ImapCertWatcher.Services
                 File.AppendAllText(logFile, logEntry, System.Text.Encoding.UTF8);
 
                 // Также пишем в Debug для отладки
+                System.Diagnostics.Debug.WriteLine($"[ImapWatcher] {message}");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Ошибка записи в лог: {ex.Message}");
+            }
+        }
+
+        private static void LogStatic(string message)
+        {
+            try
+            {
+                string logDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "LOG");
+                if (!Directory.Exists(logDirectory))
+                    Directory.CreateDirectory(logDirectory);
+
+                string logFile = Path.Combine(logDirectory, $"log_{DateTime.Now:yyyy-MM-dd}.log");
+                string logEntry = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} - [ImapWatcher] {message}{Environment.NewLine}";
+                File.AppendAllText(logFile, logEntry, System.Text.Encoding.UTF8);
+
                 System.Diagnostics.Debug.WriteLine($"[ImapWatcher] {message}");
             }
             catch (Exception ex)

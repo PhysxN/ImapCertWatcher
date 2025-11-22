@@ -14,8 +14,9 @@ namespace ImapCertWatcher.Utils
         public string MailPassword { get; set; }
         public string ImapFolder { get; set; } = "INBOX";
         public string FilterRecipient { get; set; }
-        public string FilterSubjectPrefix { get; set; } = "Сертификат №"; // Обновлено для нового формата
+        public string FilterSubjectPrefix { get; set; } = "Сертификат №";
         public string FirebirdDbPath { get; set; }
+        public string FbServer { get; set; } = "127.0.0.1";
         public string FbUser { get; set; } = "SYSDBA";
         public string FbPassword { get; set; } = "masterkey";
         public int CheckIntervalSeconds { get; set; } = 60;
@@ -39,7 +40,6 @@ namespace ImapCertWatcher.Utils
                 var key = l.Substring(0, idx).Trim();
                 var val = l.Substring(idx + 1).Trim();
 
-                // Пропускаем пустые значения
                 if (string.IsNullOrEmpty(val)) continue;
 
                 switch (key)
@@ -53,6 +53,7 @@ namespace ImapCertWatcher.Utils
                     case "FilterRecipient": s.FilterRecipient = val; break;
                     case "FilterSubjectPrefix": s.FilterSubjectPrefix = val; break;
                     case "FirebirdDbPath": s.FirebirdDbPath = val; break;
+                    case "FbServer": s.FbServer = val; break;
                     case "FbUser": s.FbUser = val; break;
                     case "FbPassword": s.FbPassword = val; break;
                     case "CheckIntervalSeconds": s.CheckIntervalSeconds = int.Parse(val); break;

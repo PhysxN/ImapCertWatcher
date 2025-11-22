@@ -1,21 +1,57 @@
 ﻿using System;
+using System.ComponentModel;
 
 namespace ImapCertWatcher.Models
 {
-    public class CertRecord
+    public class CertRecord : INotifyPropertyChanged
     {
+        private string _building;
+        private string _note;
+
         public int Id { get; set; }
         public string Fio { get; set; }
-        public System.DateTime DateStart { get; set; }
-        public System.DateTime DateEnd { get; set; }
+        public DateTime DateStart { get; set; }
+        public DateTime DateEnd { get; set; }
         public int DaysLeft { get; set; }
         public string CertNumber { get; set; }
         public string FromAddress { get; set; }
         public bool IsDeleted { get; set; }
-        public string Note { get; set; }
-        public string Building { get; set; }
+
+        public string Note
+        {
+            get => _note;
+            set
+            {
+                if (_note != value)
+                {
+                    _note = value;
+                    OnPropertyChanged(nameof(Note));
+                }
+            }
+        }
+
+        public string Building
+        {
+            get => _building;
+            set
+            {
+                if (_building != value)
+                {
+                    _building = value;
+                    OnPropertyChanged(nameof(Building));
+                }
+            }
+        }
+
         public string FolderPath { get; set; }
-        public string ArchivePath { get; set; } // Новое поле - путь к архиву
-        public DateTime MessageDate { get; set; } // Новое поле - дата письма для определения самого нового
+        public string ArchivePath { get; set; }
+        public DateTime MessageDate { get; set; }
+
+        public event PropertyChangedEventHandler PropertyChanged;
+
+        protected virtual void OnPropertyChanged(string propertyName)
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+        }
     }
 }

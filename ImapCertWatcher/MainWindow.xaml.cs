@@ -10,7 +10,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Threading;
 
@@ -28,46 +27,47 @@ namespace ImapCertWatcher
         private string _currentBuildingFilter = "Все";
         private bool _showDeleted = false;
 
+        // Список доступных зданий
+        private readonly ObservableCollection<string> _availableBuildings = new ObservableCollection<string>
+        {
+            "", "Краснофлотская", "Пионерская"
+        };
+
+        // Флаг для предотвращения множественного сохранения
+        private bool _isSavingBuilding = false;
+
         public MainWindow()
         {
             try
             {
                 InitializeComponent();
 
-                // УБИРАЕМ регистрацию конвертера в ресурсах
-
                 var settingsPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "settings.txt");
                 _settings = SettingsLoader.Load(settingsPath);
 
-                // Установка DataContext для привязки данных
                 this.DataContext = _settings;
 
-                // Инициализация паролей (они не сохраняются в привязке)
                 pwdMailPassword.Password = _settings.MailPassword;
                 pwdFbPassword.Password = _settings.FbPassword;
 
-                // Настройка ComboBox для папок
                 cmbImapFolder.ItemsSource = _availableFolders;
-
                 txtInterval.Text = _settings.CheckIntervalSeconds.ToString();
 
-                // Инициализация БД с обработкой ошибок
                 try
                 {
                     _db = new DbHelper(_settings);
                     _watcher = new ImapWatcher(_settings, _db);
 
-                    // Убираем пустую строку в конце DataGrid
                     dgCerts.CanUserAddRows = false;
                     dgCerts.ItemsSource = _items;
 
-                    // загрузим существующие записи
-                    LoadFromDb();
+                    dgCerts.CellEditEnding += DgCerts_CellEditEnding;
+                    dgCerts.BeginningEdit += DgCerts_BeginningEdit;
+                    dgCerts.PreparingCellForEdit += DgCerts_PreparingCellForEdit;
 
-                    // загрузим логи
+                    LoadFromDb();
                     LoadLogs();
 
-                    // запустим таймер (проверка только последних писем)
                     _timer = new Timer(async _ => await DoCheckAsync(false),
                         null, TimeSpan.Zero, TimeSpan.FromSeconds(_settings.CheckIntervalSeconds));
                 }
@@ -149,15 +149,14 @@ namespace ImapCertWatcher
 
         private async void BtnManualCheck_Click(object sender, RoutedEventArgs e)
         {
-            await DoCheckAsync(false); // Только последние 3 дня
+            await DoCheckAsync(false);
         }
 
         private async void BtnProcessAll_Click(object sender, RoutedEventArgs e)
         {
-            await DoCheckAsync(true); // Все письма
+            await DoCheckAsync(true);
         }
 
-        // Обработчики фильтров
         private void BuildingFilter_Checked(object sender, RoutedEventArgs e)
         {
             if (rbAllBuildings.IsChecked == true)
@@ -176,7 +175,6 @@ namespace ImapCertWatcher
             LoadFromDb();
         }
 
-        // Обработчики для редактирования данных
         private void NoteTextBox_LostFocus(object sender, RoutedEventArgs e)
         {
             if (sender is TextBox textBox && textBox.DataContext is Models.CertRecord record)
@@ -194,24 +192,123 @@ namespace ImapCertWatcher
             }
         }
 
-        private void BuildingComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        // Обработчики для ComboBox здания
+        private void BuildingComboBox_DropDownOpened(object sender, EventArgs e)
         {
-            if (sender is ComboBox comboBox && comboBox.DataContext is Models.CertRecord record)
+            if (sender is ComboBox comboBox)
             {
-                try
+                // Убеждаемся, что список заполнен
+                if (comboBox.ItemsSource == null)
                 {
-                    _db.UpdateBuilding(record.Id, comboBox.SelectedItem?.ToString() ?? "");
-                    statusText.Text = "Здание сохранено";
-                }
-                catch (Exception ex)
-                {
-                    MessageBox.Show($"Ошибка сохранения здания: {ex.Message}", "Ошибка",
-                                  MessageBoxButton.OK, MessageBoxImage.Error);
+                    comboBox.ItemsSource = _availableBuildings;
                 }
             }
         }
 
-        // Обработчики для удаления/восстановления
+        private void BuildingComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_isSavingBuilding) return;
+
+            if (sender is ComboBox comboBox && comboBox.DataContext is Models.CertRecord record)
+            {
+                // Сохраняем только если значение действительно изменилось
+                if (e.AddedItems.Count > 0)
+                {
+                    string newValue = e.AddedItems[0] as string;
+                    if (newValue != record.Building)
+                    {
+                        _isSavingBuilding = true;
+                        try
+                        {
+                            SaveBuilding(record);
+                        }
+                        finally
+                        {
+                            _isSavingBuilding = false;
+                        }
+                    }
+                }
+            }
+        }
+
+        private void BuildingComboBox_LostFocus(object sender, RoutedEventArgs e)
+        {
+            if (_isSavingBuilding) return;
+
+            if (sender is ComboBox comboBox && comboBox.DataContext is Models.CertRecord record)
+            {
+                _isSavingBuilding = true;
+                try
+                {
+                    SaveBuilding(record);
+                }
+                finally
+                {
+                    _isSavingBuilding = false;
+                }
+            }
+        }
+
+        private void DgCerts_PreparingCellForEdit(object sender, DataGridPreparingCellForEditEventArgs e)
+        {
+            if (e.Column.Header.ToString() == "Здание")
+            {
+                var comboBox = e.EditingElement as ComboBox;
+                if (comboBox != null && e.Row.DataContext is Models.CertRecord record)
+                {
+                    // Настраиваем ComboBox при подготовке к редактированию
+                    comboBox.ItemsSource = _availableBuildings;
+                    comboBox.DisplayMemberPath = ".";
+                    comboBox.SelectedItem = record.Building;
+
+                    Log($"Подготовка ComboBox для {record.Fio}, текущее значение: {record.Building}");
+                }
+            }
+        }
+
+        private void DgCerts_BeginningEdit(object sender, DataGridBeginningEditEventArgs e)
+        {
+            if (e.Column.Header.ToString() == "Здание")
+            {
+                Log("Начало редактирования ячейки здания");
+            }
+        }
+
+        private void DgCerts_CellEditEnding(object sender, DataGridCellEditEndingEventArgs e)
+        {
+            if (e.EditAction == DataGridEditAction.Commit && e.Column.Header.ToString() == "Здание")
+            {
+                var comboBox = e.EditingElement as ComboBox;
+                if (comboBox?.DataContext is Models.CertRecord record)
+                {
+                    Log($"Завершение редактирования для {record.Fio}, новое значение: {record.Building}");
+                    // Не сохраняем здесь, т.к. уже сохранили в SelectionChanged
+                }
+            }
+        }
+
+        private void SaveBuilding(Models.CertRecord record)
+        {
+            try
+            {
+                if (record.Building != null)
+                {
+                    _db.UpdateBuilding(record.Id, record.Building);
+                    statusText.Text = $"Здание сохранено: {record.Building}";
+                    Log($"Сохранено здание для {record.Fio}: {record.Building}");
+
+                    // НЕ обновляем всю таблицу, чтобы не закрывать ComboBox
+                    // Вместо этого просто обновим статус
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Ошибка сохранения здания: {ex.Message}", "Ошибка",
+                              MessageBoxButton.OK, MessageBoxImage.Error);
+                Log($"Ошибка сохранения здания: {ex.Message}");
+            }
+        }
+
         private void BtnDeleteSelected_Click(object sender, RoutedEventArgs e)
         {
             if (dgCerts.SelectedItem is Models.CertRecord record)
@@ -258,15 +355,6 @@ namespace ImapCertWatcher
             }
         }
 
-        // Обработчики для работы с архивами
-        private void DgCerts_MouseDoubleClick(object sender, MouseButtonEventArgs e)
-        {
-            if (dgCerts.SelectedItem is Models.CertRecord record && !string.IsNullOrEmpty(record.ArchivePath))
-            {
-                OpenArchive(record);
-            }
-        }
-
         private void BtnOpenArchive_Click(object sender, RoutedEventArgs e)
         {
             if (sender is Button button && button.DataContext is Models.CertRecord record)
@@ -296,7 +384,6 @@ namespace ImapCertWatcher
             }
         }
 
-        // Подсветка строк по количеству оставшихся дней
         private void DgCerts_LoadingRow(object sender, DataGridRowEventArgs e)
         {
             if (e.Row.Item is Models.CertRecord record)
@@ -307,27 +394,25 @@ namespace ImapCertWatcher
                 }
                 else if (record.DaysLeft <= 10)
                 {
-                    e.Row.Background = System.Windows.Media.Brushes.LightCoral; // Красный
+                    e.Row.Background = System.Windows.Media.Brushes.LightCoral;
                 }
                 else if (record.DaysLeft <= 30)
                 {
-                    e.Row.Background = System.Windows.Media.Brushes.LightGoldenrodYellow; // Оранжевый
+                    e.Row.Background = System.Windows.Media.Brushes.LightGoldenrodYellow;
                 }
                 else
                 {
-                    e.Row.Background = System.Windows.Media.Brushes.LightGreen; // Зеленый
+                    e.Row.Background = System.Windows.Media.Brushes.LightGreen;
                 }
             }
         }
 
-        // Контекстное меню для добавления архива
         private void DgCerts_ContextMenuOpening(object sender, ContextMenuEventArgs e)
         {
             if (dgCerts.SelectedItem is Models.CertRecord record)
             {
                 var menuItem = (MenuItem)dgCerts.ContextMenu.Items[0];
 
-                // Если архив уже есть, запрещаем добавление
                 if (!string.IsNullOrEmpty(record.ArchivePath) && File.Exists(record.ArchivePath))
                 {
                     menuItem.IsEnabled = false;
@@ -345,7 +430,6 @@ namespace ImapCertWatcher
         {
             if (dgCerts.SelectedItem is Models.CertRecord record)
             {
-                // Проверяем, что архив еще не прикреплен
                 if (!string.IsNullOrEmpty(record.ArchivePath) && File.Exists(record.ArchivePath))
                 {
                     MessageBox.Show("Архив уже прикреплен к этой записи", "Информация",
@@ -365,23 +449,19 @@ namespace ImapCertWatcher
                     {
                         string selectedFilePath = openFileDialog.FileName;
 
-                        // Создаем безопасное имя папки для ФИО
                         var safeFio = MakeValidFileName(record.Fio);
                         var certFolder = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Certs", safeFio);
 
                         if (!Directory.Exists(certFolder))
                             Directory.CreateDirectory(certFolder);
 
-                        // Копируем файл в папку сертификата
                         string fileName = $"{record.CertNumber}_{Path.GetFileName(selectedFilePath)}";
                         string destinationPath = Path.Combine(certFolder, fileName);
 
                         File.Copy(selectedFilePath, destinationPath, true);
 
-                        // Обновляем запись в БД
                         _db.UpdateArchivePath(record.Id, destinationPath);
 
-                        // Обновляем отображение
                         LoadFromDb();
 
                         statusText.Text = "Архив успешно прикреплен";
@@ -401,7 +481,6 @@ namespace ImapCertWatcher
             return new string(name.Where(ch => !invalidChars.Contains(ch)).ToArray());
         }
 
-        // Загрузка списка папок с сервера
         private void BtnRefreshFolders_Click(object sender, RoutedEventArgs e)
         {
             try
@@ -418,7 +497,6 @@ namespace ImapCertWatcher
                 txtFoldersStatus.Text = "Загрузка списка папок...";
                 txtFoldersStatus.Foreground = System.Windows.Media.Brushes.Blue;
 
-                // Используем Task для асинхронной загрузки без блокировки UI
                 Task.Run(() => LoadMailFolders());
             }
             catch (Exception ex)
@@ -444,7 +522,6 @@ namespace ImapCertWatcher
 
                 var folders = ImapWatcher.GetMailFolders(tempSettings);
 
-                // Обновляем UI в основном потоке
                 Dispatcher.Invoke(() =>
                 {
                     _availableFolders.Clear();
@@ -453,7 +530,6 @@ namespace ImapCertWatcher
                         _availableFolders.Add(folder);
                     }
 
-                    // Выбираем текущую папку, если она есть в списке
                     if (!string.IsNullOrEmpty(_settings.ImapFolder) &&
                         _availableFolders.Contains(_settings.ImapFolder))
                     {
@@ -490,7 +566,6 @@ namespace ImapCertWatcher
             btnRefreshFolders.IsEnabled = true;
         }
 
-        // Тест подключения к почте
         private void BtnTestMailConnection_Click(object sender, RoutedEventArgs e)
         {
             try
@@ -540,7 +615,6 @@ namespace ImapCertWatcher
             }
         }
 
-        // Сохранение настроек почты
         private void BtnSaveMailSettings_Click(object sender, RoutedEventArgs e)
         {
             try
@@ -559,7 +633,6 @@ namespace ImapCertWatcher
             }
         }
 
-        // Сохранение настроек БД
         private void BtnSaveDbSettings_Click(object sender, RoutedEventArgs e)
         {
             try
@@ -568,7 +641,6 @@ namespace ImapCertWatcher
 
                 SaveSettings();
 
-                // Переинициализируем БД с новыми настройками
                 try
                 {
                     _db = new DbHelper(_settings);
@@ -591,7 +663,6 @@ namespace ImapCertWatcher
             }
         }
 
-        // Тест подключения к БД
         private void BtnTestDbConnection_Click(object sender, RoutedEventArgs e)
         {
             try
@@ -599,6 +670,7 @@ namespace ImapCertWatcher
                 var tempSettings = new AppSettings
                 {
                     FirebirdDbPath = _settings.FirebirdDbPath,
+                    FbServer = _settings.FbServer,
                     FbUser = _settings.FbUser,
                     FbPassword = pwdFbPassword.Password,
                     FbDialect = _settings.FbDialect
@@ -625,7 +697,6 @@ namespace ImapCertWatcher
             }
         }
 
-        // Выбор пути к файлу БД
         private void BtnBrowseDbPath_Click(object sender, RoutedEventArgs e)
         {
             var saveFileDialog = new SaveFileDialog
@@ -642,7 +713,6 @@ namespace ImapCertWatcher
             }
         }
 
-        // Сохранение всех настроек в файл
         private void SaveSettings()
         {
             try
@@ -665,6 +735,7 @@ namespace ImapCertWatcher
                     "",
                     "# Firebird settings",
                     $"FirebirdDbPath={_settings.FirebirdDbPath}",
+                    $"FbServer={_settings.FbServer}",
                     $"FbUser={_settings.FbUser}",
                     $"FbPassword={_settings.FbPassword}",
                     $"FbDialect={_settings.FbDialect}",
@@ -675,7 +746,6 @@ namespace ImapCertWatcher
 
                 File.WriteAllLines(settingsPath, lines, System.Text.Encoding.UTF8);
 
-                // Перезапускаем таймер с новым интервалом
                 _timer?.Dispose();
                 if (_settings.CheckIntervalSeconds > 0)
                 {
@@ -691,7 +761,6 @@ namespace ImapCertWatcher
             }
         }
 
-        // Методы для работы с логами
         private void LoadLogs()
         {
             try
@@ -713,7 +782,6 @@ namespace ImapCertWatcher
                     return;
                 }
 
-                // Читаем последний лог-файл
                 var latestLog = logFiles.First();
                 var logContent = File.ReadAllText(latestLog);
 
@@ -789,6 +857,26 @@ namespace ImapCertWatcher
             {
                 MessageBox.Show($"Ошибка при открытии папки логов: {ex.Message}", "Ошибка",
                               MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        private void Log(string message)
+        {
+            try
+            {
+                string logDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "LOG");
+                if (!Directory.Exists(logDirectory))
+                    Directory.CreateDirectory(logDirectory);
+
+                string logFile = Path.Combine(logDirectory, $"log_{DateTime.Now:yyyy-MM-dd}.log");
+                string logEntry = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} - [MainWindow] {message}{Environment.NewLine}";
+                File.AppendAllText(logFile, logEntry, System.Text.Encoding.UTF8);
+
+                System.Diagnostics.Debug.WriteLine($"[MainWindow] {message}");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Ошибка записи в лог: {ex.Message}");
             }
         }
 

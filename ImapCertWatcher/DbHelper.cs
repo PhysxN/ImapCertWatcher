@@ -19,7 +19,6 @@ namespace ImapCertWatcher.Data
             _connectionString = BuildConnectionString();
             _logDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "LOG");
 
-            // Создаем папку для логов, если ее нет
             if (!Directory.Exists(_logDirectory))
                 Directory.CreateDirectory(_logDirectory);
 
@@ -34,26 +33,31 @@ namespace ImapCertWatcher.Data
                 Database = _settings.FirebirdDbPath,
                 UserID = _settings.FbUser,
                 Password = _settings.FbPassword,
-                DataSource = "localhost",
+                DataSource = _settings.FbServer,
+                Port = 3050,
                 Charset = "UTF8",
                 Dialect = _settings.FbDialect,
                 ServerType = FbServerType.Default
             };
 
+            Log($"Строка подключения к БД: Server={_settings.FbServer}, Database={_settings.FirebirdDbPath}");
             return csb.ToString();
         }
 
         public void EnsureDatabaseAndTable()
         {
-            string dir = Path.GetDirectoryName(_settings.FirebirdDbPath);
-            if (!Directory.Exists(dir))
-                Directory.CreateDirectory(dir);
-
-            if (!File.Exists(_settings.FirebirdDbPath))
+            if (_settings.FbServer == "127.0.0.1" || _settings.FbServer == "localhost")
             {
-                var csb = new FbConnectionStringBuilder(_connectionString);
-                FbConnection.CreateDatabase(csb.ToString(), pageSize: 16384, forcedWrites: true, overwrite: false);
-                Log("База данных создана");
+                string dir = Path.GetDirectoryName(_settings.FirebirdDbPath);
+                if (!Directory.Exists(dir))
+                    Directory.CreateDirectory(dir);
+
+                if (!File.Exists(_settings.FirebirdDbPath))
+                {
+                    var csb = new FbConnectionStringBuilder(_connectionString);
+                    FbConnection.CreateDatabase(csb.ToString(), pageSize: 16384, forcedWrites: true, overwrite: false);
+                    Log("Локальная база данных создана");
+                }
             }
 
             using (var conn = new FbConnection(_connectionString))
@@ -105,7 +109,7 @@ namespace ImapCertWatcher.Data
                         FROM_ADDRESS VARCHAR(200),
                         IS_DELETED SMALLINT DEFAULT 0,
                         NOTE VARCHAR(500),
-                        BUILDING VARCHAR(50),
+                        BUILDING VARCHAR(100),
                         FOLDER_PATH VARCHAR(300),
                         ARCHIVE_PATH VARCHAR(500),
                         MESSAGE_DATE TIMESTAMP
@@ -139,7 +143,7 @@ namespace ImapCertWatcher.Data
                 { "FROM_ADDRESS", "VARCHAR(200)" },
                 { "IS_DELETED", "SMALLINT DEFAULT 0" },
                 { "NOTE", "VARCHAR(500)" },
-                { "BUILDING", "VARCHAR(50)" },
+                { "BUILDING", "VARCHAR(100)" },
                 { "FOLDER_PATH", "VARCHAR(300)" },
                 { "ARCHIVE_PATH", "VARCHAR(500)" },
                 { "MESSAGE_DATE", "TIMESTAMP" }
@@ -163,6 +167,30 @@ namespace ImapCertWatcher.Data
                         Log($"Ошибка при добавлении столбца {column.Key}: {ex.Message}");
                     }
                 }
+                else
+                {
+                    if (column.Key == "BUILDING")
+                    {
+                        TryResizeBuildingColumn(conn);
+                    }
+                }
+            }
+        }
+
+        private void TryResizeBuildingColumn(FbConnection conn)
+        {
+            try
+            {
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = @"ALTER TABLE CERTS ALTER COLUMN BUILDING TYPE VARCHAR(100)";
+                    cmd.ExecuteNonQuery();
+                    Log("Размер столбца BUILDING увеличен до 100 символов");
+                }
+            }
+            catch (FbException ex)
+            {
+                Log($"Не удалось изменить размер столбца BUILDING: {ex.Message}");
             }
         }
 
@@ -190,7 +218,6 @@ namespace ImapCertWatcher.Data
 
                 using (var cmd = conn.CreateCommand())
                 {
-                    // Ищем существующую запись с таким же ФИО и номером сертификата
                     cmd.CommandText = @"SELECT ID, MESSAGE_DATE FROM CERTS WHERE FIO = @fio AND CERT_NUMBER = @certNumber";
                     cmd.Parameters.AddWithValue("@fio", entry.Fio);
                     cmd.Parameters.AddWithValue("@certNumber", entry.CertNumber ?? "");
@@ -199,10 +226,8 @@ namespace ImapCertWatcher.Data
                     {
                         if (reader.Read())
                         {
-                            // Запись существует - проверяем дату
                             int existingId = reader.GetInt32(0);
 
-                            // Безопасное чтение MESSAGE_DATE (может быть NULL)
                             DateTime existingDate = DateTime.MinValue;
                             if (!reader.IsDBNull(1))
                             {
@@ -211,7 +236,6 @@ namespace ImapCertWatcher.Data
 
                             reader.Close();
 
-                            // Если новое письмо более свежее - обновляем
                             if (entry.MessageDate > existingDate)
                             {
                                 cmd.Parameters.Clear();
@@ -247,7 +271,6 @@ namespace ImapCertWatcher.Data
                         {
                             reader.Close();
 
-                            // Новая запись
                             cmd.Parameters.Clear();
                             cmd.CommandText =
                                 @"INSERT INTO CERTS (FIO, DATE_START, DATE_END, DAYS_LEFT, CERT_NUMBER, FROM_ADDRESS, IS_DELETED, NOTE, BUILDING, FOLDER_PATH, ARCHIVE_PATH, MESSAGE_DATE)
@@ -320,7 +343,8 @@ namespace ImapCertWatcher.Data
                         int count = 0;
                         while (reader.Read())
                         {
-                            list.Add(new CertRecord
+                            var building = reader.IsDBNull(9) ? "" : reader.GetString(9);
+                            var record = new CertRecord
                             {
                                 Id = reader.GetInt32(0),
                                 Fio = reader.IsDBNull(1) ? "" : reader.GetString(1),
@@ -331,12 +355,19 @@ namespace ImapCertWatcher.Data
                                 FromAddress = reader.IsDBNull(6) ? "" : reader.GetString(6),
                                 IsDeleted = !reader.IsDBNull(7) && reader.GetInt16(7) == 1,
                                 Note = reader.IsDBNull(8) ? "" : reader.GetString(8),
-                                Building = reader.IsDBNull(9) ? "" : reader.GetString(9),
+                                Building = building,
                                 FolderPath = reader.IsDBNull(10) ? "" : reader.GetString(10),
                                 ArchivePath = reader.IsDBNull(11) ? "" : reader.GetString(11),
                                 MessageDate = reader.IsDBNull(12) ? DateTime.MinValue : reader.GetDateTime(12)
-                            });
+                            };
+
+                            list.Add(record);
                             count++;
+
+                            if (!string.IsNullOrEmpty(building))
+                            {
+                                Log($"Загружена запись: {record.Fio}, Здание: '{building}'");
+                            }
                         }
                         Log($"Загружено записей из БД: {count}");
                     }
@@ -374,8 +405,14 @@ namespace ImapCertWatcher.Data
                     cmd.CommandText = "UPDATE CERTS SET BUILDING = @building WHERE ID = @id";
                     cmd.Parameters.AddWithValue("@building", building ?? "");
                     cmd.Parameters.AddWithValue("@id", id);
-                    cmd.ExecuteNonQuery();
-                    Log($"Обновлено здание для записи ID={id}: {building}");
+
+                    int rowsAffected = cmd.ExecuteNonQuery();
+                    Log($"Обновлено здание для записи ID={id}: '{building}' (затронуто строк: {rowsAffected})");
+
+                    if (rowsAffected == 0)
+                    {
+                        Log($"ВНИМАНИЕ: Не найдена запись с ID={id} для обновления здания");
+                    }
                 }
             }
         }
@@ -424,7 +461,6 @@ namespace ImapCertWatcher.Data
                 string logEntry = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} - [DbHelper] {message}{Environment.NewLine}";
                 File.AppendAllText(logFile, logEntry, System.Text.Encoding.UTF8);
 
-                // Также пишем в Debug для отладки
                 System.Diagnostics.Debug.WriteLine($"[DbHelper] {message}");
             }
             catch (Exception ex)
