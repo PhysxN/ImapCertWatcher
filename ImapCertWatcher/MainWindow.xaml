@@ -4,8 +4,6 @@
         xmlns:local="clr-namespace:ImapCertWatcher"
         Title="Watcher ЭЦП" Height="600" Width="1200">
 
-    <!-- УБИРАЕМ Window.Resources - конвертер будет создаваться автоматически -->
-
     <Grid Margin="8">
         <TabControl>
             <!-- Вкладка с сертификатами -->
@@ -43,14 +41,19 @@
                     <DataGrid x:Name="dgCerts" Grid.Row="2" AutoGenerateColumns="False" 
                               IsReadOnly="False" SelectionMode="Single"
                               CanUserSortColumns="True" CanUserResizeColumns="True"
-                              LoadingRow="DgCerts_LoadingRow" MouseDoubleClick="DgCerts_MouseDoubleClick">
+                              LoadingRow="DgCerts_LoadingRow" MouseDoubleClick="DgCerts_MouseDoubleClick"
+                              ContextMenuOpening="DgCerts_ContextMenuOpening">
+                        <DataGrid.ContextMenu>
+                            <ContextMenu>
+                                <MenuItem Header="Добавить архив с подписью" Click="AddArchiveMenuItem_Click"/>
+                            </ContextMenu>
+                        </DataGrid.ContextMenu>
                         <DataGrid.Columns>
                             <DataGridTextColumn Header="ФИО" Binding="{Binding Fio}" Width="2*"/>
                             <DataGridTextColumn Header="Сертификат" Binding="{Binding CertNumber}" Width="*"/>
                             <DataGridTextColumn Header="Начало" Binding="{Binding DateStart, StringFormat=dd.MM.yyyy}" Width="*"/>
                             <DataGridTextColumn Header="Окончание" Binding="{Binding DateEnd, StringFormat=dd.MM.yyyy}" Width="*"/>
                             <DataGridTextColumn Header="Осталось дней" Binding="{Binding DaysLeft}" Width="*"/>
-                            <DataGridTextColumn Header="Папка" Binding="{Binding FolderPath}" Width="1.5*"/>
                             <DataGridTemplateColumn Header="Архив" Width="*">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
@@ -213,6 +216,38 @@
                         </StackPanel>
                     </StackPanel>
                 </ScrollViewer>
+            </TabItem>
+
+            <!-- Новая вкладка с логами -->
+            <TabItem Header="Логи">
+                <Grid Margin="8">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- Панель управления логами -->
+                    <StackPanel Orientation="Horizontal" Grid.Row="0" Margin="0,0,0,8">
+                        <Button x:Name="btnRefreshLogs" Content="Обновить логи" Margin="0,0,8,0" Padding="8,4" Click="BtnRefreshLogs_Click"/>
+                        <Button x:Name="btnClearLogs" Content="Очистить старые логи" Margin="0,0,8,0" Padding="8,4" Click="BtnClearLogs_Click"/>
+                        <Button x:Name="btnOpenLogFolder" Content="Открыть папку логов" Margin="0,0,8,0" Padding="8,4" Click="BtnOpenLogFolder_Click"/>
+                    </StackPanel>
+
+                    <!-- Поле для отображения логов -->
+                    <TextBox x:Name="txtLogs" Grid.Row="1" 
+                             IsReadOnly="True" 
+                             VerticalScrollBarVisibility="Auto" 
+                             HorizontalScrollBarVisibility="Auto"
+                             FontFamily="Consolas" FontSize="10"
+                             TextWrapping="Wrap"/>
+
+                    <StatusBar Grid.Row="2" Margin="0,8,0,0">
+                        <StatusBarItem>
+                            <TextBlock x:Name="logStatusText">Логи загружены</TextBlock>
+                        </StatusBarItem>
+                    </StatusBar>
+                </Grid>
             </TabItem>
         </TabControl>
     </Grid>

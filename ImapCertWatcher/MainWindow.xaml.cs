@@ -57,10 +57,15 @@ namespace ImapCertWatcher
                     _db = new DbHelper(_settings);
                     _watcher = new ImapWatcher(_settings, _db);
 
+                    // Убираем пустую строку в конце DataGrid
+                    dgCerts.CanUserAddRows = false;
                     dgCerts.ItemsSource = _items;
 
                     // загрузим существующие записи
                     LoadFromDb();
+
+                    // загрузим логи
+                    LoadLogs();
 
                     // запустим таймер (проверка только последних писем)
                     _timer = new Timer(async _ => await DoCheckAsync(false),
@@ -313,6 +318,87 @@ namespace ImapCertWatcher
                     e.Row.Background = System.Windows.Media.Brushes.LightGreen; // Зеленый
                 }
             }
+        }
+
+        // Контекстное меню для добавления архива
+        private void DgCerts_ContextMenuOpening(object sender, ContextMenuEventArgs e)
+        {
+            if (dgCerts.SelectedItem is Models.CertRecord record)
+            {
+                var menuItem = (MenuItem)dgCerts.ContextMenu.Items[0];
+
+                // Если архив уже есть, запрещаем добавление
+                if (!string.IsNullOrEmpty(record.ArchivePath) && File.Exists(record.ArchivePath))
+                {
+                    menuItem.IsEnabled = false;
+                    menuItem.ToolTip = "Архив уже прикреплен";
+                }
+                else
+                {
+                    menuItem.IsEnabled = true;
+                    menuItem.ToolTip = "Добавить архив с подписью";
+                }
+            }
+        }
+
+        private void AddArchiveMenuItem_Click(object sender, RoutedEventArgs e)
+        {
+            if (dgCerts.SelectedItem is Models.CertRecord record)
+            {
+                // Проверяем, что архив еще не прикреплен
+                if (!string.IsNullOrEmpty(record.ArchivePath) && File.Exists(record.ArchivePath))
+                {
+                    MessageBox.Show("Архив уже прикреплен к этой записи", "Информация",
+                                  MessageBoxButton.OK, MessageBoxImage.Information);
+                    return;
+                }
+
+                var openFileDialog = new OpenFileDialog
+                {
+                    Filter = "ZIP архивы (*.zip)|*.zip",
+                    Title = "Выберите архив с подписью"
+                };
+
+                if (openFileDialog.ShowDialog() == true)
+                {
+                    try
+                    {
+                        string selectedFilePath = openFileDialog.FileName;
+
+                        // Создаем безопасное имя папки для ФИО
+                        var safeFio = MakeValidFileName(record.Fio);
+                        var certFolder = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Certs", safeFio);
+
+                        if (!Directory.Exists(certFolder))
+                            Directory.CreateDirectory(certFolder);
+
+                        // Копируем файл в папку сертификата
+                        string fileName = $"{record.CertNumber}_{Path.GetFileName(selectedFilePath)}";
+                        string destinationPath = Path.Combine(certFolder, fileName);
+
+                        File.Copy(selectedFilePath, destinationPath, true);
+
+                        // Обновляем запись в БД
+                        _db.UpdateArchivePath(record.Id, destinationPath);
+
+                        // Обновляем отображение
+                        LoadFromDb();
+
+                        statusText.Text = "Архив успешно прикреплен";
+                    }
+                    catch (Exception ex)
+                    {
+                        MessageBox.Show($"Ошибка при прикреплении архива: {ex.Message}", "Ошибка",
+                                      MessageBoxButton.OK, MessageBoxImage.Error);
+                    }
+                }
+            }
+        }
+
+        private string MakeValidFileName(string name)
+        {
+            var invalidChars = Path.GetInvalidFileNameChars();
+            return new string(name.Where(ch => !invalidChars.Contains(ch)).ToArray());
         }
 
         // Загрузка списка папок с сервера
@@ -605,12 +691,111 @@ namespace ImapCertWatcher
             }
         }
 
+        // Методы для работы с логами
+        private void LoadLogs()
+        {
+            try
+            {
+                var logDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "LOG");
+                if (!Directory.Exists(logDirectory))
+                {
+                    txtLogs.Text = "Папка логов не существует";
+                    return;
+                }
+
+                var logFiles = Directory.GetFiles(logDirectory, "*.log")
+                    .OrderByDescending(f => File.GetCreationTime(f))
+                    .ToList();
+
+                if (!logFiles.Any())
+                {
+                    txtLogs.Text = "Логи не найдены";
+                    return;
+                }
+
+                // Читаем последний лог-файл
+                var latestLog = logFiles.First();
+                var logContent = File.ReadAllText(latestLog);
+
+                Dispatcher.Invoke(() =>
+                {
+                    txtLogs.Text = logContent;
+                    logStatusText.Text = $"Загружен файл: {Path.GetFileName(latestLog)}";
+                });
+            }
+            catch (Exception ex)
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    txtLogs.Text = $"Ошибка загрузки логов: {ex.Message}";
+                    logStatusText.Text = "Ошибка загрузки логов";
+                });
+            }
+        }
+
+        private void BtnRefreshLogs_Click(object sender, RoutedEventArgs e)
+        {
+            LoadLogs();
+        }
+
+        private void BtnClearLogs_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                var logDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "LOG");
+                if (!Directory.Exists(logDirectory))
+                {
+                    MessageBox.Show("Папка логов не существует", "Информация",
+                                  MessageBoxButton.OK, MessageBoxImage.Information);
+                    return;
+                }
+
+                var cutoffDate = DateTime.Now.AddMonths(-2);
+                var logFiles = Directory.GetFiles(logDirectory, "*.log");
+                int deletedCount = 0;
+
+                foreach (var logFile in logFiles)
+                {
+                    if (File.GetCreationTime(logFile) < cutoffDate)
+                    {
+                        File.Delete(logFile);
+                        deletedCount++;
+                    }
+                }
+
+                MessageBox.Show($"Удалено логов: {deletedCount}", "Очистка логов",
+                              MessageBoxButton.OK, MessageBoxImage.Information);
+
+                LoadLogs();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Ошибка при очистке логов: {ex.Message}", "Ошибка",
+                              MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        private void BtnOpenLogFolder_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                var logDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "LOG");
+                if (!Directory.Exists(logDirectory))
+                    Directory.CreateDirectory(logDirectory);
+
+                System.Diagnostics.Process.Start("explorer.exe", logDirectory);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Ошибка при открытии папки логов: {ex.Message}", "Ошибка",
+                              MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
         protected override void OnClosed(EventArgs e)
         {
             base.OnClosed(e);
             _timer?.Dispose();
         }
     }
-
-       
 }

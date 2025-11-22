@@ -11,12 +11,20 @@ namespace ImapCertWatcher.Data
     {
         private readonly AppSettings _settings;
         private readonly string _connectionString;
+        private readonly string _logDirectory;
 
         public DbHelper(AppSettings settings)
         {
             _settings = settings;
             _connectionString = BuildConnectionString();
+            _logDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "LOG");
+
+            // Создаем папку для логов, если ее нет
+            if (!Directory.Exists(_logDirectory))
+                Directory.CreateDirectory(_logDirectory);
+
             EnsureDatabaseAndTable();
+            Log("Инициализация DbHelper завершена");
         }
 
         private string BuildConnectionString()
@@ -45,6 +53,7 @@ namespace ImapCertWatcher.Data
             {
                 var csb = new FbConnectionStringBuilder(_connectionString);
                 FbConnection.CreateDatabase(csb.ToString(), pageSize: 16384, forcedWrites: true, overwrite: false);
+                Log("База данных создана");
             }
 
             using (var conn = new FbConnection(_connectionString))
@@ -75,7 +84,9 @@ namespace ImapCertWatcher.Data
                       AND RDB$SYSTEM_FLAG = 0";
 
                 var result = cmd.ExecuteScalar();
-                return Convert.ToInt32(result) > 0;
+                bool exists = Convert.ToInt32(result) > 0;
+                Log($"Проверка существования таблицы CERTS: {exists}");
+                return exists;
             }
         }
 
@@ -116,7 +127,7 @@ namespace ImapCertWatcher.Data
 
                 cmd.ExecuteNonQuery();
 
-                System.Diagnostics.Debug.WriteLine("Таблица CERTS создана успешно");
+                Log("Таблица CERTS создана успешно");
             }
         }
 
@@ -144,12 +155,12 @@ namespace ImapCertWatcher.Data
                         {
                             cmd.CommandText = $@"ALTER TABLE CERTS ADD {column.Key} {column.Value}";
                             cmd.ExecuteNonQuery();
-                            System.Diagnostics.Debug.WriteLine($"Добавлен столбец: {column.Key}");
+                            Log($"Добавлен столбец: {column.Key}");
                         }
                     }
                     catch (FbException ex)
                     {
-                        System.Diagnostics.Debug.WriteLine($"Ошибка при добавлении столбца {column.Key}: {ex.Message}");
+                        Log($"Ошибка при добавлении столбца {column.Key}: {ex.Message}");
                     }
                 }
             }
@@ -225,11 +236,11 @@ namespace ImapCertWatcher.Data
                                 cmd.Parameters.AddWithValue("@id", existingId);
 
                                 cmd.ExecuteNonQuery();
-                                System.Diagnostics.Debug.WriteLine($"Обновлена запись (более новое письмо): {entry.Fio}, сертификат: {entry.CertNumber}");
+                                Log($"Обновлена запись (более новое письмо): {entry.Fio}, сертификат: {entry.CertNumber}");
                             }
                             else
                             {
-                                System.Diagnostics.Debug.WriteLine($"Пропущена запись (уже есть более новое письмо): {entry.Fio}, сертификат: {entry.CertNumber}");
+                                Log($"Пропущена запись (уже есть более новое письмо): {entry.Fio}, сертификат: {entry.CertNumber}");
                             }
                         }
                         else
@@ -256,7 +267,7 @@ namespace ImapCertWatcher.Data
                             cmd.Parameters.AddWithValue("@messageDate", entry.MessageDate);
 
                             cmd.ExecuteNonQuery();
-                            System.Diagnostics.Debug.WriteLine($"Добавлена новая запись: {entry.Fio}, сертификат: {entry.CertNumber}");
+                            Log($"Добавлена новая запись: {entry.Fio}, сертификат: {entry.CertNumber}");
                         }
                     }
                 }
@@ -266,6 +277,7 @@ namespace ImapCertWatcher.Data
         public List<CertRecord> LoadAll(bool showDeleted = false, string buildingFilter = "Все")
         {
             var list = new List<CertRecord>();
+            Log($"Загрузка данных из БД: showDeleted={showDeleted}, buildingFilter={buildingFilter}");
 
             using (var conn = new FbConnection(_connectionString))
             {
@@ -305,6 +317,7 @@ namespace ImapCertWatcher.Data
 
                     using (var reader = cmd.ExecuteReader())
                     {
+                        int count = 0;
                         while (reader.Read())
                         {
                             list.Add(new CertRecord
@@ -323,7 +336,9 @@ namespace ImapCertWatcher.Data
                                 ArchivePath = reader.IsDBNull(11) ? "" : reader.GetString(11),
                                 MessageDate = reader.IsDBNull(12) ? DateTime.MinValue : reader.GetDateTime(12)
                             });
+                            count++;
                         }
+                        Log($"Загружено записей из БД: {count}");
                     }
                 }
             }
@@ -343,6 +358,7 @@ namespace ImapCertWatcher.Data
                     cmd.Parameters.AddWithValue("@note", note ?? "");
                     cmd.Parameters.AddWithValue("@id", id);
                     cmd.ExecuteNonQuery();
+                    Log($"Обновлено примечание для записи ID={id}");
                 }
             }
         }
@@ -359,6 +375,7 @@ namespace ImapCertWatcher.Data
                     cmd.Parameters.AddWithValue("@building", building ?? "");
                     cmd.Parameters.AddWithValue("@id", id);
                     cmd.ExecuteNonQuery();
+                    Log($"Обновлено здание для записи ID={id}: {building}");
                 }
             }
         }
@@ -375,6 +392,7 @@ namespace ImapCertWatcher.Data
                     cmd.Parameters.AddWithValue("@isDeleted", isDeleted ? 1 : 0);
                     cmd.Parameters.AddWithValue("@id", id);
                     cmd.ExecuteNonQuery();
+                    Log($"Изменен статус удаления для записи ID={id}: {isDeleted}");
                 }
             }
         }
@@ -391,10 +409,28 @@ namespace ImapCertWatcher.Data
                     cmd.Parameters.AddWithValue("@archivePath", archivePath ?? "");
                     cmd.Parameters.AddWithValue("@id", id);
                     cmd.ExecuteNonQuery();
+                    Log($"Обновлен путь к архиву для записи ID={id}: {archivePath}");
                 }
             }
         }
 
         public FbConnection GetConnection() => new FbConnection(_connectionString);
+
+        private void Log(string message)
+        {
+            try
+            {
+                string logFile = Path.Combine(_logDirectory, $"log_{DateTime.Now:yyyy-MM-dd}.log");
+                string logEntry = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} - [DbHelper] {message}{Environment.NewLine}";
+                File.AppendAllText(logFile, logEntry, System.Text.Encoding.UTF8);
+
+                // Также пишем в Debug для отладки
+                System.Diagnostics.Debug.WriteLine($"[DbHelper] {message}");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Ошибка записи в лог: {ex.Message}");
+            }
+        }
     }
 }

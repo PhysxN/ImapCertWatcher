@@ -18,6 +18,7 @@ namespace ImapCertWatcher.Services
         private readonly AppSettings _settings;
         private readonly DbHelper _db;
         private readonly string _attachmentsBasePath;
+        private readonly string _logDirectory;
 
         private static Regex certNumberRegex = new Regex(@"Сертификат №\s*(?<number>[0-9A-F]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
         private static Regex fioRegex = new Regex(@"ФИО:\s*(?<fio>[\p{L}\s\-]+?)(?:\.|\n|$)", RegexOptions.Compiled);
@@ -32,10 +33,17 @@ namespace ImapCertWatcher.Services
             _settings = settings;
             _db = db;
             _attachmentsBasePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Certs");
+            _logDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "LOG");
 
             // Создаем папку для архивов, если ее нет
             if (!Directory.Exists(_attachmentsBasePath))
                 Directory.CreateDirectory(_attachmentsBasePath);
+
+            // Создаем папку для логов, если ее нет
+            if (!Directory.Exists(_logDirectory))
+                Directory.CreateDirectory(_logDirectory);
+
+            Log("Инициализация ImapWatcher завершена");
         }
 
         public List<CertEntry> CheckMail(bool checkAllMessages = false)
@@ -47,17 +55,17 @@ namespace ImapCertWatcher.Services
 
                 try
                 {
-                    System.Diagnostics.Debug.WriteLine($"Подключаемся к {_settings.MailHost}:{_settings.MailPort} (SSL: {_settings.MailUseSsl})");
+                    Log($"Подключаемся к {_settings.MailHost}:{_settings.MailPort} (SSL: {_settings.MailUseSsl})");
 
                     if (_settings.MailUseSsl)
                         client.Connect(_settings.MailHost, _settings.MailPort, MailKit.Security.SecureSocketOptions.SslOnConnect);
                     else
                         client.Connect(_settings.MailHost, _settings.MailPort, MailKit.Security.SecureSocketOptions.StartTlsWhenAvailable);
 
-                    System.Diagnostics.Debug.WriteLine("Подключение успешно");
+                    Log("Подключение к почтовому серверу успешно");
 
                     client.Authenticate(_settings.MailLogin, _settings.MailPassword);
-                    System.Diagnostics.Debug.WriteLine("Аутентификация успешна");
+                    Log("Аутентификация успешна");
 
                     var mainFolder = GetFolderRecursive(client, _settings.ImapFolder);
                     if (mainFolder == null)
@@ -65,21 +73,21 @@ namespace ImapCertWatcher.Services
                         throw new Exception($"Не удалось найти папку: {_settings.ImapFolder}");
                     }
 
-                    System.Diagnostics.Debug.WriteLine($"Основная папка: {mainFolder.FullName}");
+                    Log($"Основная папка: {mainFolder.FullName}");
 
                     var allFolders = GetAllSubfoldersRecursive(mainFolder);
                     allFolders.Insert(0, mainFolder);
 
-                    System.Diagnostics.Debug.WriteLine($"Будет проверено папок: {allFolders.Count}");
+                    Log($"Будет проверено папок: {allFolders.Count}");
 
                     foreach (var folder in allFolders)
                     {
                         try
                         {
-                            System.Diagnostics.Debug.WriteLine($"Проверяем папку: {folder.FullName}");
+                            Log($"Проверяем папку: {folder.FullName}");
                             folder.Open(FolderAccess.ReadOnly);
 
-                            System.Diagnostics.Debug.WriteLine($"В папке {folder.FullName}: {folder.Count} писем");
+                            Log($"В папке {folder.FullName}: {folder.Count} писем");
 
                             // Создаем запрос в зависимости от режима
                             SearchQuery query;
@@ -88,7 +96,7 @@ namespace ImapCertWatcher.Services
                                 // Все письма
                                 query = SearchQuery.SubjectContains("Сертификат №")
                                             .And(SearchQuery.FromContains(_settings.FilterRecipient));
-                                System.Diagnostics.Debug.WriteLine("Режим: проверка ВСЕХ писем");
+                                Log("Режим: проверка ВСЕХ писем");
                             }
                             else
                             {
@@ -97,11 +105,11 @@ namespace ImapCertWatcher.Services
                                 query = SearchQuery.SubjectContains("Сертификат №")
                                             .And(SearchQuery.FromContains(_settings.FilterRecipient))
                                             .And(SearchQuery.DeliveredAfter(threeDaysAgo));
-                                System.Diagnostics.Debug.WriteLine($"Режим: проверка писем за последние 3 дня (с {threeDaysAgo:dd.MM.yyyy})");
+                                Log($"Режим: проверка писем за последние 3 дня (с {threeDaysAgo:dd.MM.yyyy})");
                             }
 
                             var uids = folder.Search(query);
-                            System.Diagnostics.Debug.WriteLine($"В папке {folder.FullName} найдено писем для обработки: {uids.Count}");
+                            Log($"В папке {folder.FullName} найдено писем для обработки: {uids.Count}");
 
                             foreach (var uid in uids)
                             {
@@ -113,17 +121,17 @@ namespace ImapCertWatcher.Services
                                     var body = GetMessageBody(msg);
                                     var messageDate = msg.Date.UtcDateTime.ToLocalTime();
 
-                                    System.Diagnostics.Debug.WriteLine($"Обрабатываем письмо из папки {folder.FullName}: {subject}, От: {fromAddress}, Дата: {messageDate:dd.MM.yyyy HH:mm}");
+                                    Log($"Обрабатываем письмо из папки {folder.FullName}: {subject}, От: {fromAddress}, Дата: {messageDate:dd.MM.yyyy HH:mm}");
 
                                     if (!subject.StartsWith("Сертификат №", StringComparison.OrdinalIgnoreCase))
                                     {
-                                        System.Diagnostics.Debug.WriteLine($"Пропускаем письмо - тема не начинается с 'Сертификат №': {subject}");
+                                        Log($"Пропускаем письмо - тема не начинается с 'Сертификат №': {subject}");
                                         continue;
                                     }
 
                                     if (!fromAddress.Contains(_settings.FilterRecipient))
                                     {
-                                        System.Diagnostics.Debug.WriteLine($"Пропускаем письмо - отправитель не совпадает: {fromAddress}");
+                                        Log($"Пропускаем письмо - отправитель не совпадает: {fromAddress}");
                                         continue;
                                     }
 
@@ -133,13 +141,13 @@ namespace ImapCertWatcher.Services
 
                                     if (string.IsNullOrEmpty(fio))
                                     {
-                                        System.Diagnostics.Debug.WriteLine($"Не найден ФИО в письме {uid}");
+                                        Log($"Не найден ФИО в письме {uid}");
                                         continue;
                                     }
 
                                     if (dates.start == DateTime.MinValue || dates.end == DateTime.MinValue)
                                     {
-                                        System.Diagnostics.Debug.WriteLine($"Не найдены даты в письме {uid}");
+                                        Log($"Не найдены даты в письме {uid}");
                                         continue;
                                     }
 
@@ -168,17 +176,17 @@ namespace ImapCertWatcher.Services
                                     try
                                     {
                                         _db.InsertOrUpdate(entry);
-                                        System.Diagnostics.Debug.WriteLine($"Успешно обработано письмо из папки {folder.FullName}: {fio}, {dates.start:dd.MM.yyyy} - {dates.end:dd.MM.yyyy}, Сертификат: {certNumber}");
+                                        Log($"Успешно обработано письмо из папки {folder.FullName}: {fio}, {dates.start:dd.MM.yyyy} - {dates.end:dd.MM.yyyy}, Сертификат: {certNumber}");
                                         results.Add(entry);
                                     }
                                     catch (Exception ex)
                                     {
-                                        System.Diagnostics.Debug.WriteLine($"Ошибка сохранения в БД: {ex.Message}");
+                                        Log($"Ошибка сохранения в БД: {ex.Message}");
                                     }
                                 }
                                 catch (Exception ex)
                                 {
-                                    System.Diagnostics.Debug.WriteLine($"Ошибка обработки письма {uid}: {ex.Message}");
+                                    Log($"Ошибка обработки письма {uid}: {ex.Message}");
                                 }
                             }
 
@@ -186,16 +194,16 @@ namespace ImapCertWatcher.Services
                         }
                         catch (Exception ex)
                         {
-                            System.Diagnostics.Debug.WriteLine($"Ошибка при работе с папкой {folder.FullName}: {ex.Message}");
+                            Log($"Ошибка при работе с папкой {folder.FullName}: {ex.Message}");
                         }
                     }
 
                     client.Disconnect(true);
-                    System.Diagnostics.Debug.WriteLine($"Обработка завершена. Проверено папок: {allFolders.Count}, Успешно обработано: {results.Count} писем");
+                    Log($"Обработка завершена. Проверено папок: {allFolders.Count}, Успешно обработано: {results.Count} писем");
                 }
                 catch (Exception ex)
                 {
-                    System.Diagnostics.Debug.WriteLine($"Ошибка работы с почтовым сервером: {ex.Message}");
+                    Log($"Ошибка работы с почтовым сервером: {ex.Message}");
                     throw new Exception($"Ошибка работы с почтовым сервером: {ex.Message}", ex);
                 }
             }
@@ -208,7 +216,10 @@ namespace ImapCertWatcher.Services
             try
             {
                 if (!msg.Attachments.Any())
+                {
+                    Log("В письме нет вложений");
                     return null;
+                }
 
                 // Создаем безопасное имя папки для ФИО
                 var safeFio = MakeValidFileName(fio);
@@ -246,7 +257,7 @@ namespace ImapCertWatcher.Services
                         }
 
                         savedArchivePath = filePath;
-                        System.Diagnostics.Debug.WriteLine($"Сохранен архив: {filePath}");
+                        Log($"Сохранен архив: {filePath}");
                     }
                 }
 
@@ -254,7 +265,7 @@ namespace ImapCertWatcher.Services
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Ошибка при сохранении вложений: {ex.Message}");
+                Log($"Ошибка при сохранении вложений: {ex.Message}");
                 return null;
             }
         }
@@ -271,7 +282,10 @@ namespace ImapCertWatcher.Services
             try
             {
                 if (string.IsNullOrEmpty(archivePath) || !File.Exists(archivePath))
+                {
+                    Log($"Архив не найден: {archivePath}");
                     return false;
+                }
 
                 var safeFio = MakeValidFileName(fio);
                 var extractPath = Path.Combine(_attachmentsBasePath, safeFio, "extracted");
@@ -283,7 +297,7 @@ namespace ImapCertWatcher.Services
 
                 // Используем полное имя с указанием пространства имен
                 System.IO.Compression.ZipFile.ExtractToDirectory(archivePath, extractPath);
-                System.Diagnostics.Debug.WriteLine($"Архив распакован: {archivePath} -> {extractPath}");
+                Log($"Архив распакован: {archivePath} -> {extractPath}");
 
                 // Открываем папку с распакованными файлами
                 System.Diagnostics.Process.Start("explorer.exe", extractPath);
@@ -292,7 +306,7 @@ namespace ImapCertWatcher.Services
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Ошибка при распаковке архива: {ex.Message}");
+                Log($"Ошибка при распаковке архива: {ex.Message}");
                 return false;
             }
         }
@@ -422,7 +436,7 @@ namespace ImapCertWatcher.Services
             }
             catch (FolderNotFoundException)
             {
-                System.Diagnostics.Debug.WriteLine($"Папка '{folderName}' не найдена, начинаем рекурсивный поиск...");
+                Log($"Папка '{folderName}' не найдена, начинаем рекурсивный поиск...");
             }
 
             var personal = client.GetFolder(client.PersonalNamespaces[0]);
@@ -437,12 +451,12 @@ namespace ImapCertWatcher.Services
 
                 foreach (var folder in subfolders)
                 {
-                    System.Diagnostics.Debug.WriteLine($"Проверяем папку: {folder.FullName}");
+                    Log($"Проверяем папку: {folder.FullName}");
 
                     if (folder.FullName.Equals(folderName, StringComparison.OrdinalIgnoreCase) ||
                         folder.Name.Equals(folderName, StringComparison.OrdinalIgnoreCase))
                     {
-                        System.Diagnostics.Debug.WriteLine($"Найдена папка: {folder.FullName}");
+                        Log($"Найдена папка: {folder.FullName}");
                         return folder;
                     }
 
@@ -454,13 +468,13 @@ namespace ImapCertWatcher.Services
                     }
                     catch (Exception ex)
                     {
-                        System.Diagnostics.Debug.WriteLine($"Ошибка при поиске в папке {folder.Name}: {ex.Message}");
+                        Log($"Ошибка при поиске в папке {folder.Name}: {ex.Message}");
                     }
                 }
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Ошибка при получении подпапок для {parent.Name}: {ex.Message}");
+                Log($"Ошибка при получении подпапок для {parent.Name}: {ex.Message}");
             }
 
             return null;
@@ -481,7 +495,7 @@ namespace ImapCertWatcher.Services
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Ошибка при получении подпапок из {parent.FullName}: {ex.Message}");
+                Log($"Ошибка при получении подпапок из {parent.FullName}: {ex.Message}");
             }
 
             return folders;
@@ -565,6 +579,23 @@ namespace ImapCertWatcher.Services
             }
 
             return folders;
+        }
+
+        private void Log(string message)
+        {
+            try
+            {
+                string logFile = Path.Combine(_logDirectory, $"log_{DateTime.Now:yyyy-MM-dd}.log");
+                string logEntry = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} - [ImapWatcher] {message}{Environment.NewLine}";
+                File.AppendAllText(logFile, logEntry, System.Text.Encoding.UTF8);
+
+                // Также пишем в Debug для отладки
+                System.Diagnostics.Debug.WriteLine($"[ImapWatcher] {message}");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Ошибка записи в лог: {ex.Message}");
+            }
         }
     }
 }
