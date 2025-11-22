@@ -187,7 +187,7 @@ namespace ImapCertWatcher.Data
                 {
                     cmd.CommandText = @"ALTER TABLE CERTS ALTER COLUMN BUILDING TYPE VARCHAR(100)";
                     cmd.ExecuteNonQuery();
-                    Log("Размер столбца BUILDING увеличен до 100 символов");
+                    
                 }
             }
             catch (FbException ex)
@@ -370,10 +370,7 @@ namespace ImapCertWatcher.Data
                             list.Add(record);
                             count++;
 
-                            if (!string.IsNullOrEmpty(building))
-                            {
-                                Log($"Загружена запись: {record.Fio}, Здание: '{building}'");
-                            }
+                            
                         }
                         Log($"Загружено записей из БД: {count}");
                     }
@@ -463,6 +460,13 @@ namespace ImapCertWatcher.Data
         {
             try
             {
+                // Фильтруем ненужные сообщения
+                if (message.Contains("Загружена запись:") && message.Contains("Здание:"))
+                    return;
+
+                if (message.Contains("Размер столбца BUILDING увеличен"))
+                    return;
+
                 string logDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "LOG", DateTime.Now.ToString("yyyy-MM-dd"));
                 if (!Directory.Exists(logDirectory))
                     Directory.CreateDirectory(logDirectory);
@@ -471,8 +475,13 @@ namespace ImapCertWatcher.Data
                 string logEntry = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} - [DbHelper] {message}{Environment.NewLine}";
                 File.AppendAllText(logFile, logEntry, System.Text.Encoding.UTF8);
 
-                // Также пишем в мини-лог через переданный делегат
-                _addToMiniLog?.Invoke($"[DbHelper] {message}");
+                // Также пишем в мини-лог через переданный делегат (только важные сообщения)
+                if (!message.Contains("Загружена запись:") &&
+                    !message.Contains("Размер столбца") &&
+                    !message.Contains("Проверка настроек почты"))
+                {
+                    _addToMiniLog?.Invoke($"[DbHelper] {message}");
+                }
 
                 System.Diagnostics.Debug.WriteLine($"[DbHelper] {message}");
             }

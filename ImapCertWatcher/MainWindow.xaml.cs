@@ -285,7 +285,7 @@ namespace ImapCertWatcher
                         // Принудительно обновляем layout
                         dgCerts.UpdateLayout();
 
-                        AddToMiniLog("Автоподбор ширины столбцов выполнен");
+                        // УБРАТЬ ЭТУ СТРОКУ: AddToMiniLog("Автоподбор ширины столбцов выполнен");
                     }
                     catch (Exception ex)
                     {
