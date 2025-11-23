@@ -127,15 +127,8 @@ namespace ImapCertWatcher
                         _miniLogMessages.RemoveAt(_miniLogMessages.Count - 1);
                     }
 
-                    // Обновляем текстовый блок только если он инициализирован
-                    if (txtMiniLog != null)
-                    {
-                        UpdateMiniLogDisplay();
-                    }
-                    else
-                    {
-                        System.Diagnostics.Debug.WriteLine($"Мини-лог (txtMiniLog null): {message}");
-                    }
+                    // Обновляем оба мини-лога
+                    UpdateMiniLogDisplay();
                 });
             }
             catch (Exception ex)
@@ -148,14 +141,18 @@ namespace ImapCertWatcher
         {
             try
             {
+                string logText = string.Join(Environment.NewLine, _miniLogMessages);
+
+                // Обновляем мини-лог на основной вкладке
                 if (txtMiniLog != null)
                 {
-                    txtMiniLog.Text = string.Join(Environment.NewLine, _miniLogMessages);
+                    txtMiniLog.Text = logText;
                 }
-                else
+
+                // Обновляем мини-лог на вкладке настроек
+                if (txtMiniLogSettings != null)
                 {
-                    // Если txtMiniLog еще не инициализирован, просто выводим в Debug
-                    System.Diagnostics.Debug.WriteLine("Мини-лог обновлен: " + string.Join("; ", _miniLogMessages));
+                    txtMiniLogSettings.Text = logText;
                 }
             }
             catch (Exception ex)
@@ -1216,6 +1213,26 @@ namespace ImapCertWatcher
             return new string(name.Where(ch => !invalidChars.Contains(ch)).ToArray());
         }
 
+        private void BtnDialectHelp_Click(object sender, RoutedEventArgs e)
+        {
+            string helpText = @"Диалект Firebird - версия SQL-синтаксиса:
+
+• Диалект 3 (рекомендуется) - современный SQL
+  - Полная поддержка Unicode
+  - Раздельные типы DATE/TIME/TIMESTAMP
+  - Современные возможности
+
+• Диалект 1 - устаревший синтаксис
+  - Только для совместимости со старыми базами
+  - Ограниченная поддержка Unicode
+
+Обычно используется диалект 3. 
+Меняйте только при ошибках совместимости.";
+
+            MessageBox.Show(helpText, "Справка: Диалект Firebird",
+                            MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+
         private void BtnRefreshFolders_Click(object sender, RoutedEventArgs e)
         {
             try
@@ -1507,7 +1524,11 @@ namespace ImapCertWatcher
                 var logBaseDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "LOG");
                 if (!Directory.Exists(logBaseDirectory))
                 {
-                    txtLogs.Text = "Папка логов не существует";
+                    Dispatcher.Invoke(() =>
+                    {
+                        txtLogs.Text = "Папка логов не существует";
+                        logStatusText.Text = "Логи не найдены";
+                    });
                     return;
                 }
 
@@ -1519,7 +1540,11 @@ namespace ImapCertWatcher
 
                 if (!dateFolders.Any())
                 {
-                    txtLogs.Text = "Логи не найдены";
+                    Dispatcher.Invoke(() =>
+                    {
+                        txtLogs.Text = "Логи не найдены";
+                        logStatusText.Text = "Нет логов за сегодня";
+                    });
                     return;
                 }
 
@@ -1533,7 +1558,11 @@ namespace ImapCertWatcher
 
                 if (!logFiles.Any())
                 {
-                    txtLogs.Text = "Логи не найдены в папке с датой";
+                    Dispatcher.Invoke(() =>
+                    {
+                        txtLogs.Text = "Логи не найдены в папке с датой";
+                        logStatusText.Text = $"Нет файлов в {Path.GetFileName(latestDateFolder)}";
+                    });
                     return;
                 }
 
@@ -1544,26 +1573,63 @@ namespace ImapCertWatcher
                 Dispatcher.Invoke(() =>
                 {
                     txtLogs.Text = logContent;
-                    logStatusText.Text = $"Загружен файл: {Path.GetFileName(latestDateFolder)}/{Path.GetFileName(latestLog)}";
+                    logStatusText.Text = $"Автообновлено: {Path.GetFileName(latestDateFolder)}/{Path.GetFileName(latestLog)} ({DateTime.Now:HH:mm:ss})";
+
+                    // Прокручиваем к началу для удобства просмотра
+                    txtLogs.ScrollToHome();
                 });
 
-                AddToMiniLog($"Загружены логи: {Path.GetFileName(latestLog)}");
+                AddToMiniLog($"Автообновлены логи: {Path.GetFileName(latestLog)}");
             }
             catch (Exception ex)
             {
                 Dispatcher.Invoke(() =>
                 {
                     txtLogs.Text = $"Ошибка загрузки логов: {ex.Message}";
-                    logStatusText.Text = "Ошибка загрузки логов";
+                    logStatusText.Text = "Ошибка загрузки";
                 });
                 AddToMiniLog($"Ошибка загрузки логов: {ex.Message}");
+            }
+        }
+
+        private void TabControl_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (e.Source is TabControl tabControl)
+            {
+                // Проверяем, что переключились именно на вкладку "Логи"
+                if (tabControl.SelectedItem is TabItem selectedTab && selectedTab.Header?.ToString() == "Логи")
+                {
+                    // Автоматически обновляем логи при переходе на вкладку
+                    LoadLogs();
+                    AddToMiniLog("Автообновление логов при переходе на вкладку");
+                }
+
+                // Можно добавить обработку других вкладок при необходимости
+                else if (tabControl.SelectedItem is TabItem settingsTab && settingsTab.Header?.ToString() == "Настройки")
+                {
+                    // Например, обновить список папок при переходе на настройки
+                    // Или выполнить другие действия
+                }
+            }
+        }
+
+        private void LogsTab_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            // Проверяем, что переключились именно на вкладку "Логи"
+            if (e.Source is TabControl tabControl &&
+                tabControl.SelectedItem is TabItem selectedTab &&
+                selectedTab.Header?.ToString() == "Логи")
+            {
+                // Автоматически обновляем логи при переходе на вкладку
+                LoadLogs();
+                AddToMiniLog("Автообновление логов при переходе на вкладку");
             }
         }
 
         private void BtnRefreshLogs_Click(object sender, RoutedEventArgs e)
         {
             LoadLogs();
-            AddToMiniLog("Логи обновлены"); // ← ДОБАВИТЬ
+            AddToMiniLog("Логи обновлены вручную");
         }
 
         private void BtnClearLogs_Click(object sender, RoutedEventArgs e)
