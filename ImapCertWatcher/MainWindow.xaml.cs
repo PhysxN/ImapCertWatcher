@@ -752,6 +752,23 @@ namespace ImapCertWatcher
             AddToMiniLog("Поиск очищен"); // ← ДОБАВИТЬ
         }
 
+        private void ShowProgressBar(bool show)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                var visibility = show ? Visibility.Visible : Visibility.Collapsed;
+
+                // Основная вкладка
+                progressMailCheck.Visibility = visibility;
+
+                // Вкладка настроек
+                progressMailCheckSettings.Visibility = visibility;
+
+                // Вкладка логов
+                progressMailCheckLogs.Visibility = visibility;
+            });
+        }
+
         private async Task DoCheckAsync(bool checkAllMessages)
         {
             if (_watcher == null)
@@ -760,11 +777,12 @@ namespace ImapCertWatcher
                 return;
             }
 
-            // Показываем прогресс-бар
+            // Показываем прогресс-бар на всех вкладках
+            ShowProgressBar(true);
+
             Dispatcher.Invoke(() =>
             {
                 statusText.Text = checkAllMessages ? "Обработка всех писем..." : "Проверка почты...";
-                progressMailCheck.Visibility = Visibility.Visible;
                 AddToMiniLog(checkAllMessages ? "Начата обработка всех писем" : "Начата проверка почты");
             });
 
@@ -782,44 +800,37 @@ namespace ImapCertWatcher
                         foreach (var e in newList) _allItems.Add(e);
                         ApplySearchFilter();
 
-                        Dispatcher.Invoke(() =>
+                        // Автоподбор столбцов
+                        AutoFitDataGridColumns();
+
+                        if (updatedCount > 0 || addedCount > 0)
                         {
-                            _allItems.Clear();
-                            foreach (var e in newList) _allItems.Add(e);
-                            ApplySearchFilter();
-
-                            // Автоподбор столбцов
-                            AutoFitDataGridColumns();
-
-                            if (updatedCount > 0 || addedCount > 0)
+                            string message = "";
+                            if (addedCount > 0 && updatedCount > 0)
                             {
-                                string message = "";
-                                if (addedCount > 0 && updatedCount > 0)
-                                {
-                                    message = $"Добавлено: {addedCount}, Обновлено: {updatedCount} ({DateTime.Now})";
-                                }
-                                else if (addedCount > 0)
-                                {
-                                    message = $"Добавлено: {addedCount} ({DateTime.Now})";
-                                }
-                                else if (updatedCount > 0)
-                                {
-                                    message = $"Обновлено: {updatedCount} ({DateTime.Now})";
-                                }
-
-                                statusText.Text = message;
-                                AddToMiniLog(message);
+                                message = $"Добавлено: {addedCount}, Обновлено: {updatedCount} ({DateTime.Now})";
                             }
-                            else
+                            else if (addedCount > 0)
                             {
-                                statusText.Text = checkAllMessages
-                                    ? $"Обработка завершена: изменений нет ({DateTime.Now})"
-                                    : $"Проверка завершена: новых писем нет ({DateTime.Now})";
-                                AddToMiniLog(checkAllMessages
-                                    ? "Обработка завершена: изменений нет"
-                                    : "Проверка завершена: новых писем нет");
+                                message = $"Добавлено: {addedCount} ({DateTime.Now})";
                             }
-                        });
+                            else if (updatedCount > 0)
+                            {
+                                message = $"Обновлено: {updatedCount} ({DateTime.Now})";
+                            }
+
+                            statusText.Text = message;
+                            AddToMiniLog(message);
+                        }
+                        else
+                        {
+                            statusText.Text = checkAllMessages
+                                ? $"Обработка завершена: изменений нет ({DateTime.Now})"
+                                : $"Проверка завершена: новых писем нет ({DateTime.Now})";
+                            AddToMiniLog(checkAllMessages
+                                ? "Обработка завершена: изменений нет"
+                                : "Проверка завершена: новых писем нет");
+                        }
                     });
                 }
             }
@@ -834,13 +845,11 @@ namespace ImapCertWatcher
             }
             finally
             {
-                // Скрываем прогресс-бар
-                Dispatcher.Invoke(() =>
-                {
-                    progressMailCheck.Visibility = Visibility.Collapsed;
-                });
+                // Скрываем прогресс-бар на всех вкладках
+                ShowProgressBar(false);
             }
         }
+        
 
         private async void BtnManualCheck_Click(object sender, RoutedEventArgs e)
         {
