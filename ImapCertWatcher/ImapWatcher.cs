@@ -175,6 +175,15 @@ namespace ImapCertWatcher.Services
 
                                         Log($"Обрабатываем письмо из папки {folder.FullName}: {subject}, От: {fromAddress}, Дата: {messageDate:dd.MM.yyyy HH:mm}");
 
+                                        // ★★★★ ПРОВЕРКА НА АННУЛИРОВАНИЕ ★★★★
+                                        if (IsRevokedCertificateMessage(subject))
+                                        {
+                                            Log("Обнаружено письмо об аннулировании сертификата");
+                                            ProcessRevokedCertificate(subject, body, folder.FullName, _addToMiniLog);
+                                            continue; // Переходим к следующему письму
+                                        }
+
+                                        // Обычная обработка сертификатов (существующий код)
                                         if (!subject.StartsWith("Сертификат №", StringComparison.OrdinalIgnoreCase))
                                         {
                                             Log($"Пропускаем письмо - тема не начинается с 'Сертификат №': {subject}");
@@ -208,7 +217,7 @@ namespace ImapCertWatcher.Services
 
                                         // ★★★★ ПРОВЕРКА ДУБЛИКАТА ДО ОБРАБОТКИ ВЛОЖЕНИЙ ★★★★
                                         Log($"Проверяем наличие дубликата в БД: {fio}, сертификат: {certNumber}");
-                                        bool isDuplicate = _db.CheckDuplicate(fio, certNumber, messageDate);
+                                        bool isDuplicate = _db.CheckDuplicate(fio, certNumber);
 
                                         if (isDuplicate)
                                         {
@@ -216,6 +225,7 @@ namespace ImapCertWatcher.Services
                                             continue; // Переходим к следующему письму
                                         }
 
+                                        // Если дубликата нет - продолжаем обработку (скачиваем архив и сохраняем)
                                         Log($"Дубликат не найден, продолжаем обработку письма");
 
                                         // Сохраняем вложения (ZIP архивы) - только если это не дубликат
@@ -346,7 +356,12 @@ namespace ImapCertWatcher.Services
             return (results, updatedCount, addedCount);
         }
 
-        
+        private bool IsRevokedCertificateMessage(string subject)
+        {
+            return subject.Contains("аннулирован") ||
+                   subject.Contains("прекратил действие");
+        }
+
         private string SaveAttachments(MimeKit.MimeMessage msg, string fio, string certNumber)
         {
             try
@@ -638,6 +653,81 @@ namespace ImapCertWatcher.Services
             return null;
         }
 
+        private void ProcessRevokedCertificate(string subject, string body, string folderPath, Action<string> addToMiniLog)
+        {
+            try
+            {
+                Log("Обработка письма об аннулировании сертификата");
+
+                // Извлекаем номер сертификата из темы
+                var certNumber = ExtractCertNumberFromRevokedSubject(subject);
+                if (string.IsNullOrEmpty(certNumber) || certNumber == "Неизвестно")
+                {
+                    Log("Не удалось извлечь номер сертификата из темы аннулирования");
+                    return;
+                }
+
+                // Извлекаем ФИО из тела письма
+                var fio = ExtractFio(body);
+                if (string.IsNullOrEmpty(fio))
+                {
+                    Log("Не удалось извлечь ФИО из письма об аннулировании");
+                    return;
+                }
+
+                Log($"Найден аннулированный сертификат: {fio}, номер: {certNumber}");
+
+                // Ищем сертификат в БД
+                var found = _db.FindAndMarkAsRevoked(fio, certNumber, folderPath);
+
+                if (found)
+                {
+                    Log($"Сертификат помечен как аннулированный: {fio}, номер: {certNumber}");
+                    addToMiniLog?.Invoke($"Аннулирован: {fio}");
+                }
+                else
+                {
+                    Log($"Сертификат не найден в БД для аннулирования: {fio}, номер: {certNumber}");
+                    addToMiniLog?.Invoke($"Аннулирован (не найден в БД): {fio}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"Ошибка обработки аннулированного сертификата: {ex.Message}");
+            }
+        }
+
+        private string ExtractCertNumberFromRevokedSubject(string subject)
+        {
+            try
+            {
+                // Паттерн для писем об аннулировании: "Сертификат № 00B675FC41B06766DEF8E20651F0F36547 аннулирован"
+                var pattern = @"Сертификат №\s*(?<number>[0-9A-F]+)\s*аннулирован";
+                var match = Regex.Match(subject, pattern, RegexOptions.IgnoreCase);
+
+                if (match.Success)
+                {
+                    return match.Groups["number"].Value.Trim();
+                }
+
+                // Альтернативный паттерн
+                pattern = @"Сертификат №\s*(?<number>[0-9A-F]+)\s*прекратил действие";
+                match = Regex.Match(subject, pattern, RegexOptions.IgnoreCase);
+
+                if (match.Success)
+                {
+                    return match.Groups["number"].Value.Trim();
+                }
+
+                return "Неизвестно";
+            }
+            catch (Exception ex)
+            {
+                Log($"Ошибка извлечения номера сертификата из темы аннулирования: {ex.Message}");
+                return "Неизвестно";
+            }
+        }
+
         private List<IMailFolder> GetAllSubfoldersRecursive(IMailFolder parent)
         {
             var folders = new List<IMailFolder>();
@@ -788,12 +878,15 @@ namespace ImapCertWatcher.Services
         {
             try
             {
+                // Один файл на день вместо файла на каждую секунду
                 string logDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "LOG", DateTime.Now.ToString("yyyy-MM-dd"));
                 if (!Directory.Exists(logDirectory))
                     Directory.CreateDirectory(logDirectory);
 
-                string logFile = Path.Combine(logDirectory, $"log_{DateTime.Now:yyyy-MM-dd_HH-mm-ss}.log");
+                // Файл с именем дня
+                string logFile = Path.Combine(logDirectory, $"log_{DateTime.Now:yyyy-MM-dd}.log");
                 string logEntry = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} - [ImapWatcher] {message}{Environment.NewLine}";
+
                 File.AppendAllText(logFile, logEntry, System.Text.Encoding.UTF8);
 
                 // Также пишем в мини-лог через переданный делегат

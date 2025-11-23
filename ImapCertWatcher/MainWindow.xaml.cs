@@ -58,6 +58,9 @@ namespace ImapCertWatcher
                 _miniLogMessages = new ObservableCollection<string>();
                 AddToMiniLog("Приложение запущено");
 
+                // Очистка старых логов при запуске (в фоне)
+                Task.Run(() => CleanOldLogs());
+
                 var settingsPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "settings.txt");
                 _settings = SettingsLoader.Load(settingsPath);
 
@@ -1541,54 +1544,43 @@ namespace ImapCertWatcher
                     return;
                 }
 
-                // Ищем все папки с датами и сортируем по убыванию (самые новые первыми)
-                var dateFolders = Directory.GetDirectories(logBaseDirectory)
-                    .Where(dir => System.Text.RegularExpressions.Regex.IsMatch(Path.GetFileName(dir), @"^\d{4}-\d{2}-\d{2}$"))
-                    .OrderByDescending(dir => dir)
-                    .ToList();
-
-                if (!dateFolders.Any())
+                // Ищем папку с сегодняшней датой
+                var todayFolder = Path.Combine(logBaseDirectory, DateTime.Now.ToString("yyyy-MM-dd"));
+                if (!Directory.Exists(todayFolder))
                 {
                     Dispatcher.Invoke(() =>
                     {
-                        txtLogs.Text = "Логи не найдены";
+                        txtLogs.Text = "Логи за сегодня не найдены";
                         logStatusText.Text = "Нет логов за сегодня";
                     });
                     return;
                 }
 
-                // Берем самую свежую папку с датой
-                var latestDateFolder = dateFolders.First();
-
-                // Ищем все log файлы в этой папке и сортируем по дате создания (новые первыми)
-                var logFiles = Directory.GetFiles(latestDateFolder, "*.log")
-                    .OrderByDescending(f => File.GetCreationTime(f))
-                    .ToList();
-
-                if (!logFiles.Any())
+                // Ищем файл лога за сегодня
+                var todayLogFile = Path.Combine(todayFolder, $"log_{DateTime.Now:yyyy-MM-dd}.log");
+                if (!File.Exists(todayLogFile))
                 {
                     Dispatcher.Invoke(() =>
                     {
-                        txtLogs.Text = "Логи не найдены в папке с датой";
-                        logStatusText.Text = $"Нет файлов в {Path.GetFileName(latestDateFolder)}";
+                        txtLogs.Text = "Файл лога за сегодня не найден";
+                        logStatusText.Text = "Файл лога не создан";
                     });
                     return;
                 }
 
-                // Берем самый свежий лог-файл
-                var latestLog = logFiles.First();
-                var logContent = File.ReadAllText(latestLog);
+                // Читаем весь файл лога за сегодня
+                var logContent = File.ReadAllText(todayLogFile);
 
                 Dispatcher.Invoke(() =>
                 {
                     txtLogs.Text = logContent;
-                    logStatusText.Text = $"Автообновлено: {Path.GetFileName(latestDateFolder)}/{Path.GetFileName(latestLog)} ({DateTime.Now:HH:mm:ss})";
+                    logStatusText.Text = $"Логи за {DateTime.Now:dd.MM.yyyy} ({DateTime.Now:HH:mm:ss})";
 
-                    // Прокручиваем к началу для удобства просмотра
-                    txtLogs.ScrollToHome();
+                    // Прокручиваем к концу для просмотра самых свежих записей
+                    txtLogs.ScrollToEnd();
                 });
 
-                AddToMiniLog($"Автообновлены логи: {Path.GetFileName(latestLog)}");
+                AddToMiniLog($"Загружены логи за {DateTime.Now:dd.MM.yyyy}");
             }
             catch (Exception ex)
             {
@@ -1601,6 +1593,51 @@ namespace ImapCertWatcher
             }
         }
 
+        private void CleanOldLogs()
+        {
+            try
+            {
+                var logBaseDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "LOG");
+                if (!Directory.Exists(logBaseDirectory))
+                    return;
+
+                var cutoffDate = DateTime.Now.AddMonths(-1);
+                int deletedCount = 0;
+
+                var dateFolders = Directory.GetDirectories(logBaseDirectory)
+                    .Where(dir => System.Text.RegularExpressions.Regex.IsMatch(Path.GetFileName(dir), @"^\d{4}-\d{2}-\d{2}$"));
+
+                foreach (var dateFolder in dateFolders)
+                {
+                    var folderName = Path.GetFileName(dateFolder);
+                    if (DateTime.TryParseExact(folderName, "yyyy-MM-dd",
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        System.Globalization.DateTimeStyles.None, out DateTime folderDate))
+                    {
+                        if (folderDate < cutoffDate.Date)
+                        {
+                            try
+                            {
+                                Directory.Delete(dateFolder, true);
+                                deletedCount++;
+                            }
+                            catch
+                            {
+                                // Игнорируем ошибки
+                            }
+                        }
+                    }
+                }
+
+                // Никакого логирования - это фоновый процесс
+            }
+            catch
+            {
+                // Игнорируем все ошибки при очистке
+            }
+        }
+
+        
         private void TabControl_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
             if (e.Source is TabControl tabControl)
@@ -1721,15 +1758,18 @@ namespace ImapCertWatcher
         {
             try
             {
+                // Один файл на день вместо файла на каждую секунду
                 string logDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "LOG", DateTime.Now.ToString("yyyy-MM-dd"));
                 if (!Directory.Exists(logDirectory))
                     Directory.CreateDirectory(logDirectory);
 
-                string logFile = Path.Combine(logDirectory, $"log_{DateTime.Now:yyyy-MM-dd_HH-mm-ss}.log");
+                // Файл с именем дня
+                string logFile = Path.Combine(logDirectory, $"log_{DateTime.Now:yyyy-MM-dd}.log");
                 string logEntry = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} - [MainWindow] {message}{Environment.NewLine}";
+
                 File.AppendAllText(logFile, logEntry, System.Text.Encoding.UTF8);
 
-                // Также пишем в мини-лог
+                // Используем прямой вызов AddToMiniLog вместо делегата
                 AddToMiniLog($"[MainWindow] {message}");
 
                 System.Diagnostics.Debug.WriteLine($"[MainWindow] {message}");

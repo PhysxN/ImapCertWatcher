@@ -179,7 +179,7 @@ namespace ImapCertWatcher.Data
             }
         }
 
-        public bool CheckDuplicate(string fio, string certNumber, DateTime messageDate)
+        public bool FindAndMarkAsRevoked(string fio, string certNumber, string folderPath)
         {
             try
             {
@@ -189,8 +189,9 @@ namespace ImapCertWatcher.Data
 
                     using (var cmd = conn.CreateCommand())
                     {
-                        cmd.CommandText = @"SELECT ID, MESSAGE_DATE FROM CERTS 
-                                    WHERE FIO = @fio AND CERT_NUMBER = @certNumber";
+                        cmd.CommandText = @"SELECT ID FROM CERTS 
+                                    WHERE FIO = @fio AND CERT_NUMBER = @certNumber
+                                    AND IS_DELETED = 0";
                         cmd.Parameters.AddWithValue("@fio", fio);
                         cmd.Parameters.AddWithValue("@certNumber", certNumber ?? "");
 
@@ -198,30 +199,75 @@ namespace ImapCertWatcher.Data
                         {
                             if (reader.Read())
                             {
-                                int existingId = reader.GetInt32(0);
-                                DateTime existingDate = DateTime.MinValue;
+                                int id = reader.GetInt32(0);
+                                reader.Close();
 
-                                if (!reader.IsDBNull(1))
-                                {
-                                    existingDate = reader.GetDateTime(1);
-                                }
+                                // Обновляем запись - помечаем как удаленную и добавляем примечание
+                                cmd.Parameters.Clear();
+                                cmd.CommandText = @"UPDATE CERTS 
+                                            SET IS_DELETED = 1, 
+                                                NOTE = CASE 
+                                                    WHEN NOTE IS NULL OR NOTE = '' THEN 'аннулирован' 
+                                                    ELSE NOTE || '; аннулирован' 
+                                                END,
+                                                FOLDER_PATH = @folderPath
+                                            WHERE ID = @id";
 
-                                // Если существующее письмо новее или равно текущему - это дубликат
-                                if (existingDate >= messageDate)
+                                cmd.Parameters.AddWithValue("@folderPath", folderPath ?? "");
+                                cmd.Parameters.AddWithValue("@id", id);
+
+                                int rowsAffected = cmd.ExecuteNonQuery();
+
+                                if (rowsAffected > 0)
                                 {
-                                    Log($"Найден дубликат: ID={existingId}, существующая дата={existingDate:dd.MM.yyyy HH:mm}, текущая дата={messageDate:dd.MM.yyyy HH:mm}");
+                                    Log($"Сертификат помечен как аннулированный: ID={id}, {fio}, {certNumber}");
                                     return true;
                                 }
-
-                                Log($"Найдена более старая запись: ID={existingId}, будет обновлена");
-                                return false;
                             }
                             else
                             {
-                                Log($"Дубликат не найден: {fio}, {certNumber}");
-                                return false;
+                                Log($"Сертификат не найден для аннулирования: {fio}, {certNumber}");
                             }
                         }
+                    }
+                }
+                return false;
+            }
+            catch (Exception ex)
+            {
+                Log($"Ошибка при пометке сертификата как аннулированного: {ex.Message}");
+                return false;
+            }
+        }
+
+        public bool CheckDuplicate(string fio, string certNumber)
+        {
+            try
+            {
+                using (var conn = new FbConnection(_connectionString))
+                {
+                    conn.Open();
+
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        cmd.CommandText = @"SELECT COUNT(*) FROM CERTS 
+                                    WHERE FIO = @fio AND CERT_NUMBER = @certNumber";
+                        cmd.Parameters.AddWithValue("@fio", fio);
+                        cmd.Parameters.AddWithValue("@certNumber", certNumber ?? "");
+
+                        var result = cmd.ExecuteScalar();
+                        bool exists = Convert.ToInt32(result) > 0;
+
+                        if (exists)
+                        {
+                            Log($"Найден дубликат: {fio}, сертификат: {certNumber}");
+                        }
+                        else
+                        {
+                            Log($"Дубликат не найден: {fio}, {certNumber}");
+                        }
+
+                        return exists;
                     }
                 }
             }
@@ -513,30 +559,21 @@ namespace ImapCertWatcher.Data
         {
             try
             {
-                // Фильтруем ненужные сообщения
-                if (message.Contains("Загружена запись:") && message.Contains("Здание:"))
-                    return;
-
-                if (message.Contains("Размер столбца BUILDING увеличен"))
-                    return;
-
+                // Один файл на день вместо файла на каждую секунду
                 string logDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "LOG", DateTime.Now.ToString("yyyy-MM-dd"));
                 if (!Directory.Exists(logDirectory))
                     Directory.CreateDirectory(logDirectory);
 
-                string logFile = Path.Combine(logDirectory, $"log_{DateTime.Now:yyyy-MM-dd_HH-mm-ss}.log");
-                string logEntry = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} - [DbHelper] {message}{Environment.NewLine}";
+                // Файл с именем дня
+                string logFile = Path.Combine(logDirectory, $"log_{DateTime.Now:yyyy-MM-dd}.log");
+                string logEntry = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} - [ImapWatcher] {message}{Environment.NewLine}";
+
                 File.AppendAllText(logFile, logEntry, System.Text.Encoding.UTF8);
 
-                // Также пишем в мини-лог через переданный делегат (только важные сообщения)
-                if (!message.Contains("Загружена запись:") &&
-                    !message.Contains("Размер столбца") &&
-                    !message.Contains("Проверка настроек почты"))
-                {
-                    _addToMiniLog?.Invoke($"[DbHelper] {message}");
-                }
+                // Также пишем в мини-лог через переданный делегат
+                _addToMiniLog?.Invoke($"[ImapWatcher] {message}");
 
-                System.Diagnostics.Debug.WriteLine($"[DbHelper] {message}");
+                System.Diagnostics.Debug.WriteLine($"[ImapWatcher] {message}");
             }
             catch (Exception ex)
             {
