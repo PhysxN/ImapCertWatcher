@@ -563,26 +563,7 @@
                                 </GroupBox>
 
                                 <!-- Фильтрация писем -->
-                                <GroupBox Header="Фильтрация писем" Style="{StaticResource ModernGroupBoxStyle}" Margin="0,12,0,0">
-                                    <StackPanel Margin="6">
-                                        <TextBlock Text="Адрес отправителя:" Margin="0,2" Foreground="{DynamicResource TextColorBrush}"/>
-                                        <TextBox x:Name="txtFilterRecipient" Text="{Binding FilterRecipient}" 
-                                     Style="{StaticResource ModernTextBoxStyle}" Height="26"
-                                     ToolTip="например: uc_fk@roskazna.ru"/>
-                                        <TextBlock Text="Проверяются входящие письма ОТ указанного отправителя с темой 'Сертификат №'" 
-                                       FontStyle="Italic" FontSize="10" 
-                                       Foreground="{DynamicResource TextColorBrush}"
-                                       Margin="0,4,0,4"/>
-
-                                        <TextBlock Text="Префикс темы:" Margin="0,8,0,2" Foreground="{DynamicResource TextColorBrush}"/>
-                                        <TextBox x:Name="txtFilterSubjectPrefix" Text="{Binding FilterSubjectPrefix}" 
-                                     Style="{StaticResource ModernTextBoxStyle}" Height="26"/>
-                                        <TextBlock Text="Письма фильтруются по теме формата: 'Сертификат № &lt;номер&gt; готов'" 
-                                       FontStyle="Italic" FontSize="10" 
-                                       Foreground="{DynamicResource TextColorBrush}"
-                                       Margin="0,4,0,4"/>
-                                    </StackPanel>
-                                </GroupBox>
+                                
 
                                 <!-- Кнопки управления почтой -->
                                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">

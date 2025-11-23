@@ -30,6 +30,7 @@ namespace ImapCertWatcher.Services
         private static Regex fioRegexAlt2 = new Regex(@"ФИО\s*=\s*(?<fio>[\p{L}\s\-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
         private static Regex datesRegexAlt1 = new Regex(@"с\s*(?<ds>\d{2}\.\d{2}\.\d{4}\s+\d{2}:\d{2}:\d{2}).*?по\s*(?<de>\d{2}\.\d{2}\.\d{4}\s+\d{2}:\d{2}:\d{2})", RegexOptions.Compiled | RegexOptions.Singleline);
         private static Regex datesRegexAlt2 = new Regex(@"Срок действия сертификата:\s*с\s*(?<ds>\d{2}\.\d{2}\.\d{4}\s+\d{2}:\d{2}:\d{2})\s*по\s*(?<de>\d{2}\.\d{2}\.\d{4}\s+\d{2}:\d{2}:\d{2})", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static Regex revokeDateRegex = new Regex(@"Дата отзыва сертификата:\s*(?<date>\d{2}\.\d{2}\.\d{4})\s*\d{2}:\d{2}:\d{2}", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         public ImapWatcher(AppSettings settings, DbHelper db, Action<string> addToMiniLog = null)
         {
@@ -51,6 +52,25 @@ namespace ImapCertWatcher.Services
         }
 
 
+
+        private DateTime? ExtractRevokeDate(string body)
+        {
+            var match = revokeDateRegex.Match(body);
+            if (!match.Success)
+                return null;
+
+            if (DateTime.TryParseExact(
+                    match.Groups["date"].Value,
+                    "dd.MM.yyyy",
+                    System.Globalization.CultureInfo.GetCultureInfo("ru-RU"),
+                    System.Globalization.DateTimeStyles.None,
+                    out DateTime date))
+            {
+                return date;
+            }
+
+            return null;
+        }
 
         public (List<CertEntry> processedEntries, int updatedCount, int addedCount) CheckMail(bool checkAllMessages = false)
         {
@@ -141,30 +161,32 @@ namespace ImapCertWatcher.Services
 
                                 // Создаем запрос в зависимости от режима
                                 SearchQuery query;
+                                string filterDescription;
                                 if (checkAllMessages)
                                 {
                                     // Все письма
                                     query =
-    SearchQuery.SubjectContains("Сертификат")
-        .Or(SearchQuery.SubjectContains("аннулирован"))
-        .Or(SearchQuery.SubjectContains("прекратил"))
-        .And(SearchQuery.FromContains(_settings.FilterRecipient));
-                                    Log("Режим: проверка ВСЕХ писем");
+                                            SearchQuery.SubjectContains("Сертификат")
+                                                .Or(SearchQuery.SubjectContains("аннулирован"))
+                                                .Or(SearchQuery.SubjectContains("прекратил"));
+                                                 Log("Режим: проверка ВСЕХ писем");
+                                    filterDescription = "Тема содержит 'Сертификат' ИЛИ 'аннулирован' ИЛИ 'прекратил'";
+
                                 }
                                 else
                                 {
                                     // Только письма за последние 3 дня
                                     var threeDaysAgo = DateTime.Now.AddDays(-3);
                                     query =
-    SearchQuery.SubjectContains("Сертификат")
-        .Or(SearchQuery.SubjectContains("аннулирован"))
-        .Or(SearchQuery.SubjectContains("прекратил"))
-        .And(SearchQuery.FromContains(_settings.FilterRecipient))
-        .And(SearchQuery.DeliveredAfter(threeDaysAgo));
-                                    Log($"Режим: проверка писем за последние 3 дня (с {threeDaysAgo:dd.MM.yyyy})");
+                                            SearchQuery.SubjectContains("Сертификат")
+                                                .Or(SearchQuery.SubjectContains("аннулирован"))
+                                                .Or(SearchQuery.SubjectContains("прекратил"))
+                                                .And(SearchQuery.DeliveredAfter(threeDaysAgo));
+                                        Log($"Режим: проверка писем за последние 3 дня (с {threeDaysAgo:dd.MM.yyyy})");
+                                    filterDescription = "Тема содержит 'Сертификат' ИЛИ 'аннулирован' ИЛИ 'прекратил'";
                                 }
 
-                                Log($"Выполняем поиск писем с критериями: Тема содержит 'Сертификат №', От: {_settings.FilterRecipient}");
+                                Log($"Выполняем поиск писем с критериями: {filterDescription}");
                                 var uids = folder.Search(query);
                                 Log($"В папке {folder.FullName} найдено писем для обработки: {uids.Count}");
 
@@ -196,12 +218,7 @@ namespace ImapCertWatcher.Services
                                             continue;
                                         }
 
-                                        if (!fromAddress.Contains(_settings.FilterRecipient))
-                                        {
-                                            Log($"Пропускаем письмо - отправитель не совпадает: {fromAddress} (ожидается: {_settings.FilterRecipient})");
-                                            continue;
-                                        }
-
+                                        
                                         Log($"Извлекаем данные из письма: номер сертификата, ФИО, даты");
                                         var certNumber = ExtractCertNumber(subject);
                                         var fio = ExtractFio(body);
@@ -665,7 +682,6 @@ namespace ImapCertWatcher.Services
             {
                 Log("Обработка письма об аннулировании сертификата");
 
-                // 1. Извлекаем номер сертификата ИЗ ТЕМЫ
                 var certNumber = ExtractCertNumber(subject);
                 if (string.IsNullOrWhiteSpace(certNumber))
                 {
@@ -673,7 +689,6 @@ namespace ImapCertWatcher.Services
                     return;
                 }
 
-                // 2. Извлекаем ФИО из тела
                 var fio = ExtractFio(body);
                 if (string.IsNullOrWhiteSpace(fio))
                 {
@@ -681,15 +696,18 @@ namespace ImapCertWatcher.Services
                     fio = null;
                 }
 
-                Log($"Аннулированный сертификат: № {certNumber}, ФИО: {fio}");
+                // ← НОВОЕ: извлекаем дату аннулирования
+                var revokeDate = ExtractRevokeDate(body);
+                string revokeDateShort = revokeDate?.ToString("dd.MM.yyyy") ?? null;
 
-                // 3. Пытаемся пометить сертификат в БД (теперь поиск по номеру, а не по ФИО!)
-                bool found = _db.FindAndMarkAsRevokedByCertNumber(certNumber, fio, folderPath);
+                Log($"Аннулированный сертификат: № {certNumber}, ФИО: {fio}, Дата отзыва: {revokeDateShort}");
+
+                bool found = _db.FindAndMarkAsRevokedByCertNumber(certNumber, fio, folderPath, revokeDateShort);
 
                 if (found)
                 {
                     Log($"Сертификат № {certNumber} успешно помечен как аннулированный");
-                    addToMiniLog?.Invoke($"Аннулирован: {fio ?? certNumber}");
+                    addToMiniLog?.Invoke($"Аннулирован: {fio ?? certNumber} ({revokeDateShort})");
                 }
                 else
                 {

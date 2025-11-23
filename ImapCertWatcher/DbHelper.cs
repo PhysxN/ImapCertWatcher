@@ -179,56 +179,80 @@ namespace ImapCertWatcher.Data
             }
         }
 
-        public bool FindAndMarkAsRevokedByCertNumber(string certNumber, string fio, string folderPath)
+        public bool FindAndMarkAsRevokedByCertNumber(string certNumber, string fio, string folderPath, string revokeDateShort)
         {
+            Log($"[Revoke] Поиск сертификата для аннулирования: CertNumber={certNumber}, FIO={fio}, Folder={folderPath}, RevokeDate={revokeDateShort}");
+
             try
             {
                 using (var conn = new FbConnection(_connectionString))
                 {
                     conn.Open();
+                    Log("[Revoke] Подключение к БД открыто");
 
                     using (var cmd = conn.CreateCommand())
                     {
-                        // Ищем только по номеру сертификата — на 100% надёжно
-                        cmd.CommandText = @"SELECT ID FROM CERTS WHERE CERT_NUMBER = @certNumber AND IS_DELETED = 0";
+                        // 1. Ищем сертификат по номеру
+                        cmd.CommandText = @"SELECT ID, NOTE FROM CERTS 
+                                    WHERE CERT_NUMBER = @certNumber 
+                                    AND IS_DELETED = 0";
+
                         cmd.Parameters.AddWithValue("@certNumber", certNumber);
+
+                        Log($"[Revoke] SQL → SELECT ID, NOTE FROM CERTS WHERE CERT_NUMBER='{certNumber}' AND IS_DELETED=0");
 
                         using (var reader = cmd.ExecuteReader())
                         {
-                            if (reader.Read())
+                            if (!reader.Read())
                             {
-                                int id = reader.GetInt32(0);
-                                reader.Close();
-
-                                cmd.Parameters.Clear();
-                                cmd.CommandText = @"
-                            UPDATE CERTS 
-                            SET IS_DELETED = 1,
-                                NOTE = CASE 
-                                    WHEN NOTE IS NULL OR NOTE = '' THEN 'аннулирован'
-                                    ELSE NOTE || '; аннулирован'
-                                END,
-                                FOLDER_PATH = @folderPath
-                            WHERE ID = @id";
-
-                                cmd.Parameters.AddWithValue("@folderPath", folderPath ?? "");
-                                cmd.Parameters.AddWithValue("@id", id);
-
-                                cmd.ExecuteNonQuery();
-                                Log($"Сертификат аннулирован (по номеру): {certNumber}");
-                                return true;
+                                Log($"[Revoke] Сертификат не найден в БД: {certNumber}");
+                                return false;
                             }
-                        }
 
-                        Log($"Сертификат не найден (по номеру): {certNumber}");
+                            int id = reader.GetInt32(0);
+                            string oldNote = reader.IsDBNull(1) ? "" : reader.GetString(1);
+
+                            Log($"[Revoke] Найден сертификат ID={id}, старое примечание='{oldNote}'");
+
+                            reader.Close();
+
+                            // 2. Создаём текст "аннулирован (дата)"
+                            string noteText = !string.IsNullOrEmpty(revokeDateShort)
+                                ? $"аннулирован ({revokeDateShort})"
+                                : "аннулирован";
+
+                            Log($"[Revoke] Результирующая строка примечания: '{noteText}'");
+
+                            // 3. Обновление записи
+                            cmd.Parameters.Clear();
+                            cmd.CommandText = @"
+                        UPDATE CERTS 
+                        SET 
+                            IS_DELETED = 1,
+                            NOTE = CASE 
+                                WHEN NOTE IS NULL OR NOTE = '' THEN @newNote
+                                ELSE NOTE || '; ' || @newNote
+                            END,
+                            FOLDER_PATH = @folderPath
+                        WHERE ID = @id";
+
+                            cmd.Parameters.AddWithValue("@newNote", noteText);
+                            cmd.Parameters.AddWithValue("@folderPath", folderPath ?? "");
+                            cmd.Parameters.AddWithValue("@id", id);
+
+                            Log($"[Revoke] SQL → UPDATE CERTS SET IS_DELETED=1, NOTE=NOTE + '{noteText}', FOLDER_PATH='{folderPath}' WHERE ID={id}");
+
+                            cmd.ExecuteNonQuery();
+
+                            Log($"[Revoke] Сертификат успешно аннулирован: CertNumber={certNumber}, ID={id}");
+                            return true;
+                        }
                     }
                 }
-
-                return false;
             }
             catch (Exception ex)
             {
-                Log($"Ошибка FindAndMarkAsRevokedByCertNumber: {ex.Message}");
+                Log($"[Revoke] Ошибка при аннулировании сертификата: {ex.Message}");
                 return false;
             }
         }

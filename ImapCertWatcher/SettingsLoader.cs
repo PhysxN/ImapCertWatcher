@@ -50,8 +50,6 @@ namespace ImapCertWatcher.Utils
                     case "MailLogin": s.MailLogin = val; break;
                     case "MailPassword": s.MailPassword = val; break;
                     case "ImapFolder": s.ImapFolder = val; break;
-                    case "FilterRecipient": s.FilterRecipient = val; break;
-                    case "FilterSubjectPrefix": s.FilterSubjectPrefix = val; break;
                     case "FirebirdDbPath": s.FirebirdDbPath = val; break;
                     case "FbServer": s.FbServer = val; break;
                     case "FbUser": s.FbUser = val; break;
