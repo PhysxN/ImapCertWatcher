@@ -1,4 +1,5 @@
-﻿using ImapCertWatcher.Data;
+﻿using FirebirdSql.Data.FirebirdClient;
+using ImapCertWatcher.Data;
 using ImapCertWatcher.Models;
 using ImapCertWatcher.Utils;
 using MailKit;
@@ -9,8 +10,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
-using System.Text.RegularExpressions;
 using System.Security.Authentication;
+using System.Text.RegularExpressions;
 
 namespace ImapCertWatcher.Services
 {
@@ -48,6 +49,8 @@ namespace ImapCertWatcher.Services
 
             Log("Инициализация ImapWatcher завершена");
         }
+
+
 
         public (List<CertEntry> processedEntries, int updatedCount, int addedCount) CheckMail(bool checkAllMessages = false)
         {
@@ -203,7 +206,19 @@ namespace ImapCertWatcher.Services
                                             continue;
                                         }
 
-                                        // Сохраняем вложения (ZIP архивы)
+                                        // ★★★★ ПРОВЕРКА ДУБЛИКАТА ДО ОБРАБОТКИ ВЛОЖЕНИЙ ★★★★
+                                        Log($"Проверяем наличие дубликата в БД: {fio}, сертификат: {certNumber}");
+                                        bool isDuplicate = _db.CheckDuplicate(fio, certNumber, messageDate);
+
+                                        if (isDuplicate)
+                                        {
+                                            Log($"Пропускаем письмо (дубликат найден в БД): {fio}, сертификат: {certNumber}");
+                                            continue; // Переходим к следующему письму
+                                        }
+
+                                        Log($"Дубликат не найден, продолжаем обработку письма");
+
+                                        // Сохраняем вложения (ZIP архивы) - только если это не дубликат
                                         Log("Проверяем вложения письма");
                                         string archivePath = SaveAttachments(msg, fio, certNumber);
 
@@ -245,7 +260,7 @@ namespace ImapCertWatcher.Services
                                             }
                                             else
                                             {
-                                                Log($"Пропущено письмо (дубликат): {fio}, сертификат: {certNumber}");
+                                                Log($"Пропущено письмо (дубликат при сохранении): {fio}, сертификат: {certNumber}");
                                             }
 
                                             results.Add(entry);
@@ -331,6 +346,7 @@ namespace ImapCertWatcher.Services
             return (results, updatedCount, addedCount);
         }
 
+        
         private string SaveAttachments(MimeKit.MimeMessage msg, string fio, string certNumber)
         {
             try

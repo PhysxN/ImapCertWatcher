@@ -179,6 +179,59 @@ namespace ImapCertWatcher.Data
             }
         }
 
+        public bool CheckDuplicate(string fio, string certNumber, DateTime messageDate)
+        {
+            try
+            {
+                using (var conn = new FbConnection(_connectionString))
+                {
+                    conn.Open();
+
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        cmd.CommandText = @"SELECT ID, MESSAGE_DATE FROM CERTS 
+                                    WHERE FIO = @fio AND CERT_NUMBER = @certNumber";
+                        cmd.Parameters.AddWithValue("@fio", fio);
+                        cmd.Parameters.AddWithValue("@certNumber", certNumber ?? "");
+
+                        using (var reader = cmd.ExecuteReader())
+                        {
+                            if (reader.Read())
+                            {
+                                int existingId = reader.GetInt32(0);
+                                DateTime existingDate = DateTime.MinValue;
+
+                                if (!reader.IsDBNull(1))
+                                {
+                                    existingDate = reader.GetDateTime(1);
+                                }
+
+                                // Если существующее письмо новее или равно текущему - это дубликат
+                                if (existingDate >= messageDate)
+                                {
+                                    Log($"Найден дубликат: ID={existingId}, существующая дата={existingDate:dd.MM.yyyy HH:mm}, текущая дата={messageDate:dd.MM.yyyy HH:mm}");
+                                    return true;
+                                }
+
+                                Log($"Найдена более старая запись: ID={existingId}, будет обновлена");
+                                return false;
+                            }
+                            else
+                            {
+                                Log($"Дубликат не найден: {fio}, {certNumber}");
+                                return false;
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"Ошибка проверки дубликата: {ex.Message}");
+                return false; // При ошибке лучше пропустить проверку
+            }
+        }
+
         private void TryResizeBuildingColumn(FbConnection conn)
         {
             try

@@ -683,7 +683,7 @@
                     </ScrollViewer>
 
                     <!-- Мини-лог на вкладке настроек -->
-                    <Border Grid.Row="2" Margin="0,12,0,0" BorderBrush="{DynamicResource BorderColorBrush}" BorderThickness="1"
+                    <Border Grid.Row="2" Margin="0,12,0,4" BorderBrush="{DynamicResource BorderColorBrush}" BorderThickness="1"
                 Background="{DynamicResource ControlBackgroundBrush}" CornerRadius="4">
                         <TextBlock x:Name="txtMiniLogSettings" 
                        Margin="4,2"
@@ -702,7 +702,6 @@
                      IsIndeterminate="True"
                      Background="{DynamicResource ControlBackgroundBrush}"
                      Foreground="{DynamicResource AccentColorBrush}"/>
-
                 </Grid>
             </TabItem>
 
