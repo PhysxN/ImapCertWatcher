@@ -179,6 +179,61 @@ namespace ImapCertWatcher.Data
             }
         }
 
+        public bool FindAndMarkAsRevokedByCertNumber(string certNumber, string fio, string folderPath)
+        {
+            try
+            {
+                using (var conn = new FbConnection(_connectionString))
+                {
+                    conn.Open();
+
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        // Ищем только по номеру сертификата — на 100% надёжно
+                        cmd.CommandText = @"SELECT ID FROM CERTS WHERE CERT_NUMBER = @certNumber AND IS_DELETED = 0";
+                        cmd.Parameters.AddWithValue("@certNumber", certNumber);
+
+                        using (var reader = cmd.ExecuteReader())
+                        {
+                            if (reader.Read())
+                            {
+                                int id = reader.GetInt32(0);
+                                reader.Close();
+
+                                cmd.Parameters.Clear();
+                                cmd.CommandText = @"
+                            UPDATE CERTS 
+                            SET IS_DELETED = 1,
+                                NOTE = CASE 
+                                    WHEN NOTE IS NULL OR NOTE = '' THEN 'аннулирован'
+                                    ELSE NOTE || '; аннулирован'
+                                END,
+                                FOLDER_PATH = @folderPath
+                            WHERE ID = @id";
+
+                                cmd.Parameters.AddWithValue("@folderPath", folderPath ?? "");
+                                cmd.Parameters.AddWithValue("@id", id);
+
+                                cmd.ExecuteNonQuery();
+                                Log($"Сертификат аннулирован (по номеру): {certNumber}");
+                                return true;
+                            }
+                        }
+
+                        Log($"Сертификат не найден (по номеру): {certNumber}");
+                    }
+                }
+
+                return false;
+            }
+            catch (Exception ex)
+            {
+                Log($"Ошибка FindAndMarkAsRevokedByCertNumber: {ex.Message}");
+                return false;
+            }
+        }
+
+
         public bool FindAndMarkAsRevoked(string fio, string certNumber, string folderPath)
         {
             try

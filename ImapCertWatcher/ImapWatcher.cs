@@ -144,17 +144,23 @@ namespace ImapCertWatcher.Services
                                 if (checkAllMessages)
                                 {
                                     // Все письма
-                                    query = SearchQuery.SubjectContains("Сертификат №")
-                                                .And(SearchQuery.FromContains(_settings.FilterRecipient));
+                                    query =
+    SearchQuery.SubjectContains("Сертификат")
+        .Or(SearchQuery.SubjectContains("аннулирован"))
+        .Or(SearchQuery.SubjectContains("прекратил"))
+        .And(SearchQuery.FromContains(_settings.FilterRecipient));
                                     Log("Режим: проверка ВСЕХ писем");
                                 }
                                 else
                                 {
                                     // Только письма за последние 3 дня
                                     var threeDaysAgo = DateTime.Now.AddDays(-3);
-                                    query = SearchQuery.SubjectContains("Сертификат №")
-                                                .And(SearchQuery.FromContains(_settings.FilterRecipient))
-                                                .And(SearchQuery.DeliveredAfter(threeDaysAgo));
+                                    query =
+    SearchQuery.SubjectContains("Сертификат")
+        .Or(SearchQuery.SubjectContains("аннулирован"))
+        .Or(SearchQuery.SubjectContains("прекратил"))
+        .And(SearchQuery.FromContains(_settings.FilterRecipient))
+        .And(SearchQuery.DeliveredAfter(threeDaysAgo));
                                     Log($"Режим: проверка писем за последние 3 дня (с {threeDaysAgo:dd.MM.yyyy})");
                                 }
 
@@ -659,36 +665,36 @@ namespace ImapCertWatcher.Services
             {
                 Log("Обработка письма об аннулировании сертификата");
 
-                // Извлекаем номер сертификата из темы
-                var certNumber = ExtractCertNumberFromRevokedSubject(subject);
-                if (string.IsNullOrEmpty(certNumber) || certNumber == "Неизвестно")
+                // 1. Извлекаем номер сертификата ИЗ ТЕМЫ
+                var certNumber = ExtractCertNumber(subject);
+                if (string.IsNullOrWhiteSpace(certNumber))
                 {
-                    Log("Не удалось извлечь номер сертификата из темы аннулирования");
+                    Log("Не удалось извлечь номер сертификата из темы");
                     return;
                 }
 
-                // Извлекаем ФИО из тела письма
+                // 2. Извлекаем ФИО из тела
                 var fio = ExtractFio(body);
-                if (string.IsNullOrEmpty(fio))
+                if (string.IsNullOrWhiteSpace(fio))
                 {
-                    Log("Не удалось извлечь ФИО из письма об аннулировании");
-                    return;
+                    Log("Не удалось извлечь ФИО, продолжаем только с номером сертификата");
+                    fio = null;
                 }
 
-                Log($"Найден аннулированный сертификат: {fio}, номер: {certNumber}");
+                Log($"Аннулированный сертификат: № {certNumber}, ФИО: {fio}");
 
-                // Ищем сертификат в БД
-                var found = _db.FindAndMarkAsRevoked(fio, certNumber, folderPath);
+                // 3. Пытаемся пометить сертификат в БД (теперь поиск по номеру, а не по ФИО!)
+                bool found = _db.FindAndMarkAsRevokedByCertNumber(certNumber, fio, folderPath);
 
                 if (found)
                 {
-                    Log($"Сертификат помечен как аннулированный: {fio}, номер: {certNumber}");
-                    addToMiniLog?.Invoke($"Аннулирован: {fio}");
+                    Log($"Сертификат № {certNumber} успешно помечен как аннулированный");
+                    addToMiniLog?.Invoke($"Аннулирован: {fio ?? certNumber}");
                 }
                 else
                 {
-                    Log($"Сертификат не найден в БД для аннулирования: {fio}, номер: {certNumber}");
-                    addToMiniLog?.Invoke($"Аннулирован (не найден в БД): {fio}");
+                    Log($"Сертификат № {certNumber} НЕ найден в БД");
+                    addToMiniLog?.Invoke($"Аннулирован (не найден в БД): {fio ?? certNumber}");
                 }
             }
             catch (Exception ex)
