@@ -30,52 +30,102 @@ namespace ImapCertWatcher.Data
 
         private string BuildConnectionString()
         {
-            var csb = new FbConnectionStringBuilder
+            try
             {
-                Database = _settings.FirebirdDbPath,
-                UserID = _settings.FbUser,
-                Password = _settings.FbPassword,
-                DataSource = _settings.FbServer,
-                Port = 3050,
-                Charset = "UTF8",
-                Dialect = _settings.FbDialect,
-                ServerType = FbServerType.Default
-            };
+                var csb = new FbConnectionStringBuilder
+                {
+                    Database = _settings.FirebirdDbPath,
+                    UserID = _settings.FbUser ?? "SYSDBA",
+                    Password = _settings.FbPassword ?? "masterkey",
+                    DataSource = _settings.FbServer ?? "127.0.0.1",
+                    Port = 3050,
+                    Charset = "WIN1251",
+                    Dialect = _settings.FbDialect,
+                    ServerType = FbServerType.Default,
+                    Pooling = false
+                };
 
-            Log($"Строка подключения к БД: Server={_settings.FbServer}, Database={_settings.FirebirdDbPath}");
-            return csb.ToString();
+                string connectionString = csb.ToString();
+                Log($"Строка подключения к БД: {connectionString.Replace(_settings.FbPassword ?? "masterkey", "***")}");
+                return connectionString;
+            }
+            catch (Exception ex)
+            {
+                Log($"Ошибка создания строки подключения: {ex.Message}");
+                throw;
+            }
         }
 
         public void EnsureDatabaseAndTable()
         {
-            if (_settings.FbServer == "127.0.0.1" || _settings.FbServer == "localhost")
+            try
             {
-                string dir = Path.GetDirectoryName(_settings.FirebirdDbPath);
-                if (!Directory.Exists(dir))
-                    Directory.CreateDirectory(dir);
+                Log($"Проверка БД: {_settings.FirebirdDbPath}, Сервер: {_settings.FbServer}");
 
-                if (!File.Exists(_settings.FirebirdDbPath))
+                if (_settings.FbServer == "127.0.0.1" || _settings.FbServer == "localhost" || string.IsNullOrEmpty(_settings.FbServer))
                 {
-                    var csb = new FbConnectionStringBuilder(_connectionString);
-                    FbConnection.CreateDatabase(csb.ToString(), pageSize: 16384, forcedWrites: true, overwrite: false);
-                    Log("Локальная база данных создана");
-                }
-            }
+                    string dir = Path.GetDirectoryName(_settings.FirebirdDbPath);
+                    if (!Directory.Exists(dir))
+                    {
+                        Log($"Создаем папку для БД: {dir}");
+                        Directory.CreateDirectory(dir);
+                    }
 
-            using (var conn = new FbConnection(_connectionString))
-            {
-                conn.Open();
+                    if (!File.Exists(_settings.FirebirdDbPath))
+                    {
+                        Log($"Создаем новую базу данных: {_settings.FirebirdDbPath}");
 
-                bool tableExists = CheckTableExists(conn);
+                        // Простой способ создания базы
+                        var createCsb = new FbConnectionStringBuilder
+                        {
+                            Database = _settings.FirebirdDbPath,
+                            UserID = _settings.FbUser ?? "SYSDBA",
+                            Password = _settings.FbPassword ?? "masterkey",
+                            DataSource = _settings.FbServer ?? "127.0.0.1",
+                            Port = 3050,
+                            Charset = "WIN1251",
+                            Dialect = _settings.FbDialect,
+                            ServerType = FbServerType.Default
+                        };
 
-                if (!tableExists)
-                {
-                    CreateTable(conn);
+                        FbConnection.CreateDatabase(createCsb.ToString(), pageSize: 16384, forcedWrites: true, overwrite: false);
+                        Log("Локальная база данных создана в кодировке WIN1251");
+                    }
+                    else
+                    {
+                        Log("База данных уже существует");
+                    }
                 }
                 else
                 {
-                    AddMissingColumns(conn);
+                    Log("Используется удаленный сервер Firebird, проверяем подключение");
                 }
+
+                // Проверяем подключение и структуру таблиц
+                using (var conn = new FbConnection(_connectionString))
+                {
+                    Log("Пытаемся подключиться к БД...");
+                    conn.Open();
+                    Log("Подключение к БД успешно");
+
+                    bool tableExists = CheckTableExists(conn);
+
+                    if (!tableExists)
+                    {
+                        Log("Таблица CERTS не существует, создаем...");
+                        CreateTable(conn);
+                    }
+                    else
+                    {
+                        Log("Таблица CERTS существует, проверяем столбцы...");
+                        AddMissingColumns(conn);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"Ошибка в EnsureDatabaseAndTable: {ex.Message}");
+                throw;
             }
         }
 
