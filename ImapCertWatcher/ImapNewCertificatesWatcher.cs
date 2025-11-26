@@ -1,6 +1,7 @@
 ﻿using MailKit;
 using MailKit.Net.Imap;
 using MailKit.Search;
+using MailKit.Security;
 using MimeKit;
 using System;
 using System.Collections.Generic;
@@ -14,6 +15,13 @@ using ImapCertWatcher.Models;
 
 namespace ImapCertWatcher.Services
 {
+    /// <summary>
+    /// Поиск писем с новыми сертификатами:
+    /// - одна корневая папка _settings.ImapFolder + все вложенные;
+    /// - первый проход: парсим тему/тело, вызываем InsertOrUpdateAndGetId;
+    /// - второй проход: только для помеченных писем качаем ZIP и сохраняем в БД;
+    /// - письма помечаются в PROCESSED_MAILS (KIND='NEW') по UID+папка.
+    /// </summary>
     public class ImapNewCertificatesWatcher
     {
         private readonly AppSettings _settings;
@@ -34,23 +42,16 @@ namespace ImapCertWatcher.Services
         private void Log(string msg) => _log?.Invoke(msg);
 
         /// <summary>
-        /// Основной метод:
-        ///  - подключается к IMAP,
-        ///  - находит корневую папку _settings.ImapFolder,
-        ///  - рекурсивно обходит её и все подпапки,
-        ///  - в каждой папке:
-        ///      1) находит письма с корректной темой;
-        ///      2) извлекает ФИО/номер/даты и делает InsertOrUpdateAndGetId;
-        ///      3) если есть ZIP – скачивает и сохраняет в БД транзакционно.
+        /// Основной метод.
+        /// Возвращает список успешно разобранных CertEntry и счётчики добавленных/обновлённых.
         /// </summary>
-        public (List<CertEntry> processedEntries, int updatedCount, int addedCount)
-            ProcessNewCertificates(bool checkAllMessages = false)
+        public (List<CertEntry> processedEntries, int updatedCount, int addedCount) ProcessNewCertificates(bool checkAllMessages = false)
         {
             var results = new List<CertEntry>();
             int updatedCount = 0;
             int addedCount = 0;
 
-            Log($"=== ImapNewCertificatesWatcher: старт проверки (checkAllMessages={checkAllMessages}) ===");
+            Log("=== ImapNewCertificatesWatcher: старт проверки новых сертификатов ===");
 
             try
             {
@@ -59,451 +60,387 @@ namespace ImapCertWatcher.Services
                     client.Timeout = 60000;
                     client.ServerCertificateValidationCallback = (s, c, h, e) => true;
 
-                    Log($"[Connect] Подключение к {_settings.MailHost}:{_settings.MailPort}, SSL={_settings.MailUseSsl}");
                     if (_settings.MailUseSsl)
-                        client.Connect(_settings.MailHost, _settings.MailPort, MailKit.Security.SecureSocketOptions.SslOnConnect);
+                        client.Connect(_settings.MailHost, _settings.MailPort, SecureSocketOptions.SslOnConnect);
                     else
-                        client.Connect(_settings.MailHost, _settings.MailPort, MailKit.Security.SecureSocketOptions.StartTlsWhenAvailable);
+                        client.Connect(_settings.MailHost, _settings.MailPort, SecureSocketOptions.StartTlsWhenAvailable);
 
-                    Log($"[Auth] Аутентификация как {_settings.MailLogin}");
                     client.Authenticate(_settings.MailLogin, _settings.MailPassword);
 
-                    // Находим корневую папку (ту, что указана в настройках)
-                    var rootFolder = ResolveRootFolder(client, _settings.ImapFolder);
+                    IMailFolder rootFolder = null;
+                    try
+                    {
+                        rootFolder = client.GetFolder(_settings.ImapFolder);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log($"[NEW] Не удалось получить корневую папку '{_settings.ImapFolder}': {ex.Message}");
+                    }
+
                     if (rootFolder == null)
                     {
-                        Log($"[Root] Не удалось найти папку '{_settings.ImapFolder}' ни напрямую, ни через личный namespace.");
+                        Log($"[NEW] Папка '{_settings.ImapFolder}' не найдена. Проверка отменена.");
                         client.Disconnect(true);
                         return (results, updatedCount, addedCount);
                     }
 
-                    Log($"[Root] Старт обработки с папки '{rootFolder.FullName}'");
+                    Log($"[NEW] Корневая папка: '{rootFolder.FullName}' — начинаем рекурсивный обход (checkAll={checkAllMessages}).");
 
-                    // Рекурсивный обход: сама папка + все подпапки
-                    ProcessFolderRecursive(rootFolder, checkAllMessages, results, ref updatedCount, ref addedCount);
+                    // Рекурсивный обход корневой и всех вложенных папок
+                    ProcessFolderRecursive(client, rootFolder, checkAllMessages, results, ref updatedCount, ref addedCount);
 
-                    Log("[Disconnect] Отключение от IMAP-сервера");
                     client.Disconnect(true);
                 }
             }
             catch (Exception exTop)
             {
-                Log($"[ERROR] Ошибка ImapNewCertificatesWatcher: {exTop}");
+                Log($"[NEW] Общая ошибка ImapNewCertificatesWatcher: {exTop}");
             }
 
-            Log($"=== ImapNewCertificatesWatcher: завершено. Всего обработано записей={results.Count}, добавлено={addedCount}, обновлено={updatedCount} ===");
+            Log($"=== ImapNewCertificatesWatcher: завершено. Добавлено={addedCount}, обновлено={updatedCount}, всего записей={results.Count} ===");
             return (results, updatedCount, addedCount);
         }
 
         /// <summary>
-        /// Пытается найти корневую папку по имени:
-        ///  1) Прямой вызов client.GetFolder("Имя");
-        ///  2) Рекурсивный поиск по личному namespace (PersonalNamespaces).
-        /// </summary>
-        private IMailFolder ResolveRootFolder(ImapClient client, string folderName)
-        {
-            IMailFolder folder = null;
-
-            try
-            {
-                folder = client.GetFolder(folderName);
-                if (folder != null)
-                {
-                    Log($"[ResolveRootFolder] Найдена папка напрямую: '{folder.FullName}'");
-                    return folder;
-                }
-            }
-            catch (Exception ex)
-            {
-                Log($"[ResolveRootFolder] Не удалось открыть папку '{folderName}' напрямую: {ex.Message}");
-            }
-
-            try
-            {
-                var ns = client.PersonalNamespaces.FirstOrDefault();
-                if (ns != null)
-                {
-                    var root = client.GetFolder(ns);
-                    Log($"[ResolveRootFolder] Поиск папки '{folderName}' рекурсивно под '{root.FullName}'");
-                    var found = FindFolderRecursive(root, folderName);
-                    if (found != null)
-                    {
-                        Log($"[ResolveRootFolder] Найдена папка рекурсивно: '{found.FullName}'");
-                        return found;
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Log($"[ResolveRootFolder] Ошибка при рекурсивном поиске: {ex.Message}");
-            }
-
-            return null;
-        }
-
-        private IMailFolder FindFolderRecursive(IMailFolder current, string targetName)
-        {
-            if (current.FullName.Equals(targetName, StringComparison.OrdinalIgnoreCase) ||
-                current.Name.Equals(targetName, StringComparison.OrdinalIgnoreCase))
-            {
-                return current;
-            }
-
-            try
-            {
-                foreach (var sub in current.GetSubfolders(false))
-                {
-                    var found = FindFolderRecursive(sub, targetName);
-                    if (found != null) return found;
-                }
-            }
-            catch (Exception ex)
-            {
-                Log($"[FindFolderRecursive] Ошибка при обходе подпапок '{current.FullName}': {ex.Message}");
-            }
-
-            return null;
-        }
-
-        /// <summary>
-        /// Рекурсивно обходит папку и все её подпапки.
-        /// Для каждой папки вызывает ProcessSingleFolder.
+        /// Рекурсивная обработка одной папки и всех её подпапок.
         /// </summary>
         private void ProcessFolderRecursive(
+            ImapClient client,
             IMailFolder folder,
             bool checkAllMessages,
-            List<CertEntry> results,
+            List<CertEntry> globalResults,
             ref int updatedCount,
             ref int addedCount)
         {
             if (folder == null) return;
 
-            Log($"[Folder] === Обработка папки '{folder.FullName}' ===");
+            Log($"[NEW] ---> Обработка папки '{folder.FullName}'");
 
-            // Сначала обрабатываем саму папку
-            ProcessSingleFolder(folder, checkAllMessages, results, ref updatedCount, ref addedCount);
-
-            // Потом рекурсивно все подпапки
-            try
-            {
-                var subs = folder.GetSubfolders(false).ToList();
-                Log($"[Folder] Папка '{folder.FullName}' имеет подпапок: {subs.Count}");
-                foreach (var sub in subs)
-                {
-                    ProcessFolderRecursive(sub, checkAllMessages, results, ref updatedCount, ref addedCount);
-                }
-            }
-            catch (Exception ex)
-            {
-                Log($"[Folder] Ошибка при получении подпапок '{folder.FullName}': {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// Полная логика обработки одной IMAP-папки:
-        ///  - поиск UID сообщений;
-        ///  - Fetch summary (Envelope + BodyStructure + InternalDate);
-        ///  - первый проход: парсинг, InsertOrUpdateAndGetId, отбор кандидатов на ZIP;
-        ///  - второй проход: загрузка ZIP-вложений и сохранение в БД.
-        /// </summary>
-        private void ProcessSingleFolder(
-            IMailFolder folder,
-            bool checkAllMessages,
-            List<CertEntry> results,
-            ref int updatedCount,
-            ref int addedCount)
-        {
             try
             {
                 folder.Open(FolderAccess.ReadOnly);
             }
             catch (Exception exOpen)
             {
-                Log($"[Folder] Не удалось открыть папку '{folder.FullName}': {exOpen.Message}");
+                Log($"[NEW] Не удалось открыть папку '{folder.FullName}': {exOpen.Message}");
                 return;
             }
 
+            // Получаем UIDs
+            IList<UniqueId> uids;
             try
             {
-                // Получаем UIDs (в зависимости от режима)
-                IList<UniqueId> uids;
                 if (checkAllMessages)
-                {
                     uids = folder.Search(SearchQuery.All);
-                }
                 else
+                    // За последние 10 дней (можно увеличить при необходимости)
+                    uids = folder.Search(SearchQuery.DeliveredAfter(DateTime.Now.AddDays(-10)));
+
+                Log($"[NEW][Search] Папка='{folder.FullName}', checkAll={checkAllMessages}, найдено UID: {uids?.Count ?? 0}");
+            }
+            catch (Exception exSearch)
+            {
+                Log($"[NEW] Ошибка Search в папке '{folder.FullName}': {exSearch.Message}");
+                try { folder.Close(); } catch { }
+                return;
+            }
+
+            // Получаем summary
+            var summaries = new List<IMessageSummary>();
+            if (uids != null && uids.Count > 0)
+            {
+                try
                 {
-                    // Можно изменить окно при необходимости
-                    var dateLimit = DateTime.Now.AddDays(-10);
-                    uids = folder.Search(SearchQuery.DeliveredAfter(dateLimit));
+                    summaries.AddRange(
+                        folder.Fetch(
+                            uids,
+                            MessageSummaryItems.Envelope |
+                            MessageSummaryItems.BodyStructure |
+                            MessageSummaryItems.InternalDate
+                        )
+                    );
+                    Log($"[NEW][Fetch] Папка='{folder.FullName}', summaries={summaries.Count}");
+
+                    int preview = 0;
+                    foreach (var s in summaries)
+                    {
+                        var subj = s.Envelope?.Subject ?? "(no subject)";
+                        var dt = s.InternalDate?.ToString() ?? "(no date)";
+                        Log($"[NEW][Preview] Folder='{folder.FullName}' UID={s.UniqueId} Date={dt} Subject='{subj}'");
+                        if (++preview >= 20) break;
+                    }
                 }
-
-                Log($"[Search] Папка='{folder.FullName}', checkAll={checkAllMessages}, найдено UID: {uids?.Count ?? 0}");
-
-                // Получаем summary для быстрого определения структуры/наличия вложений
-                var summaries = new List<IMessageSummary>();
-                if (uids != null && uids.Count > 0)
+                catch (Exception exFetch)
                 {
+                    Log($"[NEW] Ошибка Fetch summaries в папке '{folder.FullName}': {exFetch.Message}");
+                }
+            }
+
+            var subjectStrictRegex = new Regex(
+                @"^" + Regex.Escape(_subjectPrefix) + @"\s*([0-9A-Fa-f]+)\s*$",
+                RegexOptions.Compiled
+            );
+
+            var zipCandidates = new List<(UniqueId uid, int certId)>();
+            int folderProcessed = 0;
+
+            // ---------- 1-й проход: анализируем summary + тело, но не качаем ZIP ----------
+
+            foreach (var s in summaries)
+            {
+                try
+                {
+                    var subject = s.Envelope?.Subject ?? string.Empty;
+                    var uid = s.UniqueId;
+                    var uidStr = uid.ToString();
+                    var folderPath = folder.FullName;
+
+                    // Проверка: уже обрабатывали это письмо как NEW?
+                    if (_db.IsMailProcessed(folderPath, uidStr, "NEW"))
+                    {
+                        Log($"[NEW] Folder='{folderPath}' UID={uidStr}: уже помечено как обработанное (NEW), пропускаем.");
+                        continue;
+                    }
+
+                    // Строгая проверка темы
+                    var m = subjectStrictRegex.Match(subject);
+                    if (!m.Success)
+                    {
+                        Log($"[NEW] Folder='{folderPath}' UID={uid}: тема не соответствует шаблону, пропуск. Subject='{subject}'");
+                        continue;
+                    }
+
+                    MimeMessage message;
                     try
                     {
-                        summaries.AddRange(
-                            folder.Fetch(
-                                uids,
-                                MessageSummaryItems.Envelope |
-                                MessageSummaryItems.BodyStructure |
-                                MessageSummaryItems.InternalDate
-                            )
-                        );
-                        Log($"[Fetch] Папка='{folder.FullName}', summaries count={summaries.Count}");
+                        message = folder.GetMessage(uid);
+                    }
+                    catch (Exception exMsg)
+                    {
+                        Log($"[NEW] Folder='{folderPath}' UID={uid}: ошибка загрузки письма: {exMsg.Message}");
+                        continue;
+                    }
 
-                        // Превью первых 30 писем (UID, дата, тема)
-                        int preview = 0;
-                        foreach (var s in summaries)
+                    var bodyText = GetMessageBody(message) ?? string.Empty;
+                    var fromAddress = message.From.Mailboxes.FirstOrDefault()?.Address ?? string.Empty;
+
+                    var fio = ExtractFio(bodyText);
+                    var certFromSubject = m.Groups[1].Value.Trim();
+                    var certNumber = !string.IsNullOrEmpty(certFromSubject)
+                        ? certFromSubject
+                        : ExtractCertNumber(bodyText);
+                    var dates = ExtractDates(bodyText);
+
+                    if (string.IsNullOrWhiteSpace(fio)
+                        || string.IsNullOrWhiteSpace(certNumber)
+                        || dates.start == DateTime.MinValue
+                        || dates.end == DateTime.MinValue)
+                    {
+                        Log($"[NEW] Folder='{folderPath}' UID={uid}: недостаточно данных (FIO/Cert/Dates). " +
+                            $"fio='{fio}', cert='{certNumber}', start={dates.start}, end={dates.end}");
+                        continue;
+                    }
+
+                    var entry = new CertEntry
+                    {
+                        Fio = fio,
+                        CertNumber = certNumber,
+                        DateStart = dates.start,
+                        DateEnd = dates.end,
+                        DaysLeft = (int)(dates.end - DateTime.Now).TotalDays,
+                        FromAddress = fromAddress,
+                        FolderPath = folderPath,
+                        MailUid = uidStr,
+                        MessageDate = s.InternalDate?.UtcDateTime ?? message.Date.UtcDateTime,
+                        Subject = subject
+                    };
+
+                    try
+                    {
+                        var (wasUpdated, wasAdded, certId) = _db.InsertOrUpdateAndGetId(entry);
+                        if (wasAdded) addedCount++;
+                        if (wasUpdated) updatedCount++;
+
+                        Log($"[NEW] Folder='{folderPath}' UID={uid}: InsertOrUpdateAndGetId -> certId={certId}, added={wasAdded}, updated={wasUpdated}");
+
+                        globalResults.Add(entry);
+                        folderProcessed++;
+
+                        bool hasZipInSummary = BodyStructureHasZip(s);
+                        Log($"[NEW] Folder='{folderPath}' UID={uid}: BodyStructureHasZip={hasZipInSummary}");
+
+                        if (hasZipInSummary && certId > 0)
                         {
-                            var subj = s.Envelope?.Subject ?? "(no subject)";
-                            var dt = s.InternalDate?.ToString() ?? "(no date)";
-                            Log($"[Preview] Folder='{folder.FullName}' UID={s.UniqueId} Date={dt} Subject='{subj}'");
-                            if (++preview >= 30) break;
+                            zipCandidates.Add((uid, certId));
+                            Log($"[NEW] Folder='{folderPath}' UID={uid}: добавлен в очередь скачивания ZIP (certId={certId})");
                         }
+                    }
+                    catch (Exception exDb)
+                    {
+                        Log($"[NEW] Folder='{folderPath}' UID={uid}: ошибка InsertOrUpdateAndGetId: {exDb.Message}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log($"[NEW] Ошибка обработки summary в папке '{folder.FullName}': {ex}");
+                }
+            }
+
+            Log($"[NEW] Папка='{folder.FullName}': 1-й проход завершён. Обработано писем={folderProcessed}, zipCandidates={zipCandidates.Count}");
+
+            // ---------- 2-й проход: скачиваем и сохраняем zip-вложения ----------
+
+            foreach (var (uid, certId) in zipCandidates)
+            {
+                var uidStr = uid.ToString();
+                var folderPath = folder.FullName;
+
+                try
+                {
+                    MimeMessage message;
+                    try
+                    {
+                        message = folder.GetMessage(uid);
                     }
                     catch (Exception ex)
                     {
-                        Log($"[Fetch] Ошибка при Fetch summaries в '{folder.FullName}': {ex.Message}");
+                        Log($"[NEW] Folder='{folderPath}' UID={uid}: ошибка загрузки письма для вложений: {ex.Message}");
+                        continue;
                     }
-                }
-                else
-                {
-                    Log($"[Fetch] Папка='{folder.FullName}': UIDs нет, summaries не запрошены.");
-                }
 
-                // Регекс: тема строго начинается с префикса и затем только номер (без лишнего текста)
-                var subjectStrictRegex = new Regex(
-                    @"^" + Regex.Escape(_subjectPrefix) + @"\s*([0-9A-Fa-f]+)\s*$",
-                    RegexOptions.Compiled
-                );
-
-                // Накапливаем кандидатов для второго прохода (UID + certId)
-                var zipCandidates = new List<(UniqueId uid, int certId)>();
-
-                // ---------- ПЕРВЫЙ ПРОХОД ----------
-                foreach (var s in summaries)
-                {
-                    try
+                    var attachments = message.Attachments?.ToList() ?? new List<MimeEntity>();
+                    if (!attachments.Any())
                     {
-                        var subject = s.Envelope?.Subject ?? string.Empty;
-                        var uid = s.UniqueId;
+                        Log($"[NEW] Folder='{folderPath}' UID={uid}: вложений не найдено (несмотря на BodyStructure).");
+                        continue;
+                    }
 
-                        // Быстрая фильтрация: тема должна строго совпадать по шаблону
-                        var m = subjectStrictRegex.Match(subject);
-                        if (!m.Success)
+                    bool savedAny = false;
+                    foreach (var attach in attachments)
+                    {
+                        string fname = null;
+
+                        if (attach is MimePart mp)
                         {
-                            Log($"[FirstPass] Folder='{folder.FullName}' UID={uid}: тема не соответствует шаблону, пропуск. Subject='{subject}'");
+                            fname = mp.FileName ?? mp.ContentDisposition?.FileName ?? mp.ContentType?.Name;
+                        }
+                        else if (attach is MessagePart mpart)
+                        {
+                            fname = mpart.ContentDisposition?.FileName ?? mpart.ContentType?.Name;
+                        }
+                        else
+                        {
+                            fname = attach.ContentDisposition?.FileName ?? attach.ContentType?.Name ?? Guid.NewGuid().ToString();
+                        }
+
+                        if (string.IsNullOrEmpty(fname))
+                            fname = Guid.NewGuid().ToString() + ".bin";
+
+                        bool isZip = fname.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)
+                                     || (attach.ContentType != null &&
+                                         attach.ContentType.MediaType.Equals("application", StringComparison.OrdinalIgnoreCase) &&
+                                         attach.ContentType.MediaSubtype.Equals("zip", StringComparison.OrdinalIgnoreCase));
+
+                        if (!isZip)
+                        {
+                            Log($"[NEW] Folder='{folderPath}' UID={uid}: вложение '{fname}' не ZIP, пропускаем.");
                             continue;
                         }
 
-                        // Загружаем полное письмо (нужно для парсинга тела и вложений)
-                        MimeMessage message;
+                        string tempDir = Path.Combine(Path.GetTempPath(), "ImapCertWatcher");
+                        if (!Directory.Exists(tempDir)) Directory.CreateDirectory(tempDir);
+
+                        string tempFilePath = Path.Combine(tempDir, $"{Guid.NewGuid()}_{MakeSafeFileName(fname)}");
+
                         try
                         {
-                            message = folder.GetMessage(uid);
-                            Log($"[FirstPass] Folder='{folder.FullName}' UID={uid}: письмо загружено полностью.");
-                        }
-                        catch (Exception ex)
-                        {
-                            Log($"[FirstPass] Folder='{folder.FullName}' UID={uid}: ошибка загрузки письма: {ex.Message}");
-                            continue;
-                        }
-
-                        var bodyText = GetMessageBody(message) ?? string.Empty;
-                        var fromAddress = message.From.Mailboxes.FirstOrDefault()?.Address ?? string.Empty;
-
-                        // Извлекаем ФИО, номер сертификата, даты
-                        var fio = ExtractFio(bodyText);
-                        var certFromSubject = m.Groups[1].Value.Trim();
-                        var certNumber = !string.IsNullOrEmpty(certFromSubject)
-                            ? certFromSubject
-                            : ExtractCertNumber(bodyText);
-                        var dates = ExtractDates(bodyText);
-
-                        Log($"[FirstPass] Folder='{folder.FullName}' UID={uid}: fio='{fio}', cert='{certNumber}', start={dates.start}, end={dates.end}");
-
-                        if (string.IsNullOrWhiteSpace(fio)
-                            || string.IsNullOrWhiteSpace(certNumber)
-                            || dates.start == DateTime.MinValue
-                            || dates.end == DateTime.MinValue)
-                        {
-                            Log($"[FirstPass] Folder='{folder.FullName}' UID={uid}: недостаточно данных (FIO/Cert/Dates) — пропускаем.");
-                            continue;
-                        }
-
-                        var entry = new CertEntry
-                        {
-                            Fio = fio,
-                            CertNumber = certNumber,
-                            DateStart = dates.start,
-                            DateEnd = dates.end,
-                            DaysLeft = (int)(dates.end - DateTime.Now).TotalDays,
-                            FromAddress = fromAddress,
-                            FolderPath = folder.FullName,
-                            MailUid = uid.ToString(),
-                            MessageDate = s.InternalDate?.UtcDateTime ?? message.Date.UtcDateTime,
-                            Subject = subject
-                        };
-
-                        // Сохраняем/обновляем запись атомарно и получаем certId
-                        try
-                        {
-                            var (wasUpdated, wasAdded, certId) = _db.InsertOrUpdateAndGetId(entry);
-                            if (wasAdded) addedCount++;
-                            if (wasUpdated) updatedCount++;
-
-                            Log($"[DB] Folder='{folder.FullName}' UID={uid}: InsertOrUpdateAndGetId -> certId={certId}, added={wasAdded}, updated={wasUpdated}");
-
-                            // Для результатов UI — кладём запись (без привязанного архива)
-                            results.Add(entry);
-
-                            // Проверка: есть ли ZIP во summary (быстро, без загрузки вложений)
-                            bool hasZipInSummary = BodyStructureHasZip(s);
-                            Log($"[FirstPass] Folder='{folder.FullName}' UID={uid}: BodyStructureHasZip={hasZipInSummary}");
-
-                            if (hasZipInSummary && certId > 0)
+                            using (var stream = File.Create(tempFilePath))
                             {
-                                zipCandidates.Add((uid, certId));
-                                Log($"[FirstPass] Folder='{folder.FullName}' UID={uid}: помечено для скачивания архива (certId={certId})");
-                            }
-                        }
-                        catch (Exception exDb)
-                        {
-                            Log($"[DB] Folder='{folder.FullName}' UID={uid}: ошибка InsertOrUpdateAndGetId: {exDb.Message}");
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Log($"[FirstPass] Folder='{folder.FullName}': ошибка при обработке summary: {ex.Message}");
-                    }
-                } // foreach summaries
-
-                Log($"[FirstPass] Папка='{folder.FullName}': завершено. Обработано={summaries.Count}, zipCandidates={zipCandidates.Count}");
-
-                // ---------- ВТОРОЙ ПРОХОД: скачиваем ZIP-вложения ----------
-                foreach (var (uid, certId) in zipCandidates)
-                {
-                    try
-                    {
-                        MimeMessage message;
-                        try
-                        {
-                            message = folder.GetMessage(uid);
-                            Log($"[SecondPass] Folder='{folder.FullName}' UID={uid}: письмо загружено для скачивания вложений.");
-                        }
-                        catch (Exception ex)
-                        {
-                            Log($"[SecondPass] Folder='{folder.FullName}' UID={uid}: ошибка загрузки письма при скачивании вложений: {ex.Message}");
-                            continue;
-                        }
-
-                        var attachments = message.Attachments?.ToList() ?? new List<MimeEntity>();
-                        if (!attachments.Any())
-                        {
-                            Log($"[SecondPass] Folder='{folder.FullName}' UID={uid}: вложений не найдено (несмотря на summary).");
-                            continue;
-                        }
-
-                        bool savedAny = false;
-                        foreach (var attach in attachments)
-                        {
-                            string fname = null;
-
-                            if (attach is MimePart mp)
-                            {
-                                fname = mp.FileName ?? mp.ContentDisposition?.FileName ?? mp.ContentType?.Name;
-                            }
-                            else if (attach is MessagePart mpart)
-                            {
-                                fname = mpart.ContentDisposition?.FileName ?? mpart.ContentType?.Name;
-                            }
-                            else
-                            {
-                                // fallback
-                                fname = attach.ContentDisposition?.FileName ?? attach.ContentType?.Name ?? Guid.NewGuid().ToString();
-                            }
-
-                            if (string.IsNullOrEmpty(fname))
-                                fname = Guid.NewGuid().ToString() + ".bin";
-
-                            bool isZip =
-                                fname.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) ||
-                                (attach.ContentType != null &&
-                                 attach.ContentType.MediaType.Equals("application", StringComparison.OrdinalIgnoreCase) &&
-                                 attach.ContentType.MediaSubtype.Equals("zip", StringComparison.OrdinalIgnoreCase));
-
-                            if (!isZip)
-                            {
-                                Log($"[SecondPass] Folder='{folder.FullName}' UID={uid}: вложение '{fname}' не ZIP, пропуск.");
-                                continue;
-                            }
-
-                            string tempDir = Path.Combine(Path.GetTempPath(), "ImapCertWatcher");
-                            if (!Directory.Exists(tempDir)) Directory.CreateDirectory(tempDir);
-
-                            string tempFilePath = Path.Combine(tempDir, $"{Guid.NewGuid()}_{MakeSafeFileName(fname)}");
-                            try
-                            {
-                                using (var stream = File.Create(tempFilePath))
+                                if (attach is MimePart mimePart)
                                 {
-                                    if (attach is MimePart mimePart)
-                                    {
-                                        mimePart.Content.DecodeTo(stream);
-                                    }
-                                    else if (attach is MessagePart msgPart)
-                                    {
-                                        msgPart.Message.WriteTo(stream);
-                                    }
-                                    else
-                                    {
-                                        // fallback: raw текст
-                                        var txt = attach.ToString();
-                                        var b = System.Text.Encoding.UTF8.GetBytes(txt);
-                                        stream.Write(b, 0, b.Length);
-                                    }
+                                    mimePart.Content.DecodeTo(stream);
                                 }
-
-                                // Транзакционное сохранение архива и обновление ARCHIVE_PATH
-                                bool ok = _db.SaveArchiveToDbTransactional(certId, tempFilePath, Path.GetFileName(tempFilePath));
-                                if (ok)
+                                else if (attach is MessagePart msgPart)
                                 {
-                                    savedAny = true;
-                                    Log($"[SecondPass][DB] Folder='{folder.FullName}' UID={uid}: архив сохранён для certId={certId}: {Path.GetFileName(tempFilePath)}");
+                                    msgPart.Message.WriteTo(stream);
                                 }
                                 else
                                 {
-                                    Log($"[SecondPass][DB] Folder='{folder.FullName}' UID={uid}: ошибка сохранения архива в БД для certId={certId}");
+                                    var txt = attach.ToString();
+                                    var b = System.Text.Encoding.UTF8.GetBytes(txt);
+                                    stream.Write(b, 0, b.Length);
                                 }
                             }
-                            catch (Exception exSave)
-                            {
-                                Log($"[SecondPass] Folder='{folder.FullName}' UID={uid}: ошибка сохранения вложения '{fname}': {exSave.Message}");
-                            }
-                            finally
-                            {
-                                try { File.Delete(tempFilePath); } catch { }
-                            }
-                        } // foreach attachments
 
-                        if (!savedAny)
+                            try
+                            {
+                                _db.DeleteArchiveFromDb(certId);
+                                Log($"[NEW] CertID={certId}: старые архивы удалены перед сохранением нового.");
+                            }
+                            catch (Exception exDel)
+                            {
+                                Log($"[NEW] CertID={certId}: ошибка удаления старых архивов: {exDel.Message}");
+                            }
+
+                            bool ok = _db.SaveArchiveToDbTransactional(certId, tempFilePath, Path.GetFileName(tempFilePath));
+                            if (ok)
+                            {
+                                savedAny = true;
+                                Log($"[NEW] Folder='{folderPath}' UID={uid}: архив сохранён в БД, certId={certId}, file='{Path.GetFileName(tempFilePath)}'");
+                            }
+                            else
+                            {
+                                Log($"[NEW] Folder='{folderPath}' UID={uid}: ошибка SaveArchiveToDbTransactional для certId={certId}");
+                            }
+                        }
+                        catch (Exception exSave)
                         {
-                            Log($"[SecondPass] Folder='{folder.FullName}' UID={uid}: zip-вложение не найдено или не сохранено.");
+                            Log($"[NEW] Folder='{folderPath}' UID={uid}: ошибка сохранения вложения '{fname}': {exSave.Message}");
+                        }
+                        finally
+                        {
+                            try { File.Delete(tempFilePath); } catch { }
                         }
                     }
-                    catch (Exception ex)
+
+                    if (!savedAny)
                     {
-                        Log($"[SecondPass] Folder='{folder.FullName}' UID={uid}: ошибка во 2-м проходе: {ex.Message}");
+                        Log($"[NEW] Folder='{folderPath}' UID={uid}: ZIP-вложение не найдено или не сохранено.");
                     }
-                } // foreach zipCandidates
+                    else
+                    {
+                        try
+                        {
+                            _db.MarkMailProcessed(folderPath, uidStr, "NEW");
+                            Log($"[NEW] Folder='{folderPath}' UID={uidStr}: помечено как обработанное (NEW) в PROCESSED_MAILS.");
+                        }
+                        catch (Exception exMark)
+                        {
+                            Log($"[NEW] Folder='{folderPath}' UID={uidStr}: ошибка MarkMailProcessed(NEW): {exMark.Message}");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log($"[NEW] Ошибка 2-го прохода в папке '{folder.FullName}' UID={uid}: {ex}");
+                }
             }
-            finally
+
+            try { folder.Close(); } catch { }
+
+            // Рекурсивно обрабатываем подпапки
+            try
             {
-                try { folder.Close(); } catch { }
+                var subfolders = folder.GetSubfolders(false).ToList();
+                Log($"[NEW] Папка='{folder.FullName}': найдено подпапок={subfolders.Count}");
+                foreach (var sub in subfolders)
+                {
+                    ProcessFolderRecursive(client, sub, checkAllMessages, globalResults, ref updatedCount, ref addedCount);
+                }
+            }
+            catch (Exception exSub)
+            {
+                Log($"[NEW] Ошибка получения подпапок для '{folder.FullName}': {exSub.Message}");
             }
         }
 
@@ -526,62 +463,53 @@ namespace ImapCertWatcher.Services
 
         private static string ExtractFio(string text)
         {
-            if (string.IsNullOrWhiteSpace(text))
-                return null;
+            if (string.IsNullOrWhiteSpace(text)) return null;
 
-            // Ищем строку, где упоминается "ФИО:"
-            // Берём всё, что после "ФИО:" до конца строки
-            var m = Regex.Match(
-                text,
-                @"^.*ФИО[:\s]*(.+)$",
-                RegexOptions.IgnoreCase | RegexOptions.Multiline);
+            // 1) Основной вариант: строго три "слова" ФИО
+            var m = Regex.Match(text,
+                @"ФИО[:\s]*([А-ЯЁа-яё\-]+\s+[А-ЯЁа-яё\-]+\s+[А-ЯЁа-яё\-]+)",
+                RegexOptions.IgnoreCase);
+            if (m.Success)
+                return m.Groups[1].Value.Trim().Trim('.', ',', ';');
 
-            if (!m.Success)
-                return null;
-
-            var fioRaw = m.Groups[1].Value.Trim();
-
-            // Отрезаем всё после первой точки (обычно ФИО заканчивается точкой)
-            int dotIdx = fioRaw.IndexOf('.');
-            if (dotIdx >= 0)
-                fioRaw = fioRaw.Substring(0, dotIdx);
-
-            // На всякий случай — отрезаем хвост, если в ту же строку попало "Срок действия ..."
-            var cutMarkers = new[]
+            // 2) Запасной вариант – до конца строки/предложения, потом режем по ключевым словам
+            m = Regex.Match(text,
+                @"ФИО[:\s]*([^\r\n]+)",
+                RegexOptions.IgnoreCase);
+            if (m.Success)
             {
-        "Срок действия сертификата",
-        "Срок действия",
-        "Срок действия сертифката",
-        "Срок"
-    };
+                var fio = m.Groups[1].Value;
 
-            foreach (var marker in cutMarkers)
-            {
-                int idx = fioRaw.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
-                if (idx > 0)
+                // Отрезаем служебные фразы, если они попали в захват
+                string[] stopMarkers =
                 {
-                    fioRaw = fioRaw.Substring(0, idx);
-                    break;
+            "Срок действия сертификата",
+            "Срок действия",
+            "Дата отзыва сертификата",
+            "Дата отзыва",
+            "Организация"
+        };
+
+                foreach (var marker in stopMarkers)
+                {
+                    var idx = fio.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+                    if (idx >= 0)
+                    {
+                        fio = fio.Substring(0, idx);
+                        break;
+                    }
                 }
+
+                fio = fio.Trim().Trim('.', ',', ';');
+                // На всякий случай ограничим ФИО максимум 3 "словами"
+                var parts = fio.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length >= 2 && parts.Length <= 4)
+                    fio = string.Join(" ", parts.Take(3));
+
+                return fio;
             }
 
-            // Чистим лишние знаки
-            fioRaw = fioRaw.Trim(' ', '\t', ',', ';', ':');
-
-            // Оставляем только «словные» части (буквы/дефис), как правило Фамилия Имя Отчество
-            var parts = Regex.Matches(fioRaw, @"[\p{L}\-]+")
-                             .Cast<Match>()
-                             .Select(mm => mm.Value)
-                             .ToList();
-
-            if (parts.Count == 0)
-                return null;
-
-            if (parts.Count > 3)
-                parts = parts.Take(3).ToList();
-
-            var fio = string.Join(" ", parts).Trim();
-            return string.IsNullOrWhiteSpace(fio) ? null : fio;
+            return null;
         }
 
         private static string ExtractCertNumber(string text)
@@ -604,15 +532,20 @@ namespace ImapCertWatcher.Services
         {
             if (string.IsNullOrEmpty(text)) return (DateTime.MinValue, DateTime.MinValue);
 
-            var m = Regex.Match(text, @"Срок\s+действия\s+сертификата[:\s]*с\s*([\d\.:\s]+)\s*по\s*([\d\.:\s]+)", RegexOptions.IgnoreCase);
+            var m = Regex.Match(text,
+                @"Срок\s+действия\s+сертификата[:\s]*с\s*([\d\.:\s]+)\s*по\s*([\d\.:\s]+)",
+                RegexOptions.IgnoreCase);
+
             if (m.Success)
             {
-                if (DateTime.TryParseExact(m.Groups[1].Value.Trim(),
+                if (DateTime.TryParseExact(
+                        m.Groups[1].Value.Trim(),
                         new[] { "dd.MM.yyyy HH:mm:ss", "dd.MM.yyyy H:mm:ss", "dd.MM.yyyy" },
                         CultureInfo.InvariantCulture,
                         DateTimeStyles.AssumeLocal,
                         out DateTime s)
-                    && DateTime.TryParseExact(m.Groups[2].Value.Trim(),
+                    && DateTime.TryParseExact(
+                        m.Groups[2].Value.Trim(),
                         new[] { "dd.MM.yyyy HH:mm:ss", "dd.MM.yyyy H:mm:ss", "dd.MM.yyyy" },
                         CultureInfo.InvariantCulture,
                         DateTimeStyles.AssumeLocal,

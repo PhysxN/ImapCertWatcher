@@ -66,6 +66,7 @@ namespace ImapCertWatcher
                 // Очистка старых логов при запуске (в фоне)
                 Task.Run(() => CleanOldLogs());
 
+                // Загружаем настройки (это лёгкая операция, можно оставить в конструкторе)
                 var settingsPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "settings.txt");
                 _settings = SettingsLoader.Load(settingsPath);
 
@@ -75,44 +76,23 @@ namespace ImapCertWatcher
                 pwdFbPassword.Password = _settings.FbPassword;
 
                 cmbImapFolder.ItemsSource = _availableFolders;
-                txtInterval.Text = _settings.CheckIntervalHours.ToString(); // Изменили
+                txtInterval.Text = _settings.CheckIntervalHours.ToString();
 
                 // Загрузка темы
                 LoadThemeSettings();
 
-                try
-                {
-                    // Передаем ссылку на метод AddToMiniLog
-                    _db = new DbHelper(_settings, AddToMiniLog);
+                // Настройка DataGrid и обработчиков – это быстро
+                dgCerts.CanUserAddRows = false;
+                dgCerts.ItemsSource = _items;
 
-                    // создаём два watcher'а
-                    _newWatcher = new ImapNewCertificatesWatcher(_settings, _db, AddToMiniLog);
-                    _revWatcher = new ImapRevocationsWatcher(_settings, _db, AddToMiniLog);
+                dgCerts.CellEditEnding += DgCerts_CellEditEnding;
+                dgCerts.BeginningEdit += DgCerts_BeginningEdit;
+                dgCerts.PreparingCellForEdit += DgCerts_PreparingCellForEdit;
 
-                    dgCerts.CanUserAddRows = false;
-                    dgCerts.ItemsSource = _items;
+                // 🚩 ВАЖНО: никакого DbHelper, LoadFromDb, LoadLogs, таймера здесь!
+                // Всё тяжёлое перенесём в Loaded
 
-                    dgCerts.CellEditEnding += DgCerts_CellEditEnding;
-                    dgCerts.BeginningEdit += DgCerts_BeginningEdit;
-                    dgCerts.PreparingCellForEdit += DgCerts_PreparingCellForEdit;
-
-                    LoadFromDb();
-                    LoadLogs();
-
-                    // Инициализация таймера с часами
-                    if (_settings.CheckIntervalHours > 0)
-                    {
-                        var intervalMs = _settings.CheckIntervalHours * 60 * 60 * 1000;
-                        _timer = new Timer(async _ => await DoCheckAsync(false),
-                            null, TimeSpan.FromMilliseconds(intervalMs), TimeSpan.FromMilliseconds(intervalMs));
-                    }
-                }
-                catch (Exception dbEx)
-                {
-                    MessageBox.Show($"Ошибка инициализации базы данных: {dbEx.Message}\n\n" +
-                                   "Проверьте настройки подключения к Firebird на вкладке 'Настройки БД'.",
-                                   "Ошибка БД", MessageBoxButton.OK, MessageBoxImage.Warning);
-                }
+                this.Loaded += MainWindow_Loaded;
             }
             catch (Exception ex)
             {
@@ -122,6 +102,76 @@ namespace ImapCertWatcher
                 return;
             }
         }
+
+        private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
+        {
+            // Чтобы не сработало второй раз, если окно пересоздадут/перепривяжут
+            this.Loaded -= MainWindow_Loaded;
+
+            AddToMiniLog("Инициализация базы данных и почтовых модулей...");
+            statusText.Text = "Инициализация базы данных...";
+
+            try
+            {
+                // ТЯЖЁЛАЯ ЧАСТЬ – в фоновом потоке
+                var initResult = await Task.Run(() =>
+                {
+                    // 1) Создаём DbHelper (здесь отработает EnsureDatabaseAndTable и т.п.)
+                    var db = new DbHelper(_settings, AddToMiniLog);
+
+                    // 2) Первичная загрузка данных
+                    var list = db.LoadAll(_showDeleted, _currentBuildingFilter);
+
+                    // 3) Создаём watcher'ы
+                    var newWatcher = new ImapNewCertificatesWatcher(_settings, db, AddToMiniLog);
+                    var revWatcher = new ImapRevocationsWatcher(_settings, db, AddToMiniLog);
+
+                    return (db, list, newWatcher, revWatcher);
+                });
+
+                // ЛЁГКАЯ ЧАСТЬ – уже в UI-потоке
+
+                _db = initResult.db;
+                _newWatcher = initResult.newWatcher;
+                _revWatcher = initResult.revWatcher;
+
+                // Заполняем коллекции для грида
+                _allItems.Clear();
+                foreach (var rec in initResult.list)   // ← тут раньше было var e
+                {
+                    rec.HasArchiveInDb = _db.HasArchiveInDb(rec.Id);
+                    _allItems.Add(rec);
+                }
+
+                ApplySearchFilter();
+                AutoFitDataGridColumns();
+
+                // Инициализация таймера
+                _timer?.Dispose();
+                if (_settings.CheckIntervalHours > 0)
+                {
+                    var intervalMs = _settings.CheckIntervalHours * 60 * 60 * 1000;
+                    _timer = new Timer(async _ => await DoCheckAsync(false),
+                        null,
+                        TimeSpan.FromMilliseconds(intervalMs),
+                        TimeSpan.FromMilliseconds(intervalMs));
+                }
+
+                // Логи можно подгрузить уже после всего (это быстро)
+                LoadLogs();
+
+                statusText.Text = "Готово";
+                AddToMiniLog($"Инициализация завершена. Загружено записей: {_allItems.Count}");
+            }
+            catch (Exception ex)
+            {
+                statusText.Text = "Ошибка инициализации";
+                AddToMiniLog($"Ошибка инициализации: {ex.Message}");
+                MessageBox.Show($"Ошибка инициализации: {ex.Message}", "Ошибка",
+                    MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
 
         private void AddToMiniLog(string message)
         {

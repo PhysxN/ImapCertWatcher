@@ -91,6 +91,11 @@ namespace ImapCertWatcher.Data
                         EnsureIndexesAndConstraints(conn);
                         AddMissingColumns(conn);
                     }
+
+                    // --- НОВОЕ: таблица PROCESSED_MAILS ---
+                    if (!CheckTableExists(conn, "PROCESSED_MAILS"))
+                        CreateProcessedMailsTable(conn);
+
                 }
             }
             catch (Exception ex)
@@ -122,6 +127,16 @@ namespace ImapCertWatcher.Data
                     cmd.CommandText = "CREATE SEQUENCE SEQ_CERT_ARCHIVES_ID";
                     cmd.ExecuteNonQuery();
                     Log("SEQ_CERT_ARCHIVES_ID создан");
+                }
+
+                // --- НОВОЕ: генератор для PROCESSED_MAILS ---
+                cmd.CommandText = @"SELECT COUNT(*) FROM RDB$GENERATORS WHERE RDB$GENERATOR_NAME = 'SEQ_PROCESSED_MAILS_ID'";
+                r = Convert.ToInt32(cmd.ExecuteScalar());
+                if (r == 0)
+                {
+                    cmd.CommandText = "CREATE SEQUENCE SEQ_PROCESSED_MAILS_ID";
+                    cmd.ExecuteNonQuery();
+                    Log("SEQ_PROCESSED_MAILS_ID создан");
                 }
             }
         }
@@ -224,6 +239,43 @@ END";
                 TryExecuteNoThrow(cmd);
 
                 Log("Таблица CERT_ARCHIVES создана (если не существовала)");
+            }
+        }
+
+        private void CreateProcessedMailsTable(FbConnection conn, FbTransaction transaction = null)
+        {
+            using (var cmd = conn.CreateCommand())
+            {
+                if (transaction != null)
+                    cmd.Transaction = transaction;
+
+                cmd.CommandText = @"
+CREATE TABLE PROCESSED_MAILS (
+    ID INTEGER NOT NULL PRIMARY KEY,
+    FOLDER_PATH VARCHAR(300),
+    MAIL_UID     VARCHAR(50),
+    KIND         VARCHAR(20),
+    PROCESSED_DATE TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)";
+                TryExecuteNoThrow(cmd);
+
+                cmd.CommandText = @"
+CREATE TRIGGER TRG_PROCESSED_MAILS_BI FOR PROCESSED_MAILS
+ACTIVE BEFORE INSERT POSITION 0
+AS
+BEGIN
+  IF (NEW.ID IS NULL) THEN
+    NEW.ID = NEXT VALUE FOR SEQ_PROCESSED_MAILS_ID;
+END";
+                TryExecuteNoThrow(cmd);
+
+                // Уникальный индекс, чтобы не было дублей по (папка, UID, тип)
+                cmd.CommandText = @"
+CREATE UNIQUE INDEX UQ_PROCESSED_MAILS
+ON PROCESSED_MAILS (FOLDER_PATH, MAIL_UID, KIND)";
+                TryExecuteNoThrow(cmd);
+
+                Log("Таблица PROCESSED_MAILS создана (если не существовала)");
             }
         }
 
@@ -708,82 +760,163 @@ ROWS 1";
                     {
                         try
                         {
-                            // 1) Попытка найти существующую запись по номеру сертификата и ФИО (без учета пробелов/регистра)
-                            using (var selectCmd = conn.CreateCommand())
-                            {
-                                selectCmd.Transaction = tx;
-                                selectCmd.CommandText = @"
-SELECT ID FROM CERTS
-WHERE UPPER(TRIM(CERT_NUMBER)) = @certNumber
-  AND UPPER(TRIM(FIO)) = @fio";
-                                selectCmd.Parameters.AddWithValue("@certNumber", (object)NormalizeCertNumber(entry.CertNumber) ?? "");
-                                selectCmd.Parameters.AddWithValue("@fio", (object)NormalizeFio(entry.Fio) ?? "");
+                            string fioKey = (entry.Fio ?? "").Trim();
+                            string certKey = (entry.CertNumber ?? "").Trim();
 
-                                var scalar = selectCmd.ExecuteScalar();
-                                if (scalar != null && scalar != DBNull.Value)
+                            int existingId = -1;
+                            DateTime existingDateEnd = DateTime.MinValue;
+                            string existingCertNumber = null;
+
+                            // 1) Попытка найти по FIO + CERT_NUMBER (без "умной" нормализации, но с UPPER/TRIM)
+                            using (var cmd = conn.CreateCommand())
+                            {
+                                cmd.Transaction = tx;
+                                cmd.CommandText = @"
+SELECT ID, DATE_END, CERT_NUMBER
+FROM CERTS
+WHERE UPPER(TRIM(FIO)) = UPPER(TRIM(@fio))
+  AND UPPER(TRIM(CERT_NUMBER)) = UPPER(TRIM(@cert))
+ROWS 1";
+                                cmd.Parameters.AddWithValue("@fio", fioKey);
+                                cmd.Parameters.AddWithValue("@cert", certKey);
+
+                                using (var r = cmd.ExecuteReader())
                                 {
-                                    certId = Convert.ToInt32(scalar);
+                                    if (r.Read())
+                                    {
+                                        existingId = r.GetInt32(0);
+                                        existingDateEnd = r.IsDBNull(1) ? DateTime.MinValue : r.GetDateTime(1);
+                                        existingCertNumber = r.IsDBNull(2) ? "" : r.GetString(2);
+                                    }
                                 }
                             }
 
-                            if (certId > 0)
+                            // 2) Если не нашли по FIO+CERT_NUMBER — ищем по одному ФИО (самый свежий сертификат)
+                            if (existingId <= 0)
                             {
-                                // 2a) UPDATE существующей записи (убраны SUBJECT/RECEIVED/MAIL_UID и убрана лишняя запятая)
-                                using (var upd = conn.CreateCommand())
+                                using (var cmd = conn.CreateCommand())
                                 {
-                                    upd.Transaction = tx;
-                                    upd.CommandText = @"
-UPDATE CERTS
-SET FIO = @fio,
-    CERT_NUMBER = @certNumber,
-    DATE_START = @dateStart,
-    DATE_END = @dateEnd,
-    DAYS_LEFT = @daysLeft,
-    FROM_ADDRESS = @fromAddress,
-    FOLDER_PATH = @folderPath,
-    MESSAGE_DATE = @messageDate
-WHERE ID = @id";
-                                    upd.Parameters.AddWithValue("@fio", (object)entry.Fio ?? "");
-                                    upd.Parameters.AddWithValue("@certNumber", (object)entry.CertNumber ?? "");
-                                    upd.Parameters.AddWithValue("@dateStart", entry.DateStart == DateTime.MinValue ? (object)DBNull.Value : entry.DateStart);
-                                    upd.Parameters.AddWithValue("@dateEnd", entry.DateEnd == DateTime.MinValue ? (object)DBNull.Value : entry.DateEnd);
-                                    upd.Parameters.AddWithValue("@daysLeft", entry.DaysLeft);
-                                    upd.Parameters.AddWithValue("@fromAddress", (object)entry.FromAddress ?? "");
-                                    upd.Parameters.AddWithValue("@folderPath", (object)entry.FolderPath ?? "");
-                                    upd.Parameters.AddWithValue("@messageDate", entry.MessageDate == DateTime.MinValue ? (object)DBNull.Value : entry.MessageDate);
-                                    upd.Parameters.AddWithValue("@id", certId);
+                                    cmd.Transaction = tx;
+                                    cmd.CommandText = @"
+SELECT ID, DATE_END, CERT_NUMBER
+FROM CERTS
+WHERE UPPER(TRIM(FIO)) = UPPER(TRIM(@fio))
+ORDER BY DATE_END DESC
+ROWS 1";
+                                    cmd.Parameters.AddWithValue("@fio", fioKey);
 
-                                    int affected = upd.ExecuteNonQuery();
-                                    if (affected > 0) wasUpdated = true;
+                                    using (var r = cmd.ExecuteReader())
+                                    {
+                                        if (r.Read())
+                                        {
+                                            existingId = r.GetInt32(0);
+                                            existingDateEnd = r.IsDBNull(1) ? DateTime.MinValue : r.GetDateTime(1);
+                                            existingCertNumber = r.IsDBNull(2) ? "" : r.GetString(2);
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Нормализуем номер только для сравнения "sameCert"
+                            string existingCertNorm = NormalizeCertNumber(existingCertNumber);
+                            string newCertNorm = NormalizeCertNumber(entry.CertNumber);
+
+                            if (existingId > 0)
+                            {
+                                bool sameCert = existingCertNorm == newCertNorm;
+                                bool isNewer = entry.DateEnd > existingDateEnd;
+
+                                if (sameCert || isNewer)
+                                {
+                                    using (var upd = conn.CreateCommand())
+                                    {
+                                        upd.Transaction = tx;
+                                        upd.CommandText = @"
+UPDATE CERTS SET
+    FIO          = @fioOrig,
+    CERT_NUMBER  = @certOrig,
+    DATE_START   = @dateStart,
+    DATE_END     = @dateEnd,
+    DAYS_LEFT    = @daysLeft,
+    FROM_ADDRESS = @fromAddress,
+    FOLDER_PATH  = @folderPath,
+    MESSAGE_DATE = @msgDate
+WHERE ID = @id";
+
+                                        upd.Parameters.AddWithValue("@fioOrig", (object)entry.Fio ?? "");
+                                        upd.Parameters.AddWithValue("@certOrig", (object)entry.CertNumber ?? "");
+                                        upd.Parameters.AddWithValue("@dateStart",
+                                            entry.DateStart == DateTime.MinValue ? (object)DBNull.Value : entry.DateStart);
+                                        upd.Parameters.AddWithValue("@dateEnd",
+                                            entry.DateEnd == DateTime.MinValue ? (object)DBNull.Value : entry.DateEnd);
+                                        upd.Parameters.AddWithValue("@daysLeft", entry.DaysLeft);
+                                        upd.Parameters.AddWithValue("@fromAddress", (object)entry.FromAddress ?? "");
+                                        upd.Parameters.AddWithValue("@folderPath", (object)entry.FolderPath ?? "");
+                                        upd.Parameters.AddWithValue("@msgDate",
+                                            entry.MessageDate == DateTime.MinValue ? (object)DBNull.Value : entry.MessageDate);
+                                        upd.Parameters.AddWithValue("@id", existingId);
+
+                                        upd.ExecuteNonQuery();
+                                    }
+
+                                    certId = existingId;
+                                    wasUpdated = true;
+
+                                    if (!sameCert && isNewer)
+                                    {
+                                        Log($"InsertOrUpdateAndGetId: ЗАМЕНА сертификата для FIO='{entry.Fio}': " +
+                                            $"старый номер={existingCertNumber}, новый={entry.CertNumber}, " +
+                                            $"старый DATE_END={existingDateEnd:dd.MM.yyyy HH:mm:ss}, " +
+                                            $"новый DATE_END={entry.DateEnd:dd.MM.yyyy HH:mm:ss}");
+                                    }
+                                    else if (sameCert)
+                                    {
+                                        Log($"InsertOrUpdateAndGetId: обновлены данные существующего сертификата для FIO='{entry.Fio}', номер={entry.CertNumber}");
+                                    }
+                                }
+                                else
+                                {
+                                    // Новый сертификат старее или не лучше существующего — не трогаем
+                                    certId = existingId;
+                                    Log($"InsertOrUpdateAndGetId: найден более старый сертификат для FIO='{entry.Fio}', " +
+                                        $"номер={entry.CertNumber}, DATE_END={entry.DateEnd:dd.MM.yyyy HH:mm:ss}. " +
+                                        $"В БД уже есть более новый до {existingDateEnd:dd.MM.yyyy HH:mm:ss}. Запись не изменена.");
                                 }
                             }
                             else
                             {
-                                // 2b) INSERT новой записи и получить ID с помощью RETURNING
+                                // 3) Для этого ФИО в базе ничего нет — обычный INSERT
                                 using (var ins = conn.CreateCommand())
                                 {
                                     ins.Transaction = tx;
                                     ins.CommandText = @"
 INSERT INTO CERTS (
-    FIO, CERT_NUMBER, DATE_START, DATE_END, DAYS_LEFT, FROM_ADDRESS, FOLDER_PATH, MESSAGE_DATE
+    FIO, CERT_NUMBER, DATE_START, DATE_END, DAYS_LEFT,
+    FROM_ADDRESS, FOLDER_PATH, MESSAGE_DATE
 ) VALUES (
-    @fio, @certNumber, @dateStart, @dateEnd, @daysLeft, @fromAddress, @folderPath, @messageDate
+    @fioOrig, @certOrig, @dateStart, @dateEnd, @daysLeft,
+    @fromAddress, @folderPath, @msgDate
 )
 RETURNING ID";
-                                    ins.Parameters.AddWithValue("@fio", (object)entry.Fio ?? "");
-                                    ins.Parameters.AddWithValue("@certNumber", (object)entry.CertNumber ?? "");
-                                    ins.Parameters.AddWithValue("@dateStart", entry.DateStart == DateTime.MinValue ? (object)DBNull.Value : entry.DateStart);
-                                    ins.Parameters.AddWithValue("@dateEnd", entry.DateEnd == DateTime.MinValue ? (object)DBNull.Value : entry.DateEnd);
+
+                                    ins.Parameters.AddWithValue("@fioOrig", (object)entry.Fio ?? "");
+                                    ins.Parameters.AddWithValue("@certOrig", (object)entry.CertNumber ?? "");
+                                    ins.Parameters.AddWithValue("@dateStart",
+                                        entry.DateStart == DateTime.MinValue ? (object)DBNull.Value : entry.DateStart);
+                                    ins.Parameters.AddWithValue("@dateEnd",
+                                        entry.DateEnd == DateTime.MinValue ? (object)DBNull.Value : entry.DateEnd);
                                     ins.Parameters.AddWithValue("@daysLeft", entry.DaysLeft);
                                     ins.Parameters.AddWithValue("@fromAddress", (object)entry.FromAddress ?? "");
                                     ins.Parameters.AddWithValue("@folderPath", (object)entry.FolderPath ?? "");
-                                    ins.Parameters.AddWithValue("@messageDate", entry.MessageDate == DateTime.MinValue ? (object)DBNull.Value : entry.MessageDate);
+                                    ins.Parameters.AddWithValue("@msgDate",
+                                        entry.MessageDate == DateTime.MinValue ? (object)DBNull.Value : entry.MessageDate);
 
                                     var insertedIdObj = ins.ExecuteScalar();
                                     if (insertedIdObj != null && insertedIdObj != DBNull.Value)
                                     {
                                         certId = Convert.ToInt32(insertedIdObj);
                                         wasAdded = true;
+                                        Log($"InsertOrUpdateAndGetId: добавлен новый сертификат ID={certId} для FIO='{entry.Fio}', номер={entry.CertNumber}");
                                     }
                                 }
                             }
@@ -943,6 +1076,95 @@ ORDER BY DATE_END ASC";
         public FbConnection GetConnection() => new FbConnection(_connectionString);
 
         #endregion
+
+        #region Processed mails helpers
+
+        /// <summary>
+        /// Проверяет, обрабатывали ли мы уже письмо с указанным UID в папке и отмеченным типом.
+        /// kind: например, "NEW" (новые сертификаты) или "REVOKE" (аннулирования).
+        /// </summary>
+        public bool IsMailProcessed(string folderPath, string mailUid, string kind)
+        {
+            if (string.IsNullOrEmpty(mailUid)) return false;
+            folderPath = folderPath ?? "";
+            kind = string.IsNullOrEmpty(kind) ? "GENERIC" : kind.ToUpperInvariant();
+
+            try
+            {
+                using (var conn = new FbConnection(_connectionString))
+                {
+                    conn.Open();
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        cmd.CommandText = @"
+SELECT COUNT(*) 
+FROM PROCESSED_MAILS 
+WHERE FOLDER_PATH = @folder AND MAIL_UID = @uid AND KIND = @kind";
+                        cmd.Parameters.AddWithValue("@folder", folderPath);
+                        cmd.Parameters.AddWithValue("@uid", mailUid);
+                        cmd.Parameters.AddWithValue("@kind", kind);
+
+                        var r = Convert.ToInt32(cmd.ExecuteScalar());
+                        return r > 0;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"IsMailProcessed error: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Помечает письмо как обработанное (если уже есть запись — молча игнорируем ошибку уникальности).
+        /// </summary>
+        public void MarkMailProcessed(string folderPath, string mailUid, string kind)
+        {
+            if (string.IsNullOrEmpty(mailUid)) return;
+            folderPath = folderPath ?? "";
+            kind = string.IsNullOrEmpty(kind) ? "GENERIC" : kind.ToUpperInvariant();
+
+            try
+            {
+                using (var conn = new FbConnection(_connectionString))
+                {
+                    conn.Open();
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        cmd.CommandText = @"
+INSERT INTO PROCESSED_MAILS (FOLDER_PATH, MAIL_UID, KIND, PROCESSED_DATE)
+VALUES (@folder, @uid, @kind, @dt)";
+                        cmd.Parameters.AddWithValue("@folder", folderPath);
+                        cmd.Parameters.AddWithValue("@uid", mailUid);
+                        cmd.Parameters.AddWithValue("@kind", kind);
+                        cmd.Parameters.AddWithValue("@dt", DateTime.Now);
+
+                        try
+                        {
+                            cmd.ExecuteNonQuery();
+                            Log($"MarkMailProcessed: folder='{folderPath}', uid='{mailUid}', kind='{kind}'");
+                        }
+                        catch (FbException fbEx)
+                        {
+                            // Если это нарушение уникального индекса — значит уже помечали, просто игнорируем.
+                            Log($"MarkMailProcessed: уже существует запись для UID='{mailUid}', kind='{kind}' ({fbEx.Message})");
+                        }
+                        catch (Exception ex)
+                        {
+                            Log($"MarkMailProcessed error: {ex.Message}");
+                        }
+                    }
+                }
+            }
+            catch (Exception exOuter)
+            {
+                Log($"MarkMailProcessed outer error: {exOuter.Message}");
+            }
+        }
+
+        #endregion
+
 
         #region Revocation helpers
 

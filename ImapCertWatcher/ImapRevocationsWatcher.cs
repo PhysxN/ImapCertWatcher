@@ -8,7 +8,6 @@ using MimeKit;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
-using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 
@@ -20,6 +19,12 @@ namespace ImapCertWatcher.Services
         private readonly DbHelper _db;
         private readonly Action<string> _log;
 
+        // Строгая тема аннулирования:
+        // "Сертификат № 008954001058EE95915C0F731E29907571 аннулирован или прекратил действие"
+        private static readonly Regex SubjectRevokeRegex = new Regex(
+            @"^Сертификат\s*№\s*([0-9A-Fa-f]+)\s+(аннулирован|прекратил\s+действие)",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
         public ImapRevocationsWatcher(AppSettings settings, DbHelper db, Action<string> log = null)
         {
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
@@ -30,25 +35,14 @@ namespace ImapCertWatcher.Services
         private void Log(string msg) => _log?.Invoke(msg);
 
         /// <summary>
-        /// Основной метод:
-        ///  - подключается к IMAP;
-        ///  - находит корневую папку _settings.ImapFolder;
-        ///  - рекурсивно обходит её и все подпапки;
-        ///  - по теме "Сертификат № ... аннулирован (или прекратил действие)" + телу письма
-        ///    ищет сертификат в БД и помечает его аннулированным.
+        /// Основной публичный метод.
+        /// Возвращает количество сертификатов, которые удалось пометить как аннулированные.
         /// </summary>
         public int ProcessRevocations(bool checkAllMessages = false)
         {
-            int applied = 0; // количество успешно применённых аннулирований
+            int applied = 0;
 
-            Log($"=== ImapRevocationsWatcher: старт проверки (checkAllMessages={checkAllMessages}) ===");
-
-            // Строгая тема:
-            // "Сертификат № 008954001058EE95915C0F731E29907571 аннулирован"
-            // или
-            // "Сертификат № 008954001058EE95915C0F731E29907571 аннулирован или прекратил действие"
-            var pattern = @"^Сертификат\s*№\s*([0-9A-Fa-f]+)\s+аннулирован(?:\s+или\s+прекратил\s+действие)?\.?$";
-            var subjectRegex = new Regex(pattern, RegexOptions.IgnoreCase);
+            Log("=== ImapRevocationsWatcher: старт поиска аннулированных сертификатов ===");
 
             try
             {
@@ -57,180 +51,87 @@ namespace ImapCertWatcher.Services
                     client.Timeout = 60000;
                     client.ServerCertificateValidationCallback = (s, c, h, e) => true;
 
-                    Log($"[Connect] Подключение к {_settings.MailHost}:{_settings.MailPort}, SSL={_settings.MailUseSsl}");
                     if (_settings.MailUseSsl)
                         client.Connect(_settings.MailHost, _settings.MailPort, SecureSocketOptions.SslOnConnect);
                     else
                         client.Connect(_settings.MailHost, _settings.MailPort, SecureSocketOptions.StartTlsWhenAvailable);
 
-                    Log($"[Auth] Аутентификация как {_settings.MailLogin}");
                     client.Authenticate(_settings.MailLogin, _settings.MailPassword);
 
-                    // Стартуем из той же папки, что и новые сертификаты
-                    var rootFolder = ResolveRootFolder(client, _settings.ImapFolder);
+                    IMailFolder rootFolder = null;
+                    try
+                    {
+                        rootFolder = client.GetFolder(_settings.ImapFolder);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log($"[REVOKE] Не удалось получить корневую папку '{_settings.ImapFolder}': {ex.Message}");
+                    }
+
                     if (rootFolder == null)
                     {
-                        Log($"[Root] Не удалось найти папку '{_settings.ImapFolder}' для аннулирований.");
+                        Log($"[REVOKE] Папка '{_settings.ImapFolder}' не найдена. Проверка отменена.");
                         client.Disconnect(true);
                         return applied;
                     }
 
-                    Log($"[Root] Старт обработки аннулирований из папки '{rootFolder.FullName}'");
+                    Log($"[REVOKE] Корневая папка: '{rootFolder.FullName}' — начинаем рекурсивный обход (checkAll={checkAllMessages}).");
 
-                    ProcessFolderRecursive(rootFolder, subjectRegex, checkAllMessages, ref applied);
+                    ProcessFolderRecursive(client, rootFolder, checkAllMessages, ref applied);
 
-                    Log("[Disconnect] Отключение от IMAP-сервера");
                     client.Disconnect(true);
                 }
             }
-            catch (Exception ex)
+            catch (Exception exTop)
             {
-                Log($"[Revoke][ERROR] ProcessRevocations error: {ex}");
+                Log($"[REVOKE] Общая ошибка ImapRevocationsWatcher: {exTop}");
             }
 
-            Log($"=== ImapRevocationsWatcher: завершено. Всего применено аннулирований: {applied} ===");
+            Log($"=== ImapRevocationsWatcher: завершено. Аннулирований применено={applied} ===");
             return applied;
         }
 
-        #region Поиск корневой папки и рекурсивный обход
-
-        private IMailFolder ResolveRootFolder(ImapClient client, string folderName)
-        {
-            IMailFolder folder = null;
-
-            try
-            {
-                folder = client.GetFolder(folderName);
-                if (folder != null)
-                {
-                    Log($"[ResolveRootFolder] (Revoke) Найдена папка напрямую: '{folder.FullName}'");
-                    return folder;
-                }
-            }
-            catch (Exception ex)
-            {
-                Log($"[ResolveRootFolder] (Revoke) Не удалось открыть папку '{folderName}' напрямую: {ex.Message}");
-            }
-
-            try
-            {
-                var ns = client.PersonalNamespaces.FirstOrDefault();
-                if (ns != null)
-                {
-                    var root = client.GetFolder(ns);
-                    Log($"[ResolveRootFolder] (Revoke) Поиск папки '{folderName}' рекурсивно под '{root.FullName}'");
-                    var found = FindFolderRecursive(root, folderName);
-                    if (found != null)
-                    {
-                        Log($"[ResolveRootFolder] (Revoke) Найдена папка рекурсивно: '{found.FullName}'");
-                        return found;
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Log($"[ResolveRootFolder] (Revoke) Ошибка при рекурсивном поиске: {ex.Message}");
-            }
-
-            return null;
-        }
-
-        private IMailFolder FindFolderRecursive(IMailFolder current, string targetName)
-        {
-            if (current.FullName.Equals(targetName, StringComparison.OrdinalIgnoreCase) ||
-                current.Name.Equals(targetName, StringComparison.OrdinalIgnoreCase))
-            {
-                return current;
-            }
-
-            try
-            {
-                foreach (var sub in current.GetSubfolders(false))
-                {
-                    var found = FindFolderRecursive(sub, targetName);
-                    if (found != null) return found;
-                }
-            }
-            catch (Exception ex)
-            {
-                Log($"[FindFolderRecursive] (Revoke) Ошибка при обходе подпапок '{current.FullName}': {ex.Message}");
-            }
-
-            return null;
-        }
-
-        private void ProcessFolderRecursive(
-            IMailFolder folder,
-            Regex subjectRegex,
-            bool checkAllMessages,
-            ref int applied)
+        /// <summary>
+        /// Рекурсивная обработка одной папки и её подпапок.
+        /// </summary>
+        private void ProcessFolderRecursive(ImapClient client, IMailFolder folder, bool checkAllMessages, ref int applied)
         {
             if (folder == null) return;
 
-            Log($"[Revoke][Folder] === Обработка папки '{folder.FullName}' ===");
+            Log($"[REVOKE] ---> Обработка папки '{folder.FullName}'");
 
-            ProcessSingleFolder(folder, subjectRegex, checkAllMessages, ref applied);
-
-            try
-            {
-                var subs = folder.GetSubfolders(false).ToList();
-                Log($"[Revoke][Folder] Папка '{folder.FullName}' имеет подпапок: {subs.Count}");
-                foreach (var sub in subs)
-                {
-                    ProcessFolderRecursive(sub, subjectRegex, checkAllMessages, ref applied);
-                }
-            }
-            catch (Exception ex)
-            {
-                Log($"[Revoke][Folder] Ошибка при получении подпапок '{folder.FullName}': {ex.Message}");
-            }
-        }
-
-        #endregion
-
-        #region Обработка одной папки (без ZIP!)
-
-        /// <summary>
-        /// Обработка одной IMAP-папки:
-        ///  - ищем письма с темой "Сертификат № ... аннулирован (или прекратил действие)";
-        ///  - по тексту письма вытаскиваем ФИО и дату отзыва;
-        ///  - вызываем FindAndMarkAsRevokedByCertNumber.
-        /// </summary>
-        private void ProcessSingleFolder(
-            IMailFolder folder,
-            Regex subjectRegex,
-            bool checkAllMessages,
-            ref int applied)
-        {
             try
             {
                 folder.Open(FolderAccess.ReadOnly);
             }
             catch (Exception exOpen)
             {
-                Log($"[Revoke][Folder] Не удалось открыть папку '{folder.FullName}': {exOpen.Message}");
+                Log($"[REVOKE] Не удалось открыть папку '{folder.FullName}': {exOpen.Message}");
                 return;
             }
 
+            IList<UniqueId> uids;
             try
             {
-                // Собираем UID писем
-                IList<UniqueId> uids;
                 if (checkAllMessages)
-                {
                     uids = folder.Search(SearchQuery.All);
-                }
                 else
-                {
-                    // для аннулирований логичнее смотреть более длинный период, чем 10 дней
-                    var dateLimit = DateTime.Now.AddDays(-365);
-                    uids = folder.Search(SearchQuery.DeliveredAfter(dateLimit));
-                }
+                    // Аннулирования могут приходить задним числом — берём за последний год
+                    uids = folder.Search(SearchQuery.DeliveredAfter(DateTime.Now.AddDays(-365)));
 
-                Log($"[Revoke][Search] Папка='{folder.FullName}', checkAll={checkAllMessages}, найдено UID: {uids?.Count ?? 0}");
+                Log($"[REVOKE][Search] Папка='{folder.FullName}', checkAll={checkAllMessages}, найдено UID={uids?.Count ?? 0}");
+            }
+            catch (Exception exSearch)
+            {
+                Log($"[REVOKE] Ошибка Search в папке '{folder.FullName}': {exSearch.Message}");
+                try { folder.Close(); } catch { }
+                return;
+            }
 
-                var summaries = new List<IMessageSummary>();
-                if (uids != null && uids.Count > 0)
+            var summaries = new List<IMessageSummary>();
+            if (uids != null && uids.Count > 0)
+            {
+                try
                 {
                     summaries.AddRange(
                         folder.Fetch(
@@ -240,194 +141,227 @@ namespace ImapCertWatcher.Services
                             MessageSummaryItems.UniqueId
                         )
                     );
+                    Log($"[REVOKE][Fetch] Папка='{folder.FullName}', summaries={summaries.Count}");
+
+                    int preview = 0;
+                    foreach (var s in summaries)
+                    {
+                        var subj = s.Envelope?.Subject ?? "(no subject)";
+                        var dt = s.InternalDate?.ToString() ?? "(no date)";
+                        Log($"[REVOKE][Preview] Folder='{folder.FullName}' UID={s.UniqueId} Date={dt} Subject='{subj}'");
+                        if (++preview >= 20) break;
+                    }
                 }
-
-                Log($"[Revoke][Fetch] Папка='{folder.FullName}', summaries count={summaries.Count}");
-
-                int preview = 0;
-                foreach (var s in summaries)
+                catch (Exception exFetch)
                 {
-                    var subj = s.Envelope?.Subject ?? "(no subject)";
-                    var dt = s.InternalDate?.ToString() ?? "(no date)";
-                    Log($"[Revoke][Preview] Folder='{folder.FullName}' UID={s.UniqueId} Date={dt} Subject='{subj}'");
-                    if (++preview >= 30) break;
+                    Log($"[REVOKE] Ошибка Fetch summaries в папке '{folder.FullName}': {exFetch.Message}");
                 }
+            }
 
-                foreach (var summary in summaries)
+            int folderApplied = 0;
+
+            foreach (var summary in summaries)
+            {
+                var uid = summary.UniqueId;
+                var uidStr = uid.ToString();
+                var folderPath = folder.FullName;
+
+                try
                 {
-                    var uid = summary.UniqueId;
+                    // 1) Проверка: письмо уже обрабатывали как REVOKE?
+                    if (_db.IsMailProcessed(folderPath, uidStr, "REVOKE"))
+                    {
+                        Log($"[REVOKE] Folder='{folderPath}' UID={uidStr}: уже помечено как обработанное (REVOKE), пропускаем.");
+                        continue;
+                    }
+
                     string subject = summary.Envelope?.Subject ?? "";
                     if (string.IsNullOrWhiteSpace(subject))
                     {
-                        Log($"[Revoke] Folder='{folder.FullName}' UID={uid}: пустая тема, пропуск.");
+                        Log($"[REVOKE] Folder='{folderPath}' UID={uidStr}: пустая тема, пропуск.");
                         continue;
                     }
 
-                    var m = subjectRegex.Match(subject);
-                    if (!m.Success)
+                    var mSubj = SubjectRevokeRegex.Match(subject);
+                    if (!mSubj.Success)
                     {
-                        Log($"[Revoke] Folder='{folder.FullName}' UID={uid}: тема не подходит под шаблон аннулирования, пропуск. Subject='{subject}'");
+                        Log($"[REVOKE] Folder='{folderPath}' UID={uidStr}: тема не соответствует шаблону аннулирования, пропуск. Subject='{subject}'");
                         continue;
                     }
 
-                    string certFromSubject = m.Groups[1].Value.Trim();
-                    Log($"[Revoke] Folder='{folder.FullName}' UID={uid}: тема подходит, certFromSubject='{certFromSubject}'");
+                    string certNumberFromSubject = mSubj.Groups[1].Value.Trim();
+                    Log($"[REVOKE] Folder='{folderPath}' UID={uidStr}: тема подходит, номер из темы={certNumberFromSubject}");
 
-                    // Загружаем полное письмо, чтобы прочитать тело
                     MimeMessage message;
                     try
                     {
                         message = folder.GetMessage(uid);
-                        Log($"[Revoke] Folder='{folder.FullName}' UID={uid}: письмо загружено полностью.");
                     }
                     catch (Exception exMsg)
                     {
-                        Log($"[Revoke] Folder='{folder.FullName}' UID={uid}: ошибка загрузки письма: {exMsg.Message}");
+                        Log($"[REVOKE] Folder='{folderPath}' UID={uidStr}: ошибка GetMessage: {exMsg.Message}");
                         continue;
                     }
 
-                    string bodyText = GetMessageBody(message);
-                    Log($"[Revoke] Folder='{folder.FullName}' UID={uid}: длина текста письма={bodyText?.Length ?? 0}");
+                    var bodyText = GetMessageBody(message) ?? string.Empty;
 
-                    // ФИО из тела
-                    string fio = ExtractFio(bodyText) ?? "";
-                    // Дата отзыва из тела
-                    DateTime? revokeDt = ExtractRevokeDate(bodyText);
-                    string revokeDateShort = revokeDt?.ToString("dd.MM.yyyy") ?? "";
+                    // Извлекаем ФИО и дату отзыва
+                    string fio = ExtractFio(bodyText);
+                    var revokeDate = ExtractRevokeDate(bodyText);
+                    string revokeDateShort = revokeDate?.ToString("dd.MM.yyyy") ?? "";
 
-                    Log($"[Revoke] Folder='{folder.FullName}' UID={uid}: parsed fio='{fio}', revokeDate='{revokeDateShort}'");
+                    // Номер сертификата из тела (на случай, если в теме другая форма)
+                    string certNumberFromBody = ExtractCertNumber(bodyText);
+                    string certNumber = !string.IsNullOrEmpty(certNumberFromBody)
+                        ? certNumberFromBody
+                        : certNumberFromSubject;
 
-                    if (string.IsNullOrEmpty(certFromSubject) && string.IsNullOrEmpty(fio))
+                    if (string.IsNullOrEmpty(certNumber) && string.IsNullOrEmpty(fio))
                     {
-                        Log($"[Revoke] Folder='{folder.FullName}' UID={uid}: ни номера из темы, ни ФИО — пропуск.");
+                        Log($"[REVOKE] Folder='{folderPath}' UID={uidStr}: не удалось извлечь ни номер сертификата, ни ФИО — пропуск.");
                         continue;
                     }
 
-                    // На всякий случай: попробуем взять номер сертификата из тела, если в теме не удалось (теоретический случай)
-                    if (string.IsNullOrEmpty(certFromSubject))
+                    Log($"[REVOKE] Folder='{folderPath}' UID={uidStr}: найдено cert='{certNumber}', fio='{fio}', revokeDate='{revokeDateShort}'");
+
+                    bool ok = _db.FindAndMarkAsRevokedByCertNumber(
+                        certNumber,
+                        fio,
+                        folderPath,
+                        revokeDateShort
+                    );
+
+                    if (ok)
                     {
-                        string certFromBody = ExtractCertNumber(bodyText);
-                        if (!string.IsNullOrEmpty(certFromBody))
-                        {
-                            certFromSubject = certFromBody;
-                            Log($"[Revoke] Folder='{folder.FullName}' UID={uid}: номер сертификата взят из тела: '{certFromSubject}'");
-                        }
+                        applied++;
+                        folderApplied++;
+                        Log($"[REVOKE] Folder='{folderPath}' UID={uidStr}: аннулирован сертификат {certNumber} — {fio}");
+                    }
+                    else
+                    {
+                        Log($"[REVOKE] Folder='{folderPath}' UID={uidStr}: сертификат для аннулирования не найден в БД: {certNumber} — {fio}");
                     }
 
-                    // Наконец — помечаем сертификат в базе
+                    // Мы письмо обработали (даже если в БД не нашли сертификат) — помечаем UID
                     try
                     {
-                        bool ok = _db.FindAndMarkAsRevokedByCertNumber(
-                            certFromSubject,
-                            fio,
-                            folder.FullName,
-                            revokeDateShort
-                        );
-
-                        if (ok)
-                        {
-                            applied++;
-                            Log($"[Revoke][APPLY] Folder='{folder.FullName}' UID={uid}: аннулирован сертификат: {certFromSubject} — {fio}, дата='{revokeDateShort}'");
-                        }
-                        else
-                        {
-                            Log($"[Revoke][MISS] Folder='{folder.FullName}' UID={uid}: НЕ найден сертификат для аннулирования: {certFromSubject} — {fio}, дата='{revokeDateShort}'");
-                        }
+                        _db.MarkMailProcessed(folderPath, uidStr, "REVOKE");
+                        Log($"[REVOKE] Folder='{folderPath}' UID={uidStr}: помечено как обработанное (REVOKE) в PROCESSED_MAILS.");
                     }
-                    catch (Exception exDb)
+                    catch (Exception exMark)
                     {
-                        Log($"[Revoke][DB] Folder='{folder.FullName}' UID={uid}: ошибка FindAndMarkAsRevokedByCertNumber: {exDb.Message}");
+                        Log($"[REVOKE] Folder='{folderPath}' UID={uidStr}: ошибка MarkMailProcessed(REVOKE): {exMark.Message}");
+                    }
+
+                    if (!checkAllMessages)
+                    {
+                        // В "быстром" режиме можно выходить после первого подходящего письма
+                        Log($"[REVOKE] Folder='{folderPath}' UID={uidStr}: быстрый режим, выходим после первого письма.");
+                        break;
                     }
                 }
+                catch (Exception exItem)
+                {
+                    Log($"[REVOKE] Ошибка обработки письма Folder='{folder.FullName}' UID={uidStr}: {exItem}");
+                }
             }
-            finally
+
+            Log($"[REVOKE] Папка='{folder.FullName}': применено аннулирований={folderApplied}");
+
+            try { folder.Close(); } catch { }
+
+            // Рекурсивно обрабатываем подпапки
+            try
             {
-                try { folder.Close(); } catch { }
+                var subfolders = folder.GetSubfolders(false).ToList();
+                Log($"[REVOKE] Папка='{folder.FullName}': найдено подпапок={subfolders.Count}");
+                foreach (var sub in subfolders)
+                {
+                    ProcessFolderRecursive(client, sub, checkAllMessages, ref applied);
+                }
+            }
+            catch (Exception exSub)
+            {
+                Log($"[REVOKE] Ошибка получения подпапок для '{folder.FullName}': {exSub.Message}");
             }
         }
 
-        #endregion
-
-        #region Helpers (парсинг текста письма)
+        #region Helpers
 
         private static string GetMessageBody(MimeMessage message)
         {
             if (message == null) return string.Empty;
             if (!string.IsNullOrEmpty(message.TextBody)) return message.TextBody;
-            if (!string.IsNullOrEmpty(message.HtmlBody)) return Regex.Replace(message.HtmlBody, "<.*?>", string.Empty);
+            if (!string.IsNullOrEmpty(message.HtmlBody))
+            {
+                return Regex.Replace(message.HtmlBody, "<.*?>", string.Empty)
+                    .Replace("&nbsp;", " ");
+            }
 
             var textParts = message.BodyParts.OfType<TextPart>().ToList();
             if (textParts.Any()) return textParts.First().Text;
-
             return message.Body?.ToString() ?? string.Empty;
         }
 
         /// <summary>
-        /// Ищем "ФИО: Кулькова Алина Алексеевна."
-        /// или похожие конструкции.
+        /// ФИО из блока:
+        /// "ФИО: Кулькова Алина Алексеевна. Срок действия сертификата..."
+        /// Берём до первой точки или перевода строки.
         /// </summary>
         private static string ExtractFio(string text)
         {
-            if (string.IsNullOrWhiteSpace(text))
-                return null;
+            if (string.IsNullOrWhiteSpace(text)) return null;
 
-            // Ищем строку, где упоминается "ФИО:"
-            // Берём всё, что после "ФИО:" до конца строки
-            var m = Regex.Match(
-                text,
-                @"^.*ФИО[:\s]*(.+)$",
-                RegexOptions.IgnoreCase | RegexOptions.Multiline);
+            // 1) Основной вариант: строго три "слова" ФИО
+            var m = Regex.Match(text,
+                @"ФИО[:\s]*([А-ЯЁа-яё\-]+\s+[А-ЯЁа-яё\-]+\s+[А-ЯЁа-яё\-]+)",
+                RegexOptions.IgnoreCase);
+            if (m.Success)
+                return m.Groups[1].Value.Trim().Trim('.', ',', ';');
 
-            if (!m.Success)
-                return null;
-
-            var fioRaw = m.Groups[1].Value.Trim();
-
-            // Отрезаем всё после первой точки (обычно ФИО заканчивается точкой)
-            int dotIdx = fioRaw.IndexOf('.');
-            if (dotIdx >= 0)
-                fioRaw = fioRaw.Substring(0, dotIdx);
-
-            // На всякий случай — отрезаем хвост, если в ту же строку попало "Срок действия ..."
-            var cutMarkers = new[]
+            // 2) Запасной вариант – до конца строки/предложения, потом режем по ключевым словам
+            m = Regex.Match(text,
+                @"ФИО[:\s]*([^\r\n]+)",
+                RegexOptions.IgnoreCase);
+            if (m.Success)
             {
-        "Срок действия сертификата",
-        "Срок действия",
-        "Срок действия сертифката",
-        "Срок"
-    };
+                var fio = m.Groups[1].Value;
 
-            foreach (var marker in cutMarkers)
-            {
-                int idx = fioRaw.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
-                if (idx > 0)
+                // Отрезаем служебные фразы, если они попали в захват
+                string[] stopMarkers =
                 {
-                    fioRaw = fioRaw.Substring(0, idx);
-                    break;
+            "Срок действия сертификата",
+            "Срок действия",
+            "Дата отзыва сертификата",
+            "Дата отзыва",
+            "Организация"
+        };
+
+                foreach (var marker in stopMarkers)
+                {
+                    var idx = fio.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+                    if (idx >= 0)
+                    {
+                        fio = fio.Substring(0, idx);
+                        break;
+                    }
                 }
+
+                fio = fio.Trim().Trim('.', ',', ';');
+                // На всякий случай ограничим ФИО максимум 3 "словами"
+                var parts = fio.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length >= 2 && parts.Length <= 4)
+                    fio = string.Join(" ", parts.Take(3));
+
+                return fio;
             }
 
-            // Чистим лишние знаки
-            fioRaw = fioRaw.Trim(' ', '\t', ',', ';', ':');
-
-            // Оставляем только «словные» части (буквы/дефис), как правило Фамилия Имя Отчество
-            var parts = Regex.Matches(fioRaw, @"[\p{L}\-]+")
-                             .Cast<Match>()
-                             .Select(mm => mm.Value)
-                             .ToList();
-
-            if (parts.Count == 0)
-                return null;
-
-            if (parts.Count > 3)
-                parts = parts.Take(3).ToList();
-
-            var fio = string.Join(" ", parts).Trim();
-            return string.IsNullOrWhiteSpace(fio) ? null : fio;
+            return null;
         }
 
+
         /// <summary>
-        /// Номер сертификата из текста письма (на случай fallback).
+        /// Номер сертификата из текста (на всякий случай, если в теме другая форма).
         /// </summary>
         private static string ExtractCertNumber(string text)
         {
@@ -443,29 +377,31 @@ namespace ImapCertWatcher.Services
                 RegexOptions.IgnoreCase);
             if (m.Success) return m.Groups[1].Value.Trim();
 
-            m = Regex.Match(text, @"\b([0-9A-Fa-f]{20,})\b");
+            m = Regex.Match(text,
+                @"\b([0-9A-Fa-f]{20,})\b",
+                RegexOptions.IgnoreCase);
             if (m.Success) return m.Groups[1].Value.Trim();
 
             return null;
         }
 
         /// <summary>
-        /// Ищем "Дата отзыва сертификата: 17.04.2025 10:43:29 (по московскому времени)."
-        /// Возвращаем DateTime? (локальное время).
+        /// Дата отзыва сертификата из текста:
+        /// "Дата отзыва сертификата: 17.04.2025 10:43:29 (по московскому времени)."
         /// </summary>
         private static DateTime? ExtractRevokeDate(string text)
         {
             if (string.IsNullOrWhiteSpace(text)) return null;
 
-            // Основной шаблон
             var m = Regex.Match(text,
                 @"Дата\s+отзыва\s+сертификата[:\s]*([\d\.:\s]+)",
                 RegexOptions.IgnoreCase);
+
             if (m.Success)
             {
-                var raw = m.Groups[1].Value.Trim();
+                var val = m.Groups[1].Value.Trim();
                 if (DateTime.TryParseExact(
-                        raw,
+                        val,
                         new[] { "dd.MM.yyyy HH:mm:ss", "dd.MM.yyyy H:mm:ss", "dd.MM.yyyy" },
                         CultureInfo.InvariantCulture,
                         DateTimeStyles.AssumeLocal,
@@ -475,22 +411,18 @@ namespace ImapCertWatcher.Services
                 }
             }
 
-            // Запасной вариант: первая дата после фразы "Дата отзыва"
+            // запасной вариант: первая дата-строка формата "dd.MM.yyyy HH:mm:ss"
             m = Regex.Match(text,
-                @"Дата\s+отзыва.*?([0-3]?\d\.[0-1]?\d\.\d{4})",
-                RegexOptions.IgnoreCase);
-            if (m.Success)
+                @"\b\d{2}\.\d{2}\.\d{4}\s+\d{2}:\d{2}:\d{2}\b");
+            if (m.Success &&
+                DateTime.TryParseExact(
+                    m.Value,
+                    "dd.MM.yyyy HH:mm:ss",
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.AssumeLocal,
+                    out DateTime dt2))
             {
-                var raw = m.Groups[1].Value.Trim();
-                if (DateTime.TryParseExact(
-                        raw,
-                        new[] { "dd.MM.yyyy" },
-                        CultureInfo.InvariantCulture,
-                        DateTimeStyles.AssumeLocal,
-                        out DateTime dt))
-                {
-                    return dt;
-                }
+                return dt2;
             }
 
             return null;
