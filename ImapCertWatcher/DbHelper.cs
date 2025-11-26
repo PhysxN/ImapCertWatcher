@@ -4,6 +4,8 @@ using ImapCertWatcher.Utils;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using System.Text.RegularExpressions;
 
 namespace ImapCertWatcher.Data
 {
@@ -11,416 +13,253 @@ namespace ImapCertWatcher.Data
     {
         private readonly AppSettings _settings;
         private readonly string _connectionString;
-        private readonly string _logDirectory;
         private readonly Action<string> _addToMiniLog;
 
         public DbHelper(AppSettings settings, Action<string> addToMiniLog = null)
         {
-            _settings = settings;
-            _connectionString = BuildConnectionString();
-            _logDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "LOG");
+            _settings = settings ?? throw new ArgumentNullException(nameof(settings));
             _addToMiniLog = addToMiniLog;
-
-            if (!Directory.Exists(_logDirectory))
-                Directory.CreateDirectory(_logDirectory);
+            _connectionString = BuildConnectionString();
 
             EnsureDatabaseAndTable();
-            Log("Инициализация DbHelper завершена");
+            Log("DbHelper инициализирован");
         }
 
         private string BuildConnectionString()
         {
-            try
+            var csb = new FbConnectionStringBuilder
             {
-                var csb = new FbConnectionStringBuilder
-                {
-                    Database = _settings.FirebirdDbPath,
-                    UserID = _settings.FbUser ?? "SYSDBA",
-                    Password = _settings.FbPassword ?? "masterkey",
-                    DataSource = _settings.FbServer ?? "127.0.0.1",
-                    Port = 3050,
-                    Charset = "WIN1251",
-                    Dialect = _settings.FbDialect,
-                    ServerType = FbServerType.Default,
-                    Pooling = false
-                };
+                Database = _settings.FirebirdDbPath,
+                UserID = string.IsNullOrEmpty(_settings.FbUser) ? "SYSDBA" : _settings.FbUser,
+                Password = string.IsNullOrEmpty(_settings.FbPassword) ? "masterkey" : _settings.FbPassword,
+                DataSource = string.IsNullOrEmpty(_settings.FbServer) ? "127.0.0.1" : _settings.FbServer,
+                Port = 3050,
+                // по умолчанию используем WIN1251 если не указано
+                Charset = string.IsNullOrEmpty(_settings.FbCharset) ? "WIN1251" : _settings.FbCharset,
+                Dialect = _settings.FbDialect,
+                ServerType = FbServerType.Default,
+                Pooling = false
+            };
 
-                string connectionString = csb.ToString();
-                Log($"Строка подключения к БД: {connectionString.Replace(_settings.FbPassword ?? "masterkey", "***")}");
-                return connectionString;
-            }
-            catch (Exception ex)
-            {
-                Log($"Ошибка создания строки подключения: {ex.Message}");
-                throw;
-            }
+            Log($"Построена строка подключения: Server={csb.DataSource}, DB={csb.Database}, Charset={csb.Charset}");
+            return csb.ToString();
         }
+
+        #region Initialization: tables, sequences, indices
 
         public void EnsureDatabaseAndTable()
         {
             try
             {
-                Log($"Проверка БД: {_settings.FirebirdDbPath}, Сервер: {_settings.FbServer}");
-
-                if (_settings.FbServer == "127.0.0.1" || _settings.FbServer == "localhost" || string.IsNullOrEmpty(_settings.FbServer))
+                // Если локальная БД не существует — попытка создать (только для локального сервера)
+                if ((string.IsNullOrEmpty(_settings.FbServer) || _settings.FbServer == "127.0.0.1" || _settings.FbServer == "localhost")
+                    && !File.Exists(_settings.FirebirdDbPath))
                 {
-                    string dir = Path.GetDirectoryName(_settings.FirebirdDbPath);
-                    if (!Directory.Exists(dir))
-                    {
-                        Log($"Создаем папку для БД: {dir}");
-                        Directory.CreateDirectory(dir);
-                    }
+                    var dir = Path.GetDirectoryName(_settings.FirebirdDbPath);
+                    if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
 
-                    if (!File.Exists(_settings.FirebirdDbPath))
+                    var createCsb = new FbConnectionStringBuilder
                     {
-                        Log($"Создаем новую базу данных: {_settings.FirebirdDbPath}");
+                        Database = _settings.FirebirdDbPath,
+                        UserID = string.IsNullOrEmpty(_settings.FbUser) ? "SYSDBA" : _settings.FbUser,
+                        Password = string.IsNullOrEmpty(_settings.FbPassword) ? "masterkey" : _settings.FbPassword,
+                        DataSource = string.IsNullOrEmpty(_settings.FbServer) ? "127.0.0.1" : _settings.FbServer,
+                        Port = 3050,
+                        Charset = string.IsNullOrEmpty(_settings.FbCharset) ? "WIN1251" : _settings.FbCharset,
+                        Dialect = _settings.FbDialect,
+                        ServerType = FbServerType.Default
+                    };
 
-                        // Простой способ создания базы
-                        var createCsb = new FbConnectionStringBuilder
-                        {
-                            Database = _settings.FirebirdDbPath,
-                            UserID = _settings.FbUser ?? "SYSDBA",
-                            Password = _settings.FbPassword ?? "masterkey",
-                            DataSource = _settings.FbServer ?? "127.0.0.1",
-                            Port = 3050,
-                            Charset = "WIN1251",
-                            Dialect = _settings.FbDialect,
-                            ServerType = FbServerType.Default
-                        };
-
-                        FbConnection.CreateDatabase(createCsb.ToString(), pageSize: 16384, forcedWrites: true, overwrite: false);
-                        Log("Локальная база данных создана в кодировке WIN1251");
-                    }
-                    else
-                    {
-                        Log("База данных уже существует");
-                    }
-                }
-                else
-                {
-                    Log("Используется удаленный сервер Firebird, проверяем подключение");
+                    FbConnection.CreateDatabase(createCsb.ToString(), pageSize: 16384, forcedWrites: true, overwrite: false);
+                    Log("Локальная база Firebird создана.");
                 }
 
-                // Проверяем подключение и структуру таблиц
                 using (var conn = new FbConnection(_connectionString))
                 {
-                    Log("Пытаемся подключиться к БД...");
                     conn.Open();
-                    Log("Подключение к БД успешно");
 
-                    bool tableExists = CheckTableExists(conn);
-
-                    if (!tableExists)
-                    {
-                        Log("Таблица CERTS не существует, создаем...");
-                        CreateTable(conn);
-                    }
+                    // Создаем последовательности, таблицы и индексы, если необходимо
+                    EnsureSequences(conn);
+                    if (!CheckTableExists(conn, "CERTS"))
+                        CreateCertsAndArchivesTables(conn);
                     else
                     {
-                        Log("Таблица CERTS существует, проверяем столбцы...");
+                        // Таблица есть — создаём недостающие таблицы/индексы
+                        if (!CheckTableExists(conn, "CERT_ARCHIVES"))
+                            CreateArchivesTableOnly(conn);
+
+                        EnsureIndexesAndConstraints(conn);
                         AddMissingColumns(conn);
                     }
                 }
             }
             catch (Exception ex)
             {
-                Log($"Ошибка в EnsureDatabaseAndTable: {ex.Message}");
+                Log($"Ошибка EnsureDatabaseAndTable: {ex.Message}");
                 throw;
             }
         }
 
-        private bool CheckTableExists(FbConnection conn)
+        private void EnsureSequences(FbConnection conn)
         {
             using (var cmd = conn.CreateCommand())
             {
-                cmd.CommandText =
-                    @"SELECT COUNT(*) 
-                      FROM RDB$RELATIONS 
-                      WHERE RDB$RELATION_NAME = 'CERTS' 
-                      AND RDB$SYSTEM_FLAG = 0";
+                // SEQ_CERTS_ID
+                cmd.CommandText = @"SELECT COUNT(*) FROM RDB$GENERATORS WHERE RDB$GENERATOR_NAME = 'SEQ_CERTS_ID'";
+                var r = Convert.ToInt32(cmd.ExecuteScalar());
+                if (r == 0)
+                {
+                    cmd.CommandText = "CREATE SEQUENCE SEQ_CERTS_ID";
+                    cmd.ExecuteNonQuery();
+                    Log("SEQ_CERTS_ID создан");
+                }
 
-                var result = cmd.ExecuteScalar();
-                bool exists = Convert.ToInt32(result) > 0;
-                Log($"Проверка существования таблицы CERTS: {exists}");
-                return exists;
+                // SEQ_CERT_ARCHIVES_ID
+                cmd.CommandText = @"SELECT COUNT(*) FROM RDB$GENERATORS WHERE RDB$GENERATOR_NAME = 'SEQ_CERT_ARCHIVES_ID'";
+                r = Convert.ToInt32(cmd.ExecuteScalar());
+                if (r == 0)
+                {
+                    cmd.CommandText = "CREATE SEQUENCE SEQ_CERT_ARCHIVES_ID";
+                    cmd.ExecuteNonQuery();
+                    Log("SEQ_CERT_ARCHIVES_ID создан");
+                }
             }
         }
 
-        private void CreateTable(FbConnection conn)
+        private bool CheckTableExists(FbConnection conn, string tableName)
         {
             using (var cmd = conn.CreateCommand())
             {
-                cmd.CommandText =
-                    @"CREATE TABLE CERTS (
-                        ID INTEGER NOT NULL PRIMARY KEY,
-                        FIO VARCHAR(200),
-                        DATE_START TIMESTAMP,
-                        DATE_END TIMESTAMP,
-                        DAYS_LEFT INTEGER,
-                        CERT_NUMBER VARCHAR(100),
-                        FROM_ADDRESS VARCHAR(200),
-                        IS_DELETED SMALLINT DEFAULT 0,
-                        NOTE VARCHAR(500),
-                        BUILDING VARCHAR(100),
-                        FOLDER_PATH VARCHAR(300),
-                        ARCHIVE_PATH VARCHAR(500),
-                        MESSAGE_DATE TIMESTAMP
-                    );";
-
-                cmd.ExecuteNonQuery();
-
-                cmd.CommandText = "CREATE SEQUENCE SEQ_CERTS_ID;";
-                cmd.ExecuteNonQuery();
-
-                cmd.CommandText =
-                    @"CREATE TRIGGER CERTS_BI FOR CERTS
-                      ACTIVE BEFORE INSERT POSITION 0
-                      AS
-                      BEGIN
-                        IF (NEW.ID IS NULL) THEN
-                          NEW.ID = NEXT VALUE FOR SEQ_CERTS_ID;
-                      END";
-
-                cmd.ExecuteNonQuery();
-
-                Log("Таблица CERTS создана успешно");
+                cmd.CommandText = @"SELECT COUNT(*) FROM RDB$RELATIONS WHERE RDB$RELATION_NAME = @name AND RDB$SYSTEM_FLAG = 0";
+                cmd.Parameters.AddWithValue("@name", tableName.ToUpperInvariant());
+                var r = Convert.ToInt32(cmd.ExecuteScalar());
+                return r > 0;
             }
+        }
+
+        private void CreateCertsAndArchivesTables(FbConnection conn)
+        {
+            using (var tran = conn.BeginTransaction())
+            {
+                try
+                {
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        cmd.Transaction = tran;
+
+                        cmd.CommandText = @"
+CREATE TABLE CERTS (
+    ID INTEGER NOT NULL PRIMARY KEY,
+    FIO VARCHAR(200),
+    DATE_START TIMESTAMP,
+    DATE_END TIMESTAMP,
+    DAYS_LEFT INTEGER,
+    CERT_NUMBER VARCHAR(100),
+    FROM_ADDRESS VARCHAR(200),
+    IS_DELETED SMALLINT DEFAULT 0,
+    NOTE VARCHAR(1000),
+    BUILDING VARCHAR(100),
+    FOLDER_PATH VARCHAR(300),
+    ARCHIVE_PATH VARCHAR(500),
+    MESSAGE_DATE TIMESTAMP
+)";
+                        cmd.ExecuteNonQuery();
+
+                        cmd.CommandText = @"
+CREATE TRIGGER TRG_CERTS_BI FOR CERTS
+ACTIVE BEFORE INSERT POSITION 0
+AS
+BEGIN
+  IF (NEW.ID IS NULL) THEN
+    NEW.ID = NEXT VALUE FOR SEQ_CERTS_ID;
+END";
+                        cmd.ExecuteNonQuery();
+
+                        Log("Таблица CERTS и триггер созданы");
+                    }
+
+                    CreateArchivesTableOnly(conn, tran);
+
+                    tran.Commit();
+                }
+                catch
+                {
+                    tran.Rollback();
+                    throw;
+                }
+            }
+
+            // Создаём индексы/уникальность после создания таблиц (с проверкой)
+            CreateIndexIfNotExists(conn, "IDX_CERTS_NUMBER", "CERTS", "CERT_NUMBER", false);
+            CreateIndexIfNotExists(conn, "IDX_CERTS_FIO", "CERTS", "FIO", false);
+            CreateIndexIfNotExists(conn, "UQ_CERTS_FIO_NUMBER", "CERTS", "FIO, CERT_NUMBER", true);
+        }
+
+        private void CreateArchivesTableOnly(FbConnection conn, FbTransaction transaction = null)
+        {
+            using (var cmd = conn.CreateCommand())
+            {
+                if (transaction != null) cmd.Transaction = transaction;
+
+                cmd.CommandText = @"
+CREATE TABLE CERT_ARCHIVES (
+    ID INTEGER NOT NULL PRIMARY KEY,
+    CERT_ID INTEGER NOT NULL,
+    FILE_NAME VARCHAR(255) NOT NULL,
+    FILE_DATA BLOB SUB_TYPE 0,
+    FILE_SIZE INTEGER,
+    UPLOAD_DATE TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT FK_CERT_ARCHIVES_CERTS FOREIGN KEY (CERT_ID) REFERENCES CERTS(ID) ON DELETE CASCADE
+)";
+                TryExecuteNoThrow(cmd);
+
+                cmd.CommandText = @"
+CREATE TRIGGER TRG_CERT_ARCHIVES_BI FOR CERT_ARCHIVES
+ACTIVE BEFORE INSERT POSITION 0
+AS
+BEGIN
+  IF (NEW.ID IS NULL) THEN
+    NEW.ID = NEXT VALUE FOR SEQ_CERT_ARCHIVES_ID;
+END";
+                TryExecuteNoThrow(cmd);
+
+                Log("Таблица CERT_ARCHIVES создана (если не существовала)");
+            }
+        }
+
+        private void EnsureIndexesAndConstraints(FbConnection conn)
+        {
+            // Создаём индексы, если их нет (Firebird 2.5 не поддерживает CREATE INDEX IF NOT EXISTS)
+            CreateIndexIfNotExists(conn, "IDX_CERTS_NUMBER", "CERTS", "CERT_NUMBER", false);
+            CreateIndexIfNotExists(conn, "IDX_CERTS_FIO", "CERTS", "FIO", false);
+            CreateIndexIfNotExists(conn, "UQ_CERTS_FIO_NUMBER", "CERTS", "FIO, CERT_NUMBER", true);
         }
 
         private void AddMissingColumns(FbConnection conn)
         {
-            var columnsToAdd = new Dictionary<string, string>
+            var needed = new Dictionary<string, string>
             {
-                { "CERT_NUMBER", "VARCHAR(100)" },
-                { "FROM_ADDRESS", "VARCHAR(200)" },
-                { "IS_DELETED", "SMALLINT DEFAULT 0" },
-                { "NOTE", "VARCHAR(500)" },
-                { "BUILDING", "VARCHAR(100)" },
-                { "FOLDER_PATH", "VARCHAR(300)" },
-                { "ARCHIVE_PATH", "VARCHAR(500)" },
-                { "MESSAGE_DATE", "TIMESTAMP" }
+                {"CERT_NUMBER", "VARCHAR(100)"},
+                {"FROM_ADDRESS", "VARCHAR(200)"},
+                {"IS_DELETED", "SMALLINT DEFAULT 0"},
+                {"NOTE", "VARCHAR(1000)"},
+                {"BUILDING", "VARCHAR(100)"},
+                {"FOLDER_PATH", "VARCHAR(300)"},
+                {"ARCHIVE_PATH", "VARCHAR(500)"},
+                {"MESSAGE_DATE", "TIMESTAMP"}
             };
 
-            foreach (var column in columnsToAdd)
+            foreach (var kv in needed)
             {
-                if (!ColumnExists(conn, column.Key))
+                if (!ColumnExists(conn, kv.Key))
                 {
-                    try
-                    {
-                        using (var cmd = conn.CreateCommand())
-                        {
-                            cmd.CommandText = $@"ALTER TABLE CERTS ADD {column.Key} {column.Value}";
-                            cmd.ExecuteNonQuery();
-                            Log($"Добавлен столбец: {column.Key}");
-                        }
-                    }
-                    catch (FbException ex)
-                    {
-                        Log($"Ошибка при добавлении столбца {column.Key}: {ex.Message}");
-                    }
-                }
-                else
-                {
-                    if (column.Key == "BUILDING")
-                    {
-                        TryResizeBuildingColumn(conn);
-                    }
-                }
-            }
-        }
-
-        public bool FindAndMarkAsRevokedByCertNumber(string certNumber, string fio, string folderPath, string revokeDateShort)
-        {
-            Log($"[Revoke] Поиск сертификата для аннулирования: CertNumber={certNumber}, FIO={fio}, Folder={folderPath}, RevokeDate={revokeDateShort}");
-
-            try
-            {
-                using (var conn = new FbConnection(_connectionString))
-                {
-                    conn.Open();
-                    Log("[Revoke] Подключение к БД открыто");
-
                     using (var cmd = conn.CreateCommand())
                     {
-                        // 1. Ищем сертификат по номеру
-                        cmd.CommandText = @"SELECT ID, NOTE FROM CERTS 
-                                    WHERE CERT_NUMBER = @certNumber 
-                                    AND IS_DELETED = 0";
-
-                        cmd.Parameters.AddWithValue("@certNumber", certNumber);
-
-                        Log($"[Revoke] SQL → SELECT ID, NOTE FROM CERTS WHERE CERT_NUMBER='{certNumber}' AND IS_DELETED=0");
-
-                        using (var reader = cmd.ExecuteReader())
-                        {
-                            if (!reader.Read())
-                            {
-                                Log($"[Revoke] Сертификат не найден в БД: {certNumber}");
-                                return false;
-                            }
-
-                            int id = reader.GetInt32(0);
-                            string oldNote = reader.IsDBNull(1) ? "" : reader.GetString(1);
-
-                            Log($"[Revoke] Найден сертификат ID={id}, старое примечание='{oldNote}'");
-
-                            reader.Close();
-
-                            // 2. Создаём текст "аннулирован (дата)"
-                            string noteText = !string.IsNullOrEmpty(revokeDateShort)
-                                ? $"аннулирован ({revokeDateShort})"
-                                : "аннулирован";
-
-                            Log($"[Revoke] Результирующая строка примечания: '{noteText}'");
-
-                            // 3. Обновление записи
-                            cmd.Parameters.Clear();
-                            cmd.CommandText = @"
-                        UPDATE CERTS 
-                        SET 
-                            IS_DELETED = 1,
-                            NOTE = CASE 
-                                WHEN NOTE IS NULL OR NOTE = '' THEN @newNote
-                                ELSE NOTE || '; ' || @newNote
-                            END,
-                            FOLDER_PATH = @folderPath
-                        WHERE ID = @id";
-
-                            cmd.Parameters.AddWithValue("@newNote", noteText);
-                            cmd.Parameters.AddWithValue("@folderPath", folderPath ?? "");
-                            cmd.Parameters.AddWithValue("@id", id);
-
-                            Log($"[Revoke] SQL → UPDATE CERTS SET IS_DELETED=1, NOTE=NOTE + '{noteText}', FOLDER_PATH='{folderPath}' WHERE ID={id}");
-
-                            cmd.ExecuteNonQuery();
-
-                            Log($"[Revoke] Сертификат успешно аннулирован: CertNumber={certNumber}, ID={id}");
-                            return true;
-                        }
+                        cmd.CommandText = $"ALTER TABLE CERTS ADD {kv.Key} {kv.Value}";
+                        TryExecuteNoThrow(cmd);
+                        Log($"Добавлен столбец {kv.Key}");
                     }
                 }
-            }
-            catch (Exception ex)
-            {
-                Log($"[Revoke] Ошибка при аннулировании сертификата: {ex.Message}");
-                return false;
-            }
-        }
-
-
-        public bool FindAndMarkAsRevoked(string fio, string certNumber, string folderPath)
-        {
-            try
-            {
-                using (var conn = new FbConnection(_connectionString))
-                {
-                    conn.Open();
-
-                    using (var cmd = conn.CreateCommand())
-                    {
-                        cmd.CommandText = @"SELECT ID FROM CERTS 
-                                    WHERE FIO = @fio AND CERT_NUMBER = @certNumber
-                                    AND IS_DELETED = 0";
-                        cmd.Parameters.AddWithValue("@fio", fio);
-                        cmd.Parameters.AddWithValue("@certNumber", certNumber ?? "");
-
-                        using (var reader = cmd.ExecuteReader())
-                        {
-                            if (reader.Read())
-                            {
-                                int id = reader.GetInt32(0);
-                                reader.Close();
-
-                                // Обновляем запись - помечаем как удаленную и добавляем примечание
-                                cmd.Parameters.Clear();
-                                cmd.CommandText = @"UPDATE CERTS 
-                                            SET IS_DELETED = 1, 
-                                                NOTE = CASE 
-                                                    WHEN NOTE IS NULL OR NOTE = '' THEN 'аннулирован' 
-                                                    ELSE NOTE || '; аннулирован' 
-                                                END,
-                                                FOLDER_PATH = @folderPath
-                                            WHERE ID = @id";
-
-                                cmd.Parameters.AddWithValue("@folderPath", folderPath ?? "");
-                                cmd.Parameters.AddWithValue("@id", id);
-
-                                int rowsAffected = cmd.ExecuteNonQuery();
-
-                                if (rowsAffected > 0)
-                                {
-                                    Log($"Сертификат помечен как аннулированный: ID={id}, {fio}, {certNumber}");
-                                    return true;
-                                }
-                            }
-                            else
-                            {
-                                Log($"Сертификат не найден для аннулирования: {fio}, {certNumber}");
-                            }
-                        }
-                    }
-                }
-                return false;
-            }
-            catch (Exception ex)
-            {
-                Log($"Ошибка при пометке сертификата как аннулированного: {ex.Message}");
-                return false;
-            }
-        }
-
-        public bool CheckDuplicate(string fio, string certNumber)
-        {
-            try
-            {
-                using (var conn = new FbConnection(_connectionString))
-                {
-                    conn.Open();
-
-                    using (var cmd = conn.CreateCommand())
-                    {
-                        cmd.CommandText = @"SELECT COUNT(*) FROM CERTS 
-                                    WHERE FIO = @fio AND CERT_NUMBER = @certNumber";
-                        cmd.Parameters.AddWithValue("@fio", fio);
-                        cmd.Parameters.AddWithValue("@certNumber", certNumber ?? "");
-
-                        var result = cmd.ExecuteScalar();
-                        bool exists = Convert.ToInt32(result) > 0;
-
-                        if (exists)
-                        {
-                            Log($"Найден дубликат: {fio}, сертификат: {certNumber}");
-                        }
-                        else
-                        {
-                            Log($"Дубликат не найден: {fio}, {certNumber}");
-                        }
-
-                        return exists;
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Log($"Ошибка проверки дубликата: {ex.Message}");
-                return false; // При ошибке лучше пропустить проверку
-            }
-        }
-
-        private void TryResizeBuildingColumn(FbConnection conn)
-        {
-            try
-            {
-                using (var cmd = conn.CreateCommand())
-                {
-                    cmd.CommandText = @"ALTER TABLE CERTS ALTER COLUMN BUILDING TYPE VARCHAR(100)";
-                    cmd.ExecuteNonQuery();
-                    
-                }
-            }
-            catch (FbException ex)
-            {
-                Log($"Не удалось изменить размер столбца BUILDING: {ex.Message}");
             }
         }
 
@@ -428,183 +267,612 @@ namespace ImapCertWatcher.Data
         {
             using (var cmd = conn.CreateCommand())
             {
-                cmd.CommandText =
-                    @"SELECT COUNT(*) 
-                      FROM RDB$RELATION_FIELDS 
-                      WHERE RDB$RELATION_NAME = 'CERTS' 
-                      AND RDB$FIELD_NAME = @columnName";
-                cmd.Parameters.AddWithValue("@columnName", columnName);
-
-                var result = cmd.ExecuteScalar();
-                return Convert.ToInt32(result) > 0;
+                cmd.CommandText = @"SELECT COUNT(*) FROM RDB$RELATION_FIELDS WHERE RDB$RELATION_NAME = 'CERTS' AND RDB$FIELD_NAME = @col";
+                cmd.Parameters.AddWithValue("@col", columnName.ToUpperInvariant());
+                var r = Convert.ToInt32(cmd.ExecuteScalar());
+                return r > 0;
             }
         }
 
-        public (bool wasUpdated, bool wasAdded) InsertOrUpdate(CertEntry entry)
+        private void TryExecuteNoThrow(FbCommand cmd)
         {
-            using (var conn = new FbConnection(_connectionString))
+            try
             {
-                conn.Open();
+                cmd.ExecuteNonQuery();
+            }
+            catch (Exception ex)
+            {
+                // Игнорируем ошибки создания индексов/триггеров, но логируем
+                Log($"TryExecuteNoThrow: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Проверяет существование индекса по имени (RDB$INDICES)
+        /// </summary>
+        private bool IndexExists(FbConnection conn, string indexName)
+        {
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = @"SELECT COUNT(*) FROM RDB$INDICES WHERE UPPER(RDB$INDEX_NAME) = @name";
+                cmd.Parameters.AddWithValue("@name", indexName.ToUpperInvariant());
+                var cnt = Convert.ToInt32(cmd.ExecuteScalar());
+                return cnt > 0;
+            }
+        }
+
+        /// <summary>
+        /// Создаёт индекс, если он ещё не существует.
+        /// </summary>
+        private void CreateIndexIfNotExists(FbConnection conn, string indexName, string tableName, string columns, bool unique)
+        {
+            try
+            {
+                if (IndexExists(conn, indexName))
+                {
+                    Log($"Индекс {indexName} уже существует — пропускаем создание.");
+                    return;
+                }
 
                 using (var cmd = conn.CreateCommand())
                 {
-                    cmd.CommandText = @"SELECT ID, MESSAGE_DATE FROM CERTS WHERE FIO = @fio AND CERT_NUMBER = @certNumber";
-                    cmd.Parameters.AddWithValue("@fio", entry.Fio);
-                    cmd.Parameters.AddWithValue("@certNumber", entry.CertNumber ?? "");
+                    string uniq = unique ? "UNIQUE " : "";
+                    cmd.CommandText = $"CREATE {uniq}INDEX {indexName} ON {tableName} ({columns})";
+                    cmd.ExecuteNonQuery();
+                    Log($"Создан индекс {indexName} ON {tableName} ({columns})");
+                }
+            }
+            catch (Exception ex)
+            {
+                // Если индекс не удалось создать — логируем, но не даём падать и остальному коду
+                Log($"CreateIndexIfNotExists: не удалось создать индекс {indexName}: {ex.Message}");
+            }
+        }
 
-                    using (var reader = cmd.ExecuteReader())
+        #endregion
+
+        #region Normalization utilities
+
+        // Нормализуем ФИО для сравнения: убираем лишние пробелы, приводим к верхнему регистру, заменяем ё->е
+        public static string NormalizeFio(string fio)
+        {
+            if (string.IsNullOrWhiteSpace(fio)) return string.Empty;
+            var s = fio.Trim();
+            s = Regex.Replace(s, @"\s+", " ");
+            s = s.Replace('ё', 'е').Replace('Ё', 'Е');
+            s = s.ToUpperInvariant();
+            return s;
+        }
+
+        // Нормализуем номер сертификата: убираем "№", пробелы, приводим к верхнему регистру
+        public static string NormalizeCertNumber(string cert)
+        {
+            if (string.IsNullOrWhiteSpace(cert)) return string.Empty;
+            var s = cert.Trim();
+            s = s.Replace("№", "");
+            s = Regex.Replace(s, @"\s+", "");
+            s = s.ToUpperInvariant();
+            return s;
+        }
+
+        #endregion
+
+        #region Archive methods (transactional + non-transactional)
+
+        /// <summary>
+        /// Сохраняет файл архива в таблицу CERT_ARCHIVES (не транзакционно).
+        /// </summary>
+        public bool SaveArchiveToDb(int certId, string filePath, string fileName = null)
+        {
+            try
+            {
+                if (!File.Exists(filePath))
+                {
+                    Log($"SaveArchiveToDb: файл не найден {filePath}");
+                    return false;
+                }
+
+                byte[] data = File.ReadAllBytes(filePath);
+                fileName = fileName ?? Path.GetFileName(filePath);
+                return SaveArchiveToDb(certId, fileName, data);
+            }
+            catch (Exception ex)
+            {
+                Log($"SaveArchiveToDb exception: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Сохраняет файл архива в таблицу CERT_ARCHIVES по байтам (не транзакционно).
+        /// </summary>
+        public bool SaveArchiveToDb(int certId, string fileName, byte[] fileData)
+        {
+            try
+            {
+                using (var conn = new FbConnection(_connectionString))
+                {
+                    conn.Open();
+                    using (var cmd = conn.CreateCommand())
                     {
-                        if (reader.Read())
-                        {
-                            int existingId = reader.GetInt32(0);
+                        cmd.CommandText = @"INSERT INTO CERT_ARCHIVES (CERT_ID, FILE_NAME, FILE_DATA, FILE_SIZE)
+                                            VALUES (@certId, @fileName, @fileData, @fileSize)";
+                        cmd.Parameters.AddWithValue("@certId", certId);
+                        cmd.Parameters.AddWithValue("@fileName", fileName);
+                        cmd.Parameters.AddWithValue("@fileData", fileData);
+                        cmd.Parameters.AddWithValue("@fileSize", fileData.Length);
+                        cmd.ExecuteNonQuery();
+                    }
+                }
+                Log($"SaveArchiveToDb: сохранён архив '{fileName}' для CertID={certId}");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log($"SaveArchiveToDb error: {ex.Message}");
+                return false;
+            }
+        }
 
-                            DateTime existingDate = DateTime.MinValue;
-                            if (!reader.IsDBNull(1))
+        /// <summary>
+        /// Транзакционное сохранение архива и опциональное обновление поля ARCHIVE_PATH в CERTS.
+        /// </summary>
+        public bool SaveArchiveToDbTransactional(int certId, string filePath, string fileName = null)
+        {
+            try
+            {
+                if (!File.Exists(filePath))
+                {
+                    Log($"SaveArchiveToDbTransactional: файл не найден: {filePath}");
+                    return false;
+                }
+
+                if (string.IsNullOrEmpty(fileName))
+                    fileName = Path.GetFileName(filePath);
+
+                byte[] fileData = File.ReadAllBytes(filePath);
+                long fileSize = fileData.LongLength;
+
+                using (var conn = new FbConnection(_connectionString))
+                {
+                    conn.Open();
+                    using (var transaction = conn.BeginTransaction())
+                    {
+                        try
+                        {
+                            // 1) Вставляем строку в CERT_ARCHIVES
+                            using (var insertCmd = conn.CreateCommand())
                             {
-                                existingDate = reader.GetDateTime(1);
+                                insertCmd.Transaction = transaction;
+                                insertCmd.CommandText = @"
+INSERT INTO CERT_ARCHIVES (CERT_ID, FILE_NAME, FILE_DATA, FILE_SIZE, UPLOAD_DATE)
+VALUES (@certId, @fileName, @fileData, @fileSize, @uploadDate)";
+                                insertCmd.Parameters.AddWithValue("@certId", certId);
+                                insertCmd.Parameters.AddWithValue("@fileName", fileName);
+                                insertCmd.Parameters.AddWithValue("@fileData", fileData);
+                                insertCmd.Parameters.AddWithValue("@fileSize", fileSize);
+                                insertCmd.Parameters.AddWithValue("@uploadDate", DateTime.Now);
+
+                                insertCmd.ExecuteNonQuery();
                             }
 
-                            reader.Close();
-
-                            // Если письмо новее существующего
-                            if (entry.MessageDate > existingDate)
+                            // 2) Обновляем поле ARCHIVE_PATH в CERTS
+                            using (var updateCmd = conn.CreateCommand())
                             {
-                                cmd.Parameters.Clear();
-                                cmd.CommandText =
-                                    @"UPDATE CERTS SET 
-                                DATE_START = @ds,
-                                DATE_END = @de,
-                                DAYS_LEFT = @dleft,
-                                FROM_ADDRESS = @fromAddress,
-                                FOLDER_PATH = @folderPath,
-                                ARCHIVE_PATH = @archivePath,
-                                MESSAGE_DATE = @messageDate
-                              WHERE ID = @id";
+                                updateCmd.Transaction = transaction;
+                                updateCmd.CommandText = @"
+UPDATE CERTS
+SET ARCHIVE_PATH = @archivePath
+WHERE ID = @id";
+                                updateCmd.Parameters.AddWithValue("@archivePath", fileName ?? "");
+                                updateCmd.Parameters.AddWithValue("@id", certId);
 
-                                cmd.Parameters.AddWithValue("@ds", entry.DateStart);
-                                cmd.Parameters.AddWithValue("@de", entry.DateEnd);
-                                cmd.Parameters.AddWithValue("@dleft", entry.DaysLeft);
-                                cmd.Parameters.AddWithValue("@fromAddress", entry.FromAddress ?? "");
-                                cmd.Parameters.AddWithValue("@folderPath", entry.FolderPath ?? "");
-                                cmd.Parameters.AddWithValue("@archivePath", entry.ArchivePath ?? "");
-                                cmd.Parameters.AddWithValue("@messageDate", entry.MessageDate);
-                                cmd.Parameters.AddWithValue("@id", existingId);
+                                updateCmd.ExecuteNonQuery();
+                            }
 
-                                cmd.ExecuteNonQuery();
-                                Log($"Обновлена запись (более новое письмо): {entry.Fio}, сертификат: {entry.CertNumber}");
-                                return (true, false); // Было обновление
+                            transaction.Commit();
+                            Log($"SaveArchiveToDbTransactional: успешно сохранён архив для CertID={certId}, file={fileName} ({fileSize} bytes)");
+                            return true;
+                        }
+                        catch (Exception exTx)
+                        {
+                            try { transaction.Rollback(); } catch { }
+                            Log($"SaveArchiveToDbTransactional: ошибка транзакции: {exTx.Message}");
+                            return false;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"SaveArchiveToDbTransactional: исключение: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Возвращает последний архив (data, fileName) для certId.
+        /// </summary>
+        public (byte[] data, string fileName) GetArchiveFromDb(int certId)
+        {
+            try
+            {
+                using (var conn = new FbConnection(_connectionString))
+                {
+                    conn.Open();
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        cmd.CommandText = @"
+SELECT FILE_DATA, FILE_NAME FROM CERT_ARCHIVES
+WHERE CERT_ID = @certId
+ORDER BY UPLOAD_DATE DESC
+ROWS 1";
+                        cmd.Parameters.AddWithValue("@certId", certId);
+                        using (var rdr = cmd.ExecuteReader())
+                        {
+                            if (rdr.Read())
+                            {
+                                var blob = (byte[])rdr["FILE_DATA"];
+                                var fname = rdr["FILE_NAME"].ToString();
+                                Log($"GetArchiveFromDb: найден архив {fname} для CertID={certId}");
+                                return (blob, fname);
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"GetArchiveFromDb error: {ex.Message}");
+            }
+            return (null, null);
+        }
+
+        public bool HasArchiveInDb(int certId)
+        {
+            try
+            {
+                using (var conn = new FbConnection(_connectionString))
+                {
+                    conn.Open();
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        cmd.CommandText = "SELECT COUNT(*) FROM CERT_ARCHIVES WHERE CERT_ID = @certId";
+                        cmd.Parameters.AddWithValue("@certId", certId);
+                        var r = Convert.ToInt32(cmd.ExecuteScalar());
+                        return r > 0;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"HasArchiveInDb error: {ex.Message}");
+                return false;
+            }
+        }
+
+        public bool DeleteArchiveFromDb(int certId)
+        {
+            try
+            {
+                using (var conn = new FbConnection(_connectionString))
+                {
+                    conn.Open();
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        cmd.CommandText = "DELETE FROM CERT_ARCHIVES WHERE CERT_ID = @certId";
+                        cmd.Parameters.AddWithValue("@certId", certId);
+                        int r = cmd.ExecuteNonQuery();
+                        Log($"DeleteArchiveFromDb: удалено записей={r} для CertID={certId}");
+                        return r > 0;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"DeleteArchiveFromDb error: {ex.Message}");
+                return false;
+            }
+        }
+
+        #endregion
+
+        #region Find / duplicate checks / get by id
+
+        public int GetCertIdByNumberAndFio(string certNumber, string fio)
+        {
+            try
+            {
+                var certNorm = NormalizeCertNumber(certNumber);
+                var fioNorm = NormalizeFio(fio);
+
+                using (var conn = new FbConnection(_connectionString))
+                {
+                    conn.Open();
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        cmd.CommandText = "SELECT ID FROM CERTS WHERE UPPER(TRIM(CERT_NUMBER)) = @certNumber AND UPPER(TRIM(FIO)) = @fio";
+                        cmd.Parameters.AddWithValue("@certNumber", certNorm);
+                        cmd.Parameters.AddWithValue("@fio", fioNorm);
+                        var r = cmd.ExecuteScalar();
+                        return r != null ? Convert.ToInt32(r) : -1;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"GetCertIdByNumberAndFio error: {ex.Message}");
+                return -1;
+            }
+        }
+
+        public CertRecord FindByFio(string fio)
+        {
+            if (string.IsNullOrWhiteSpace(fio)) return null;
+            var fioNorm = NormalizeFio(fio);
+
+            try
+            {
+                using (var conn = new FbConnection(_connectionString))
+                {
+                    conn.Open();
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        // Берём самую "свежую" запись по дате окончания
+                        cmd.CommandText = @"
+SELECT ID, FIO, DATE_START, DATE_END, DAYS_LEFT, CERT_NUMBER, FROM_ADDRESS, IS_DELETED, NOTE, BUILDING, FOLDER_PATH, ARCHIVE_PATH, MESSAGE_DATE
+FROM CERTS
+WHERE UPPER(TRIM(FIO)) = @fio
+ORDER BY DATE_END DESC
+ROWS 1";
+                        cmd.Parameters.AddWithValue("@fio", fioNorm);
+                        using (var rdr = cmd.ExecuteReader())
+                        {
+                            if (rdr.Read())
+                            {
+                                return MapReaderToCertRecord(rdr);
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"FindByFio error: {ex.Message}");
+            }
+            return null;
+        }
+
+        public bool CheckDuplicate(string fio, string certNumber)
+        {
+            try
+            {
+                var fioNorm = NormalizeFio(fio);
+                var certNorm = NormalizeCertNumber(certNumber);
+
+                using (var conn = new FbConnection(_connectionString))
+                {
+                    conn.Open();
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        cmd.CommandText = "SELECT COUNT(*) FROM CERTS WHERE UPPER(TRIM(FIO)) = @fio AND UPPER(TRIM(CERT_NUMBER)) = @cert";
+                        cmd.Parameters.AddWithValue("@fio", fioNorm);
+                        cmd.Parameters.AddWithValue("@cert", certNorm);
+                        var r = Convert.ToInt32(cmd.ExecuteScalar());
+                        return r > 0;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"CheckDuplicate error: {ex.Message}");
+                return false;
+            }
+        }
+
+        public bool IsDuplicateCertificate(string fio, string certNumber) => CheckDuplicate(fio, certNumber);
+
+        #endregion
+
+        #region InsertOrUpdate (atomic variant included)
+
+        /// <summary>
+        /// Старый интерфейс совместимости: возвращает (wasUpdated, wasAdded)
+        /// </summary>
+        public (bool wasUpdated, bool wasAdded) InsertOrUpdate(CertEntry entry)
+        {
+            var res = InsertOrUpdateAndGetId(entry);
+            return (res.wasUpdated, res.wasAdded);
+        }
+
+        /// <summary>
+        /// Атомарный InsertOrUpdate: возвращает (wasUpdated, wasAdded, certId).
+        /// - если запись найдена по FIO + CERT_NUMBER: если сообщение новее - обновляем, иначе пропускаем.
+        /// - если не найдена - создаём новую запись.
+        /// Вся операция происходит в транзакции.
+        /// </summary>
+        public (bool wasUpdated, bool wasAdded, int certId) InsertOrUpdateAndGetId(CertEntry entry)
+        {
+            if (entry == null) throw new ArgumentNullException(nameof(entry));
+
+            bool wasUpdated = false;
+            bool wasAdded = false;
+            int certId = -1;
+
+            try
+            {
+                using (var conn = new FbConnection(_connectionString))
+                {
+                    conn.Open();
+                    using (var tx = conn.BeginTransaction())
+                    {
+                        try
+                        {
+                            // 1) Попытка найти существующую запись по номеру сертификата и ФИО (без учета пробелов/регистра)
+                            using (var selectCmd = conn.CreateCommand())
+                            {
+                                selectCmd.Transaction = tx;
+                                selectCmd.CommandText = @"
+SELECT ID FROM CERTS
+WHERE UPPER(TRIM(CERT_NUMBER)) = @certNumber
+  AND UPPER(TRIM(FIO)) = @fio";
+                                selectCmd.Parameters.AddWithValue("@certNumber", (object)NormalizeCertNumber(entry.CertNumber) ?? "");
+                                selectCmd.Parameters.AddWithValue("@fio", (object)NormalizeFio(entry.Fio) ?? "");
+
+                                var scalar = selectCmd.ExecuteScalar();
+                                if (scalar != null && scalar != DBNull.Value)
+                                {
+                                    certId = Convert.ToInt32(scalar);
+                                }
+                            }
+
+                            if (certId > 0)
+                            {
+                                // 2a) UPDATE существующей записи (убраны SUBJECT/RECEIVED/MAIL_UID и убрана лишняя запятая)
+                                using (var upd = conn.CreateCommand())
+                                {
+                                    upd.Transaction = tx;
+                                    upd.CommandText = @"
+UPDATE CERTS
+SET FIO = @fio,
+    CERT_NUMBER = @certNumber,
+    DATE_START = @dateStart,
+    DATE_END = @dateEnd,
+    DAYS_LEFT = @daysLeft,
+    FROM_ADDRESS = @fromAddress,
+    FOLDER_PATH = @folderPath,
+    MESSAGE_DATE = @messageDate
+WHERE ID = @id";
+                                    upd.Parameters.AddWithValue("@fio", (object)entry.Fio ?? "");
+                                    upd.Parameters.AddWithValue("@certNumber", (object)entry.CertNumber ?? "");
+                                    upd.Parameters.AddWithValue("@dateStart", entry.DateStart == DateTime.MinValue ? (object)DBNull.Value : entry.DateStart);
+                                    upd.Parameters.AddWithValue("@dateEnd", entry.DateEnd == DateTime.MinValue ? (object)DBNull.Value : entry.DateEnd);
+                                    upd.Parameters.AddWithValue("@daysLeft", entry.DaysLeft);
+                                    upd.Parameters.AddWithValue("@fromAddress", (object)entry.FromAddress ?? "");
+                                    upd.Parameters.AddWithValue("@folderPath", (object)entry.FolderPath ?? "");
+                                    upd.Parameters.AddWithValue("@messageDate", entry.MessageDate == DateTime.MinValue ? (object)DBNull.Value : entry.MessageDate);
+                                    upd.Parameters.AddWithValue("@id", certId);
+
+                                    int affected = upd.ExecuteNonQuery();
+                                    if (affected > 0) wasUpdated = true;
+                                }
                             }
                             else
                             {
-                                Log($"Пропущена запись (уже есть более новое письмо): {entry.Fio}, сертификат: {entry.CertNumber}");
-                                return (false, false); // Не было изменений
+                                // 2b) INSERT новой записи и получить ID с помощью RETURNING
+                                using (var ins = conn.CreateCommand())
+                                {
+                                    ins.Transaction = tx;
+                                    ins.CommandText = @"
+INSERT INTO CERTS (
+    FIO, CERT_NUMBER, DATE_START, DATE_END, DAYS_LEFT, FROM_ADDRESS, FOLDER_PATH, MESSAGE_DATE
+) VALUES (
+    @fio, @certNumber, @dateStart, @dateEnd, @daysLeft, @fromAddress, @folderPath, @messageDate
+)
+RETURNING ID";
+                                    ins.Parameters.AddWithValue("@fio", (object)entry.Fio ?? "");
+                                    ins.Parameters.AddWithValue("@certNumber", (object)entry.CertNumber ?? "");
+                                    ins.Parameters.AddWithValue("@dateStart", entry.DateStart == DateTime.MinValue ? (object)DBNull.Value : entry.DateStart);
+                                    ins.Parameters.AddWithValue("@dateEnd", entry.DateEnd == DateTime.MinValue ? (object)DBNull.Value : entry.DateEnd);
+                                    ins.Parameters.AddWithValue("@daysLeft", entry.DaysLeft);
+                                    ins.Parameters.AddWithValue("@fromAddress", (object)entry.FromAddress ?? "");
+                                    ins.Parameters.AddWithValue("@folderPath", (object)entry.FolderPath ?? "");
+                                    ins.Parameters.AddWithValue("@messageDate", entry.MessageDate == DateTime.MinValue ? (object)DBNull.Value : entry.MessageDate);
+
+                                    var insertedIdObj = ins.ExecuteScalar();
+                                    if (insertedIdObj != null && insertedIdObj != DBNull.Value)
+                                    {
+                                        certId = Convert.ToInt32(insertedIdObj);
+                                        wasAdded = true;
+                                    }
+                                }
                             }
+
+                            tx.Commit();
                         }
-                        else
+                        catch
                         {
-                            reader.Close();
-
-                            cmd.Parameters.Clear();
-                            cmd.CommandText =
-                                @"INSERT INTO CERTS (FIO, DATE_START, DATE_END, DAYS_LEFT, CERT_NUMBER, FROM_ADDRESS, IS_DELETED, NOTE, BUILDING, FOLDER_PATH, ARCHIVE_PATH, MESSAGE_DATE)
-                  VALUES (@fio, @ds, @de, @dleft, @certNumber, @fromAddress, @isDeleted, @note, @building, @folderPath, @archivePath, @messageDate)";
-
-                            cmd.Parameters.AddWithValue("@fio", entry.Fio);
-                            cmd.Parameters.AddWithValue("@ds", entry.DateStart);
-                            cmd.Parameters.AddWithValue("@de", entry.DateEnd);
-                            cmd.Parameters.AddWithValue("@dleft", entry.DaysLeft);
-                            cmd.Parameters.AddWithValue("@certNumber", entry.CertNumber ?? "");
-                            cmd.Parameters.AddWithValue("@fromAddress", entry.FromAddress ?? "");
-                            cmd.Parameters.AddWithValue("@isDeleted", 0);
-                            cmd.Parameters.AddWithValue("@note", "");
-                            cmd.Parameters.AddWithValue("@building", "");
-                            cmd.Parameters.AddWithValue("@folderPath", entry.FolderPath ?? "");
-                            cmd.Parameters.AddWithValue("@archivePath", entry.ArchivePath ?? "");
-                            cmd.Parameters.AddWithValue("@messageDate", entry.MessageDate);
-
-                            cmd.ExecuteNonQuery();
-                            Log($"Добавлена новая запись: {entry.Fio}, сертификат: {entry.CertNumber}");
-                            return (false, true); // Было добавление
+                            try { tx.Rollback(); } catch { }
+                            throw;
                         }
                     }
                 }
             }
+            catch (Exception ex)
+            {
+                try { Log($"InsertOrUpdateAndGetId error: {ex.Message}"); } catch { }
+                return (false, false, -1);
+            }
+
+            return (wasUpdated, wasAdded, certId);
         }
 
+        #endregion
+
+        #region Load / update UI helpers
+
+        private CertRecord MapReaderToCertRecord(FbDataReader rdr)
+        {
+            var id = rdr.GetInt32(0);
+            return new CertRecord
+            {
+                Id = id,
+                Fio = rdr.IsDBNull(1) ? "" : rdr.GetString(1),
+                DateStart = rdr.IsDBNull(2) ? DateTime.MinValue : rdr.GetDateTime(2),
+                DateEnd = rdr.IsDBNull(3) ? DateTime.MinValue : rdr.GetDateTime(3),
+                DaysLeft = rdr.IsDBNull(4) ? 0 : rdr.GetInt32(4),
+                CertNumber = rdr.IsDBNull(5) ? "" : rdr.GetString(5),
+                FromAddress = rdr.IsDBNull(6) ? "" : rdr.GetString(6),
+                IsDeleted = !rdr.IsDBNull(7) && rdr.GetInt16(7) == 1,
+                Note = rdr.IsDBNull(8) ? "" : rdr.GetString(8),
+                Building = rdr.IsDBNull(9) ? "" : rdr.GetString(9),
+                FolderPath = rdr.IsDBNull(10) ? "" : rdr.GetString(10),
+                ArchivePath = rdr.IsDBNull(11) ? "" : rdr.GetString(11),
+                MessageDate = rdr.IsDBNull(12) ? DateTime.MinValue : rdr.GetDateTime(12),
+                HasArchive = HasArchiveInDb(id)
+            };
+        }
+
+        /// <summary>
+        /// Загружает все записи с фильтрами.
+        /// </summary>
         public List<CertRecord> LoadAll(bool showDeleted = false, string buildingFilter = "Все")
         {
             var list = new List<CertRecord>();
-            Log($"Загрузка данных из БД: showDeleted={showDeleted}, buildingFilter={buildingFilter}");
-
             using (var conn = new FbConnection(_connectionString))
             {
                 conn.Open();
-
                 using (var cmd = conn.CreateCommand())
                 {
-                    var whereConditions = new List<string>();
-                    var parameters = new Dictionary<string, object>();
-
-                    if (!showDeleted)
+                    var where = new List<string>();
+                    if (!showDeleted) where.Add("IS_DELETED = 0");
+                    if (!string.IsNullOrEmpty(buildingFilter) && buildingFilter != "Все")
                     {
-                        whereConditions.Add("IS_DELETED = 0");
+                        where.Add("BUILDING = @building");
+                        cmd.Parameters.AddWithValue("@building", buildingFilter);
                     }
 
-                    if (buildingFilter != "Все")
+                    where.Add("DATE_END >= @currentDate");
+                    cmd.Parameters.AddWithValue("@currentDate", DateTime.Now.Date);
+
+                    string whereClause = where.Count > 0 ? "WHERE " + string.Join(" AND ", where) : "";
+
+                    cmd.CommandText = $@"
+SELECT ID, FIO, DATE_START, DATE_END, DAYS_LEFT, CERT_NUMBER, FROM_ADDRESS, IS_DELETED, NOTE, BUILDING, FOLDER_PATH, ARCHIVE_PATH, MESSAGE_DATE
+FROM CERTS
+{whereClause}
+ORDER BY DATE_END ASC";
+
+                    using (var rdr = cmd.ExecuteReader())
                     {
-                        whereConditions.Add("BUILDING = @building");
-                        parameters.Add("@building", buildingFilter);
-                    }
-
-                    whereConditions.Add("DATE_END >= @currentDate");
-                    parameters.Add("@currentDate", DateTime.Now.Date);
-
-                    string whereClause = whereConditions.Count > 0 ? "WHERE " + string.Join(" AND ", whereConditions) : "";
-
-                    cmd.CommandText =
-                        $@"SELECT ID, FIO, DATE_START, DATE_END, DAYS_LEFT, CERT_NUMBER, FROM_ADDRESS, IS_DELETED, NOTE, BUILDING, FOLDER_PATH, ARCHIVE_PATH, MESSAGE_DATE
-                  FROM CERTS
-                  {whereClause}
-                  ORDER BY DATE_END ASC";
-
-                    foreach (var param in parameters)
-                    {
-                        cmd.Parameters.AddWithValue(param.Key, param.Value);
-                    }
-
-                    using (var reader = cmd.ExecuteReader())
-                    {
-                        int count = 0;
-                        while (reader.Read())
+                        while (rdr.Read())
                         {
-                            var building = reader.IsDBNull(9) ? "" : reader.GetString(9);
-                            var record = new CertRecord
-                            {
-                                Id = reader.GetInt32(0),
-                                Fio = reader.IsDBNull(1) ? "" : reader.GetString(1),
-                                DateStart = reader.GetDateTime(2),
-                                DateEnd = reader.GetDateTime(3),
-                                DaysLeft = reader.GetInt32(4),
-                                CertNumber = reader.IsDBNull(5) ? "" : reader.GetString(5),
-                                FromAddress = reader.IsDBNull(6) ? "" : reader.GetString(6),
-                                IsDeleted = !reader.IsDBNull(7) && reader.GetInt16(7) == 1,
-                                Note = reader.IsDBNull(8) ? "" : reader.GetString(8),
-                                Building = building,
-                                FolderPath = reader.IsDBNull(10) ? "" : reader.GetString(10),
-                                ArchivePath = reader.IsDBNull(11) ? "" : reader.GetString(11),
-                                MessageDate = reader.IsDBNull(12) ? DateTime.MinValue : reader.GetDateTime(12)
-                            };
-
-                            list.Add(record);
-                            count++;
-
-                            
+                            list.Add(MapReaderToCertRecord(rdr));
                         }
-                        Log($"Загружено записей из БД: {count}");
                     }
                 }
             }
-
+            Log($"LoadAll: загружено {list.Count} записей (showDeleted={showDeleted}, filter={buildingFilter})");
             return list;
         }
 
@@ -613,16 +881,15 @@ namespace ImapCertWatcher.Data
             using (var conn = new FbConnection(_connectionString))
             {
                 conn.Open();
-
                 using (var cmd = conn.CreateCommand())
                 {
                     cmd.CommandText = "UPDATE CERTS SET NOTE = @note WHERE ID = @id";
                     cmd.Parameters.AddWithValue("@note", note ?? "");
                     cmd.Parameters.AddWithValue("@id", id);
                     cmd.ExecuteNonQuery();
-                    Log($"Обновлено примечание для записи ID={id}");
                 }
             }
+            Log($"UpdateNote: ID={id}");
         }
 
         public void UpdateBuilding(int id, string building)
@@ -630,22 +897,15 @@ namespace ImapCertWatcher.Data
             using (var conn = new FbConnection(_connectionString))
             {
                 conn.Open();
-
                 using (var cmd = conn.CreateCommand())
                 {
-                    cmd.CommandText = "UPDATE CERTS SET BUILDING = @building WHERE ID = @id";
-                    cmd.Parameters.AddWithValue("@building", building ?? "");
+                    cmd.CommandText = "UPDATE CERTS SET BUILDING = @b WHERE ID = @id";
+                    cmd.Parameters.AddWithValue("@b", building ?? "");
                     cmd.Parameters.AddWithValue("@id", id);
-
-                    int rowsAffected = cmd.ExecuteNonQuery();
-                    Log($"Обновлено здание для записи ID={id}: '{building}' (затронуто строк: {rowsAffected})");
-
-                    if (rowsAffected == 0)
-                    {
-                        Log($"ВНИМАНИЕ: Не найдена запись с ID={id} для обновления здания");
-                    }
+                    cmd.ExecuteNonQuery();
                 }
             }
+            Log($"UpdateBuilding: ID={id}, building={building}");
         }
 
         public void MarkAsDeleted(int id, bool isDeleted)
@@ -653,16 +913,15 @@ namespace ImapCertWatcher.Data
             using (var conn = new FbConnection(_connectionString))
             {
                 conn.Open();
-
                 using (var cmd = conn.CreateCommand())
                 {
-                    cmd.CommandText = "UPDATE CERTS SET IS_DELETED = @isDeleted WHERE ID = @id";
-                    cmd.Parameters.AddWithValue("@isDeleted", isDeleted ? 1 : 0);
+                    cmd.CommandText = "UPDATE CERTS SET IS_DELETED = @d WHERE ID = @id";
+                    cmd.Parameters.AddWithValue("@d", isDeleted ? 1 : 0);
                     cmd.Parameters.AddWithValue("@id", id);
                     cmd.ExecuteNonQuery();
-                    Log($"Изменен статус удаления для записи ID={id}: {isDeleted}");
                 }
             }
+            Log($"MarkAsDeleted: ID={id}, isDeleted={isDeleted}");
         }
 
         public void UpdateArchivePath(int id, string archivePath)
@@ -670,44 +929,145 @@ namespace ImapCertWatcher.Data
             using (var conn = new FbConnection(_connectionString))
             {
                 conn.Open();
-
                 using (var cmd = conn.CreateCommand())
                 {
-                    cmd.CommandText = "UPDATE CERTS SET ARCHIVE_PATH = @archivePath WHERE ID = @id";
-                    cmd.Parameters.AddWithValue("@archivePath", archivePath ?? "");
+                    cmd.CommandText = "UPDATE CERTS SET ARCHIVE_PATH = @p WHERE ID = @id";
+                    cmd.Parameters.AddWithValue("@p", archivePath ?? "");
                     cmd.Parameters.AddWithValue("@id", id);
                     cmd.ExecuteNonQuery();
-                    Log($"Обновлен путь к архиву для записи ID={id}: {archivePath}");
                 }
             }
+            Log($"UpdateArchivePath: ID={id}, path={archivePath}");
         }
 
         public FbConnection GetConnection() => new FbConnection(_connectionString);
+
+        #endregion
+
+        #region Revocation helpers
+
+        /// <summary>
+        /// Находит сертификат по номеру и помечает как аннулированный, добавляя в NOTE дату отзыва (если указана).
+        /// Возвращает true если найден и обновлён.
+        /// </summary>
+        public bool FindAndMarkAsRevokedByCertNumber(string certNumber, string fio, string folderPath, string revokeDateShort)
+        {
+            Log($"FindAndMarkAsRevokedByCertNumber: cert={certNumber}, fio={fio}, date={revokeDateShort}");
+            try
+            {
+                var certNorm = NormalizeCertNumber(certNumber);
+
+                using (var conn = new FbConnection(_connectionString))
+                {
+                    conn.Open();
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        cmd.CommandText = "SELECT ID, NOTE FROM CERTS WHERE UPPER(TRIM(CERT_NUMBER)) = @cert";
+                        cmd.Parameters.AddWithValue("@cert", certNorm);
+
+                        using (var rdr = cmd.ExecuteReader())
+                        {
+                            if (!rdr.Read())
+                            {
+                                Log($"FindAndMarkAsRevokedByCertNumber: сертификат не найден {certNumber}");
+                                return false;
+                            }
+
+                            int id = rdr.GetInt32(0);
+                            string oldNote = rdr.IsDBNull(1) ? "" : rdr.GetString(1);
+                            rdr.Close();
+
+                            string newNote = !string.IsNullOrEmpty(revokeDateShort) ? $"аннулирован ({revokeDateShort})" : "аннулирован";
+                            string noteToSet = string.IsNullOrEmpty(oldNote) ? newNote : $"{oldNote}; {newNote}";
+
+                            using (var upd = conn.CreateCommand())
+                            {
+                                upd.CommandText = "UPDATE CERTS SET IS_DELETED = 1, NOTE = @note, FOLDER_PATH = @folder WHERE ID = @id";
+                                upd.Parameters.AddWithValue("@note", noteToSet);
+                                upd.Parameters.AddWithValue("@folder", folderPath ?? "");
+                                upd.Parameters.AddWithValue("@id", id);
+                                upd.ExecuteNonQuery();
+                            }
+
+                            Log($"FindAndMarkAsRevokedByCertNumber: аннулирован ID={id}, cert={certNumber}");
+                            return true;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"FindAndMarkAsRevokedByCertNumber error: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Находит по FIO+certNumber и помечает аннулированным.
+        /// </summary>
+        public bool FindAndMarkAsRevoked(string fio, string certNumber, string folderPath)
+        {
+            try
+            {
+                var fioNorm = NormalizeFio(fio);
+                var certNorm = NormalizeCertNumber(certNumber);
+
+                using (var conn = new FbConnection(_connectionString))
+                {
+                    conn.Open();
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        cmd.CommandText = "SELECT ID FROM CERTS WHERE UPPER(TRIM(FIO)) = @fio AND UPPER(TRIM(CERT_NUMBER)) = @cert";
+                        cmd.Parameters.AddWithValue("@fio", fioNorm);
+                        cmd.Parameters.AddWithValue("@cert", certNorm);
+
+                        var r = cmd.ExecuteScalar();
+                        if (r == null) return false;
+
+                        int id = Convert.ToInt32(r);
+                        using (var upd = conn.CreateCommand())
+                        {
+                            upd.CommandText = "UPDATE CERTS SET IS_DELETED = 1, NOTE = CASE WHEN NOTE IS NULL OR NOTE = '' THEN 'аннулирован' ELSE NOTE || '; аннулирован' END, FOLDER_PATH = @f WHERE ID = @id";
+                            upd.Parameters.AddWithValue("@f", folderPath ?? "");
+                            upd.Parameters.AddWithValue("@id", id);
+                            upd.ExecuteNonQuery();
+                        }
+                        Log($"FindAndMarkAsRevoked: аннулирован ID={id}");
+                        return true;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"FindAndMarkAsRevoked error: {ex.Message}");
+                return false;
+            }
+        }
+
+        #endregion
+
+        #region Logging
 
         private void Log(string message)
         {
             try
             {
-                // Один файл на день вместо файла на каждую секунду
-                string logDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "LOG", DateTime.Now.ToString("yyyy-MM-dd"));
-                if (!Directory.Exists(logDirectory))
-                    Directory.CreateDirectory(logDirectory);
-
-                // Файл с именем дня
-                string logFile = Path.Combine(logDirectory, $"log_{DateTime.Now:yyyy-MM-dd}.log");
-                string logEntry = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} - [ImapWatcher] {message}{Environment.NewLine}";
-
-                File.AppendAllText(logFile, logEntry, System.Text.Encoding.UTF8);
-
-                // Также пишем в мини-лог через переданный делегат
-                _addToMiniLog?.Invoke($"[ImapWatcher] {message}");
-
-                System.Diagnostics.Debug.WriteLine($"[ImapWatcher] {message}");
+                string logDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "LOG");
+                if (!Directory.Exists(logDir)) Directory.CreateDirectory(logDir);
+                string dayDir = Path.Combine(logDir, DateTime.Now.ToString("yyyy-MM-dd"));
+                if (!Directory.Exists(dayDir)) Directory.CreateDirectory(dayDir);
+                string file = Path.Combine(dayDir, $"log_{DateTime.Now:yyyy-MM-dd}.log");
+                string entry = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} - [DbHelper] {message}{Environment.NewLine}";
+                File.AppendAllText(file, entry, System.Text.Encoding.UTF8);
+                _addToMiniLog?.Invoke($"[DbHelper] {message}");
+                System.Diagnostics.Debug.WriteLine($"[DbHelper] {message}");
             }
-            catch (Exception ex)
+            catch
             {
-                System.Diagnostics.Debug.WriteLine($"Ошибка записи в лог: {ex.Message}");
+                // не фейлим приложение из-за логирования
             }
         }
+
+        #endregion
     }
 }

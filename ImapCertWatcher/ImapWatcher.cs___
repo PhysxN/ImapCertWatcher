@@ -5,6 +5,7 @@ using ImapCertWatcher.Utils;
 using MailKit;
 using MailKit.Net.Imap;
 using MailKit.Search;
+using MimeKit;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -78,306 +79,285 @@ namespace ImapCertWatcher.Services
             int updatedCount = 0;
             int addedCount = 0;
 
-            Log($"Начало проверки почты. Режим: {(checkAllMessages ? "все письма" : "последние 3 дня")}");
+            // Второй проход — накопитель сообщений с извлечёнными данными сертификатов
+            var certificatesToProcess = new List<(CertEntry certData, MimeMessage message, string body, bool hasZip)>();
 
-            // Проверяем настройки перед подключением
+            // Третий проход — список аннулирований
+            var revocationList = new List<(string certNumber, string fio, DateTime? revokeDate, string folderPath)>();
+
+            Log("=== Начало проверки почты ===");
+
             try
             {
                 ValidateMailSettings();
             }
             catch (Exception ex)
             {
-                Log($"Ошибка в настройках почты: {ex.Message}");
-                return (results, updatedCount, addedCount); // Возвращаем пустой список вместо исключения
+                Log($"Ошибка настроек: {ex.Message}");
+                return (results, updatedCount, addedCount);
             }
 
-            const int maxRetries = 3;
-            const int retryDelayMs = 2000; // 2 секунды между попытками
-
-            for (int attempt = 1; attempt <= maxRetries; attempt++)
+            using (var client = new ImapClient())
             {
                 try
                 {
-                    using (var client = new ImapClient())
+                    client.Timeout = 60000;
+                    client.ServerCertificateValidationCallback = (s, c, h, e) => true;
+
+                    // Подключение
+                    if (_settings.MailUseSsl)
+                        client.Connect(_settings.MailHost, _settings.MailPort, MailKit.Security.SecureSocketOptions.SslOnConnect);
+                    else
+                        client.Connect(_settings.MailHost, _settings.MailPort, MailKit.Security.SecureSocketOptions.StartTlsWhenAvailable);
+
+                    // Аутентификация
+                    client.Authenticate(_settings.MailLogin, _settings.MailPassword);
+
+                    // Получаем папку (попробуем рекурсивно искать, если прямой путь не сработал)
+                    IMailFolder folder = null;
+                    try
                     {
-                        // Увеличиваем таймауты
-                        client.Timeout = 120 * 1000; // 2 минуты
-                        client.ServerCertificateValidationCallback = (s, c, h, e) => true;
+                        folder = GetFolderRecursive(client, _settings.ImapFolder) ?? client.GetFolder(_settings.ImapFolder);
+                    }
+                    catch
+                    {
+                        try { folder = client.GetFolder(_settings.ImapFolder); } catch { folder = null; }
+                    }
 
-                        Log($"Попытка {attempt}/{maxRetries}: подключение к {_settings.MailHost}:{_settings.MailPort} (SSL: {_settings.MailUseSsl})");
-
-                        if (_settings.MailUseSsl)
-                        {
-                            client.Connect(_settings.MailHost, _settings.MailPort,
-                                         MailKit.Security.SecureSocketOptions.SslOnConnect);
-                        }
-                        else
-                        {
-                            // Пробуем разные варианты подключения
-                            try
-                            {
-                                client.Connect(_settings.MailHost, _settings.MailPort,
-                                             MailKit.Security.SecureSocketOptions.StartTlsWhenAvailable);
-                                Log("Подключение через StartTLS успешно");
-                            }
-                            catch (Exception ex)
-                            {
-                                Log($"StartTLS не поддерживается, пробуем без SSL: {ex.Message}");
-                                client.Connect(_settings.MailHost, _settings.MailPort,
-                                             MailKit.Security.SecureSocketOptions.None);
-                                Log("Подключение без SSL успешно");
-                            }
-                        }
-
-                        Log("Подключение к почтовому серверу успешно");
-
-                        Log($"Выполняем аутентификацию пользователя: {_settings.MailLogin}");
-                        client.Authenticate(_settings.MailLogin, _settings.MailPassword);
-                        Log("Аутентификация успешна");
-
-                        Log($"Поиск папки: {_settings.ImapFolder}");
-                        var mainFolder = GetFolderRecursive(client, _settings.ImapFolder);
-                        if (mainFolder == null)
-                        {
-                            Log($"Не удалось найти папку: {_settings.ImapFolder}");
-                            break;
-                        }
-
-                        Log($"Основная папка найдена: {mainFolder.FullName}");
-
-                        var allFolders = GetAllSubfoldersRecursive(mainFolder);
-                        allFolders.Insert(0, mainFolder);
-
-                        Log($"Будет проверено папок: {allFolders.Count}");
-
-                        foreach (var folder in allFolders)
-                        {
-                            try
-                            {
-                                Log($"Открываем папку: {folder.FullName}");
-                                folder.Open(FolderAccess.ReadOnly);
-
-                                Log($"В папке {folder.FullName}: {folder.Count} писем");
-
-                                // Создаем запрос в зависимости от режима
-                                SearchQuery query;
-                                string filterDescription;
-                                if (checkAllMessages)
-                                {
-                                    // Все письма
-                                    query =
-                                            SearchQuery.SubjectContains("Сертификат")
-                                                .Or(SearchQuery.SubjectContains("аннулирован"))
-                                                .Or(SearchQuery.SubjectContains("прекратил"));
-                                                 Log("Режим: проверка ВСЕХ писем");
-                                    filterDescription = "Тема содержит 'Сертификат' ИЛИ 'аннулирован' ИЛИ 'прекратил'";
-
-                                }
-                                else
-                                {
-                                    // Только письма за последние 3 дня
-                                    var threeDaysAgo = DateTime.Now.AddDays(-3);
-                                    query =
-                                            SearchQuery.SubjectContains("Сертификат")
-                                                .Or(SearchQuery.SubjectContains("аннулирован"))
-                                                .Or(SearchQuery.SubjectContains("прекратил"))
-                                                .And(SearchQuery.DeliveredAfter(threeDaysAgo));
-                                        Log($"Режим: проверка писем за последние 3 дня (с {threeDaysAgo:dd.MM.yyyy})");
-                                    filterDescription = "Тема содержит 'Сертификат' ИЛИ 'аннулирован' ИЛИ 'прекратил'";
-                                }
-
-                                Log($"Выполняем поиск писем с критериями: {filterDescription}");
-                                var uids = folder.Search(query);
-                                Log($"В папке {folder.FullName} найдено писем для обработки: {uids.Count}");
-
-                                foreach (var uid in uids)
-                                {
-                                    try
-                                    {
-                                        Log($"Получаем письмо UID: {uid}");
-                                        var msg = folder.GetMessage(uid);
-                                        var subject = msg.Subject ?? "";
-                                        var fromAddress = msg.From.Mailboxes.FirstOrDefault()?.Address ?? "";
-                                        var body = GetMessageBody(msg);
-                                        var messageDate = msg.Date.UtcDateTime.ToLocalTime();
-
-                                        Log($"Обрабатываем письмо из папки {folder.FullName}: {subject}, От: {fromAddress}, Дата: {messageDate:dd.MM.yyyy HH:mm}");
-
-                                        // ★★★★ ПРОВЕРКА НА АННУЛИРОВАНИЕ ★★★★
-                                        if (IsRevokedCertificateMessage(subject))
-                                        {
-                                            Log("Обнаружено письмо об аннулировании сертификата");
-                                            ProcessRevokedCertificate(subject, body, folder.FullName, _addToMiniLog);
-                                            continue; // Переходим к следующему письму
-                                        }
-
-                                        // Обычная обработка сертификатов (существующий код)
-                                        if (!subject.StartsWith("Сертификат №", StringComparison.OrdinalIgnoreCase))
-                                        {
-                                            Log($"Пропускаем письмо - тема не начинается с 'Сертификат №': {subject}");
-                                            continue;
-                                        }
-
-                                        
-                                        Log($"Извлекаем данные из письма: номер сертификата, ФИО, даты");
-                                        var certNumber = ExtractCertNumber(subject);
-                                        var fio = ExtractFio(body);
-                                        var dates = ExtractDates(body);
-
-                                        Log($"Извлеченные данные: Сертификат={certNumber}, ФИО={fio}, Дата начала={dates.start}, Дата окончания={dates.end}");
-
-                                        if (string.IsNullOrEmpty(fio))
-                                        {
-                                            Log($"Не найден ФИО в письме {uid}");
-                                            continue;
-                                        }
-
-                                        if (dates.start == DateTime.MinValue || dates.end == DateTime.MinValue)
-                                        {
-                                            Log($"Не найдены даты в письме {uid}");
-                                            continue;
-                                        }
-
-                                        // ★★★★ ПРОВЕРКА ДУБЛИКАТА ДО ОБРАБОТКИ ВЛОЖЕНИЙ ★★★★
-                                        Log($"Проверяем наличие дубликата в БД: {fio}, сертификат: {certNumber}");
-                                        bool isDuplicate = _db.CheckDuplicate(fio, certNumber);
-
-                                        if (isDuplicate)
-                                        {
-                                            Log($"Пропускаем письмо (дубликат найден в БД): {fio}, сертификат: {certNumber}");
-                                            continue; // Переходим к следующему письму
-                                        }
-
-                                        // Если дубликата нет - продолжаем обработку (скачиваем архив и сохраняем)
-                                        Log($"Дубликат не найден, продолжаем обработку письма");
-
-                                        // Сохраняем вложения (ZIP архивы) - только если это не дубликат
-                                        Log("Проверяем вложения письма");
-                                        string archivePath = SaveAttachments(msg, fio, certNumber);
-
-                                        var daysLeft = (int)Math.Ceiling((dates.end - DateTime.Now).TotalDays);
-                                        if (daysLeft < 0) daysLeft = 0;
-
-                                        Log($"Рассчитано осталось дней: {daysLeft}");
-
-                                        var entry = new CertEntry
-                                        {
-                                            MailUid = uid.ToString(),
-                                            Fio = fio,
-                                            DateStart = dates.start,
-                                            DateEnd = dates.end,
-                                            DaysLeft = daysLeft,
-                                            Subject = subject,
-                                            Received = msg.Date.UtcDateTime.ToLocalTime(),
-                                            CertNumber = certNumber,
-                                            FromAddress = fromAddress,
-                                            FolderPath = folder.FullName,
-                                            ArchivePath = archivePath,
-                                            MessageDate = messageDate
-                                        };
-
-                                        try
-                                        {
-                                            Log($"Сохраняем запись в БД: {fio}, сертификат: {certNumber}");
-                                            var (wasUpdated, wasAdded) = _db.InsertOrUpdate(entry);
-
-                                            if (wasUpdated)
-                                            {
-                                                updatedCount++;
-                                                Log($"Успешно ОБНОВЛЕНО письмо из папки {folder.FullName}: {fio}, {dates.start:dd.MM.yyyy} - {dates.end:dd.MM.yyyy}, Сертификат: {certNumber}");
-                                            }
-                                            else if (wasAdded)
-                                            {
-                                                addedCount++;
-                                                Log($"Успешно ДОБАВЛЕНО письмо из папки {folder.FullName}: {fio}, {dates.start:dd.MM.yyyy} - {dates.end:dd.MM.yyyy}, Сертификат: {certNumber}");
-                                            }
-                                            else
-                                            {
-                                                Log($"Пропущено письмо (дубликат при сохранении): {fio}, сертификат: {certNumber}");
-                                            }
-
-                                            results.Add(entry);
-                                        }
-                                        catch (Exception ex)
-                                        {
-                                            Log($"Ошибка сохранения в БД: {ex.Message}");
-                                        }
-                                    }
-                                    catch (Exception ex)
-                                    {
-                                        Log($"Ошибка обработки письма {uid}: {ex.Message}");
-                                    }
-                                }
-
-                                folder.Close();
-                                Log($"Папка {folder.FullName} обработана");
-                            }
-                            catch (Exception ex)
-                            {
-                                Log($"Ошибка при работе с папкой {folder.FullName}: {ex.Message}");
-                            }
-                        }
-
+                    if (folder == null)
+                    {
+                        Log($"Не удалось найти папку '{_settings.ImapFolder}' на сервере.");
                         client.Disconnect(true);
-                        Log($"Обработка завершена. Проверено папок: {allFolders.Count}, Обработано писем: {results.Count}, Обновлено: {updatedCount}, Добавлено: {addedCount}");
-
-                        // Если дошли до сюда - подключение успешно, выходим из цикла повторных попыток
-                        break;
+                        return (results, updatedCount, addedCount);
                     }
-                }
-                catch (System.Net.Sockets.SocketException socketEx)
-                {
-                    Log($"Попытка {attempt}/{maxRetries}: Ошибка подключения к почтовому серверу {_settings.MailHost}:{_settings.MailPort}. Детали: {socketEx.Message}");
 
-                    if (attempt < maxRetries)
-                    {
-                        Log($"Повторная попытка через {retryDelayMs}мс...");
-                        System.Threading.Thread.Sleep(retryDelayMs);
-                    }
+                    // Открываем в режиме чтения (ReadOnly)
+                    folder.Open(FolderAccess.ReadOnly);
+
+                    // Поисковый запрос
+                    IList<UniqueId> uids;
+                    if (checkAllMessages)
+                        uids = folder.Search(SearchQuery.All);
                     else
                     {
-                        Log($"Все {maxRetries} попытки подключения завершились ошибкой");
+                        // По умолчанию только последние 3 дня (если явно не просили все)
+                        uids = folder.Search(SearchQuery.DeliveredAfter(DateTime.Now.AddDays(-3)));
                     }
-                }
-                catch (System.IO.IOException ioEx)
-                {
-                    Log($"Попытка {attempt}/{maxRetries}: Ошибка ввода-вывода. Детали: {ioEx.Message}");
 
-                    if (attempt < maxRetries)
+                    Log($"Папка: {folder.FullName}, найдено писем: {uids.Count}");
+
+                    // -----------------------
+                    // ПЕРВЫЙ ПРОХОД — Сбор и добавление базовых данных (ФИО, номер, даты)
+                    // -----------------------
+                    foreach (var uid in uids)
                     {
-                        Log($"Повторная попытка через {retryDelayMs}мс...");
-                        System.Threading.Thread.Sleep(retryDelayMs);
-                    }
-                }
-                catch (TimeoutException timeoutEx)
-                {
-                    Log($"Попытка {attempt}/{maxRetries}: Таймаут подключения. Детали: {timeoutEx.Message}");
+                        try
+                        {
+                            var msg = folder.GetMessage(uid);
+                            var subject = msg.Subject ?? string.Empty;
+                            var body = GetMessageBody(msg);
+                            var fromAddress = msg.From.Mailboxes.FirstOrDefault()?.Address ?? string.Empty;
 
-                    if (attempt < maxRetries)
+                            Log($"[1-й проход] UID={uid}: {subject}");
+
+                            // Проверка: письмо об аннулировании -> отложим в список аннулирований
+                            if (IsRevokedCertificateMessage(subject) || Regex.IsMatch(subject, @"аннулир|прекратил действие", RegexOptions.IgnoreCase))
+                            {
+                                Log($"Обнаружено письмо об аннулировании (UID={uid})");
+                                string certNumber = ExtractCertNumber(subject) ?? ExtractCertNumber(body);
+                                string fio = ExtractFio(body);
+                                DateTime? revokeDate = ExtractRevokeDate(body);
+                                revocationList.Add((certNumber, fio, revokeDate, folder.FullName));
+                                continue; // не добавляем в обычный поток сертификатов
+                            }
+
+                            // Извлекаем ключевые данные сертификата
+                            string fioFound = ExtractFio(body);
+                            string certNumberFound = ExtractCertNumber(body);
+                            var dates = ExtractDates(body);
+
+                            // Если не удалось извлечь минимум — пропускаем письмо
+                            if (string.IsNullOrWhiteSpace(fioFound)
+                                || string.IsNullOrWhiteSpace(certNumberFound)
+                                || dates.start == DateTime.MinValue
+                                || dates.end == DateTime.MinValue)
+                            {
+                                Log($"[1-й проход] UID={uid} — недостаточно данных, пропускаем");
+                                continue;
+                            }
+
+                            Log($"[1-й проход] Извлечено: ФИО='{fioFound}', №='{certNumberFound}', {dates.start:dd.MM.yyyy} - {dates.end:dd.MM.yyyy}");
+
+                            bool hasZipAttachment = msg.Attachments.Any(a =>
+                                (a.ContentDisposition?.FileName ?? a.ContentType.Name ?? "")
+                                .EndsWith(".zip", StringComparison.OrdinalIgnoreCase));
+
+                            // Формируем запись для второго прохода
+                            var certData = new CertEntry
+                            {
+                                MailUid = uid.ToString(),
+                                Fio = fioFound,
+                                DateStart = dates.start,
+                                DateEnd = dates.end,
+                                DaysLeft = (int)(dates.end - DateTime.Now).TotalDays,
+                                Subject = subject,
+                                Received = msg.Date.UtcDateTime,
+                                CertNumber = certNumberFound,
+                                FromAddress = fromAddress,
+                                FolderPath = folder.FullName,
+                                MessageDate = msg.Date.UtcDateTime
+                            };
+
+                            // Сохраняем/обновляем базовые данные в БД (InsertOrUpdate)
+                            try
+                            {
+                                var (upd, add) = _db.InsertOrUpdate(certData);
+                                if (upd) updatedCount++;
+                                if (add) addedCount++;
+                                Log($"[1-й проход] InsertOrUpdate: FIO={certData.Fio}, Cert={certData.CertNumber}, upd={upd}, add={add}");
+                            }
+                            catch (Exception ex)
+                            {
+                                Log($"[1-й проход] Ошибка InsertOrUpdate для {certData.CertNumber}: {ex.Message}");
+                            }
+
+                            certificatesToProcess.Add((certData, msg, body, hasZipAttachment));
+                        }
+                        catch (Exception ex)
+                        {
+                            Log($"[1-й проход] Ошибка при обработке UID={uid}: {ex.Message}");
+                        }
+                    }
+
+                    // -----------------------
+                    // ВТОРОЙ ПРОХОД — Обработка архивов и дополнительное обновление записей
+                    // -----------------------
+                    Log($"=== Второй проход: обработка {certificatesToProcess.Count} писем (архивы и обновления) ===");
+
+                    foreach (var (certData, message, body, hasZip) in certificatesToProcess)
                     {
-                        Log($"Повторная попытка через {retryDelayMs}мс...");
-                        System.Threading.Thread.Sleep(retryDelayMs);
-                    }
-                }
-                catch (AuthenticationException authEx)
-                {
-                    Log($"Попытка {attempt}/{maxRetries}: Ошибка аутентификации. Детали: {authEx.Message}");
-                    break; // При ошибке аутентификации повторные попытки бессмысленны
-                }
-                catch (Exception ex)
-                {
-                    Log($"Попытка {attempt}/{maxRetries}: Общая ошибка работы с почтовым сервером: {ex.Message}");
+                        try
+                        {
+                            Log($"[2-й проход] Обработка сертификата {certData.CertNumber} / {certData.Fio}");
 
-                    if (attempt < maxRetries)
+                            // Повторная проверка на аннулирование внутри письма (если вдруг)
+                            if (IsRevokedCertificateMessage(message.Subject ?? string.Empty) ||
+                                Regex.IsMatch(message.Subject ?? string.Empty, @"аннулир|прекратил действие", RegexOptions.IgnoreCase))
+                            {
+                                Log($"[2-й проход] Письмо помечено как аннулирование, добавляем в список аннулирований");
+                                string certNumber = certData.CertNumber;
+                                string fio = certData.Fio;
+                                DateTime? revokeDate = ExtractRevokeDate(body);
+                                revocationList.Add((certNumber, fio, revokeDate, certData.FolderPath));
+                                continue;
+                            }
+
+                            // Повторный апдейт записи на случай изменений
+                            try
+                            {
+                                var (upd, add) = _db.InsertOrUpdate(certData);
+                                if (upd) updatedCount++;
+                                if (add) addedCount++;
+                            }
+                            catch (Exception ex)
+                            {
+                                Log($"[2-й проход] Ошибка InsertOrUpdate для {certData.CertNumber}: {ex.Message}");
+                            }
+
+                            // Если есть ZIP — сохраняем и привязываем к сертификату
+                            if (hasZip)
+                            {
+                                try
+                                {
+                                    List<string> savedArchives = SaveAttachments(message, certData.Fio, certData.CertNumber);
+                                    if (savedArchives != null && savedArchives.Count > 0)
+                                    {
+                                        foreach (var savedArchive in savedArchives)
+                                        {
+                                            try
+                                            {
+                                                if (string.IsNullOrEmpty(savedArchive) || !File.Exists(savedArchive))
+                                                {
+                                                    Log($"[2-й проход] Пропуск архива (не найден или пустой путь): {savedArchive}");
+                                                    continue;
+                                                }
+
+                                                int certId = _db.GetCertIdByNumberAndFio(certData.CertNumber, certData.Fio);
+                                                if (certId > 0)
+                                                {
+                                                    bool ok = _db.SaveArchiveToDb(certId, savedArchive);
+                                                    if (ok)
+                                                    {
+                                                        try { File.Delete(savedArchive); } catch { }
+                                                        Log($"[2-й проход] Архив сохранён в БД и удалён локально: {savedArchive}");
+                                                    }
+                                                    else
+                                                    {
+                                                        Log($"[2-й проход] Ошибка сохранения архива в БД: {savedArchive}");
+                                                    }
+                                                }
+                                                else
+                                                {
+                                                    Log($"[2-й проход] Сертификат не найден в БД для сохранения архива: {certData.CertNumber} / {certData.Fio}");
+                                                }
+                                            }
+                                            catch (Exception ex)
+                                            {
+                                                Log($"[2-й проход] Ошибка при обработке архива '{savedArchive}': {ex.Message}");
+                                            }
+                                        }
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    Log($"[2-й проход] Ошибка при сохранении архива: {ex.Message}");
+                                }
+                            }
+
+                            results.Add(certData);
+                        }
+                        catch (Exception ex)
+                        {
+                            Log($"[2-й проход] Общая ошибка обработки {certData.CertNumber}: {ex.Message}");
+                        }
+                    }
+
+                    // -----------------------
+                    // ТРЕТИЙ ПРОХОД — Применяем аннулирования
+                    // -----------------------
+                    Log($"=== Третий проход: применение {revocationList.Count} аннулирований ===");
+
+                    foreach (var (certNumber, fio, revokeDate, folderPath) in revocationList)
                     {
-                        Log($"Повторная попытка через {retryDelayMs}мс...");
-                        System.Threading.Thread.Sleep(retryDelayMs);
+                        try
+                        {
+                            Log($"[3-й проход] Применяем аннулирование: {certNumber} ({fio ?? "ФИО неизвестно"})");
+                            bool ok = _db.FindAndMarkAsRevokedByCertNumber(certNumber, fio, folderPath, revokeDate?.ToString("dd.MM.yyyy"));
+                            Log(ok ? $"[3-й проход] Успешно: {certNumber}" : $"[3-й проход] Не найден для аннулирования: {certNumber}");
+                        }
+                        catch (Exception ex)
+                        {
+                            Log($"[3-й проход] Ошибка при аннулировании {certNumber}: {ex.Message}");
+                        }
                     }
-                }
-            }
 
+                    // Закрываем папку и отключаемся
+                    try { folder.Close(); } catch { }
+                    client.Disconnect(true);
+                }
+                catch (Exception exTop)
+                {
+                    Log($"Ошибка при подключении/обработке почты: {exTop.Message}");
+                    try { client.Disconnect(true); } catch { }
+                }
+            } // using client
+
+            Log($"=== Обработка завершена. Добавлено: {addedCount}, Обновлено: {updatedCount}, Аннулировано: {revocationList.Count} ===");
             return (results, updatedCount, addedCount);
         }
+
+
+
 
         private bool IsRevokedCertificateMessage(string subject)
         {
@@ -385,63 +365,62 @@ namespace ImapCertWatcher.Services
                    subject.Contains("прекратил действие");
         }
 
-        private string SaveAttachments(MimeKit.MimeMessage msg, string fio, string certNumber)
+        private List<string> SaveAttachments(MimeKit.MimeMessage msg, string fio, string certNumber)
         {
+            var savedPaths = new List<string>();
             try
             {
                 if (!msg.Attachments.Any())
                 {
                     Log("В письме нет вложений");
-                    return null;
+                    return savedPaths;
                 }
 
                 Log($"Проверяем вложения письма. Количество: {msg.Attachments.Count()}");
 
-                // Создаем безопасное имя папки для ФИО
                 var safeFio = MakeValidFileName(fio);
                 var certFolder = Path.Combine(_attachmentsBasePath, safeFio);
 
                 if (!Directory.Exists(certFolder))
-                {
-                    Log($"Создаем папку для сертификатов: {certFolder}");
                     Directory.CreateDirectory(certFolder);
-                }
 
-                string savedArchivePath = null;
                 int attachmentCount = 0;
+                int zipIndex = 0;
 
                 foreach (var attachment in msg.Attachments)
                 {
                     var fileName = attachment.ContentDisposition?.FileName ?? attachment.ContentType.Name;
 
+                    // Если имени нет — сформировать имя-заменитель
                     if (string.IsNullOrEmpty(fileName))
-                        continue;
+                    {
+                        zipIndex++;
+                        fileName = $"attachment_{zipIndex}.zip"; // или другим образом
+                    }
 
                     attachmentCount++;
                     Log($"Обрабатываем вложение {attachmentCount}: {fileName}");
 
-                    // Сохраняем только ZIP архивы
                     if (fileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
                     {
-                        var filePath = Path.Combine(certFolder, $"{certNumber}_{fileName}");
+                        // чтобы избежать перезаписи при одинаковых именах
+                        var uniqueFileName = $"{certNumber}_{zipIndex}_{fileName}";
+                        var filePath = Path.Combine(certFolder, uniqueFileName);
 
                         Log($"Сохраняем ZIP архив: {filePath}");
                         using (var stream = File.Create(filePath))
                         {
-                            if (attachment is MimeKit.MessagePart)
-                            {
-                                var part = (MimeKit.MessagePart)attachment;
-                                part.Message.WriteTo(stream);
-                            }
-                            else
-                            {
-                                var part = (MimeKit.MimePart)attachment;
+                            if (attachment is MimeKit.MessagePart mp)
+                                mp.Message.WriteTo(stream);
+                            else if (attachment is MimeKit.MimePart part)
                                 part.Content.DecodeTo(stream);
-                            }
+                            else
+                                Log($"Неизвестный тип вложения: {attachment.GetType().FullName}");
                         }
 
-                        savedArchivePath = filePath;
+                        savedPaths.Add(filePath);
                         Log($"Сохранен архив: {filePath}");
+                        zipIndex++;
                     }
                     else
                     {
@@ -449,15 +428,16 @@ namespace ImapCertWatcher.Services
                     }
                 }
 
-                Log($"Обработано вложений: {attachmentCount}, сохранено архивов: {(savedArchivePath != null ? 1 : 0)}");
-                return savedArchivePath;
+                Log($"Обработано вложений: {attachmentCount}, сохранено архивов: {savedPaths.Count}");
+                return savedPaths;
             }
             catch (Exception ex)
             {
                 Log($"Ошибка при сохранении вложений: {ex.Message}");
-                return null;
+                return savedPaths;
             }
         }
+
 
         private string MakeValidFileName(string name)
         {

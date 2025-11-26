@@ -379,26 +379,13 @@
                             <DataGridTemplateColumn Header="Архив с ЭЦП" Width="*">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
-                                        <Button Content="Открыть" 
-                                    Click="BtnOpenArchive_Click" 
-                                    Padding="4,2"
-                                    ToolTip="Распаковать и открыть архив">
-                                            <Button.Style>
-                                                <Style TargetType="Button" BasedOn="{StaticResource ModernButtonStyle}">
-                                                    <Setter Property="IsEnabled" Value="True"/>
-                                                    <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding ArchivePath}" Value="{x:Null}">
-                                                            <Setter Property="IsEnabled" Value="False"/>
-                                                            <Setter Property="Content" Value="Нет архива"/>
-                                                        </DataTrigger>
-                                                        <DataTrigger Binding="{Binding ArchivePath}" Value="">
-                                                            <Setter Property="IsEnabled" Value="False"/>
-                                                            <Setter Property="Content" Value="Нет архива"/>
-                                                        </DataTrigger>
-                                                    </Style.Triggers>
-                                                </Style>
-                                            </Button.Style>
-                                        </Button>
+                                        <Button Content="📁 Открыть"
+                    Click="BtnOpenArchive_Click"
+                    Padding="8,2"
+                    ToolTip="Распаковать и открыть архив с ЭЦП"
+                    Style="{StaticResource ModernButtonStyle}"
+                    FontSize="11"
+                    IsEnabled="{Binding HasArchive}" />
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>

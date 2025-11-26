@@ -19,6 +19,10 @@ using System.Security.Authentication;
 // Альтернатива Excel без использования Office Interop
 using System.Data;
 using System.Data.OleDb;
+using System.Collections.Generic;
+using MailKit;
+using MailKit.Net.Imap;
+using MailKit.Security;
 
 namespace ImapCertWatcher
 {
@@ -26,7 +30,8 @@ namespace ImapCertWatcher
     {
         private AppSettings _settings;
         private DbHelper _db;
-        private ImapWatcher _watcher;
+        private ImapNewCertificatesWatcher _newWatcher;
+        private ImapRevocationsWatcher _revWatcher;
         private ObservableCollection<Models.CertRecord> _items = new ObservableCollection<Models.CertRecord>();
         private ObservableCollection<Models.CertRecord> _allItems = new ObservableCollection<Models.CertRecord>();
         private Timer _timer;
@@ -79,7 +84,10 @@ namespace ImapCertWatcher
                 {
                     // Передаем ссылку на метод AddToMiniLog
                     _db = new DbHelper(_settings, AddToMiniLog);
-                    _watcher = new ImapWatcher(_settings, _db, AddToMiniLog);
+
+                    // создаём два watcher'а
+                    _newWatcher = new ImapNewCertificatesWatcher(_settings, _db, AddToMiniLog);
+                    _revWatcher = new ImapRevocationsWatcher(_settings, _db, AddToMiniLog);
 
                     dgCerts.CanUserAddRows = false;
                     dgCerts.ItemsSource = _items;
@@ -96,7 +104,7 @@ namespace ImapCertWatcher
                     {
                         var intervalMs = _settings.CheckIntervalHours * 60 * 60 * 1000;
                         _timer = new Timer(async _ => await DoCheckAsync(false),
-                            null, TimeSpan.Zero, TimeSpan.FromMilliseconds(intervalMs));
+                            null, TimeSpan.FromMilliseconds(intervalMs), TimeSpan.FromMilliseconds(intervalMs));
                     }
                 }
                 catch (Exception dbEx)
@@ -677,7 +685,12 @@ namespace ImapCertWatcher
                 Dispatcher.Invoke(() =>
                 {
                     _allItems.Clear();
-                    foreach (var e in list) _allItems.Add(e);
+                    foreach (var e in list)
+                    {
+                        // ★ ПРОВЕРЯЕМ НАЛИЧИЕ АРХИВА В БД ДЛЯ КАЖДОЙ ЗАПИСИ ★
+                        e.HasArchiveInDb = _db.HasArchiveInDb(e.Id);
+                        _allItems.Add(e);
+                    }
 
                     ApplySearchFilter();
                 });
@@ -686,6 +699,41 @@ namespace ImapCertWatcher
             {
                 Dispatcher.Invoke(() => statusText.Text = "Ошибка загрузки из БД: " + ex.Message);
             }
+        }
+
+        // ★ МЕТОД ДЛЯ РАСПАКОВКИ АРХИВА В ПАПКУ ★
+        private bool ExtractArchiveToFolder(string archivePath, string extractToFolder)
+        {
+            try
+            {
+                // Используем System.IO.Compression для распаковки ZIP
+                System.IO.Compression.ZipFile.ExtractToDirectory(archivePath, extractToFolder);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log($"Ошибка распаковки архива {archivePath}: {ex.Message}");
+                return false;
+            }
+        }
+
+        // ★ МЕТОД ДЛЯ СОЗДАНИЯ ВАЛИДНОГО ИМЕНИ ПАПКИ ★
+        private string MakeValidFolderName(string name)
+        {
+            if (string.IsNullOrEmpty(name))
+                return "Unknown";
+
+            var invalidChars = Path.GetInvalidFileNameChars();
+            var validName = new string(name.Where(ch => !invalidChars.Contains(ch)).ToArray());
+
+            // Убираем пробелы в начале и конце, заменяем множественные пробелы на один
+            validName = System.Text.RegularExpressions.Regex.Replace(validName.Trim(), @"\s+", " ");
+
+            // Ограничиваем длину имени папки
+            if (validName.Length > 50)
+                validName = validName.Substring(0, 50);
+
+            return validName;
         }
 
         private void ApplySearchFilter()
@@ -774,7 +822,7 @@ namespace ImapCertWatcher
 
         private async Task DoCheckAsync(bool checkAllMessages)
         {
-            if (_watcher == null)
+            if (_newWatcher == null || _revWatcher == null)
             {
                 Dispatcher.Invoke(() => statusText.Text = "Ошибка: компоненты не инициализированы");
                 return;
@@ -789,9 +837,23 @@ namespace ImapCertWatcher
                 AddToMiniLog(checkAllMessages ? "Начата обработка всех писем" : "Начата проверка почты");
             });
 
+            int addedCount = 0;
+            int updatedCount = 0;
+            int revokedCount = 0;
+
             try
             {
-                var (processedEntries, updatedCount, addedCount) = await Task.Run(() => _watcher.CheckMail(checkAllMessages));
+                // Первый модуль: новые сертификаты (деструктуризация tuple)
+                var (processedEntries, updatedDelta, addedDelta) =
+                    await Task.Run(() => _newWatcher.ProcessNewCertificates(checkAllMessages));
+
+                // Аккумулируем счётчики
+                addedCount += addedDelta;
+                updatedCount += updatedDelta;
+
+                // Второй модуль: аннулирования — ожидаем, что метод возвращает int (число аннулирований)
+                int revokedDelta = await Task.Run(() => _revWatcher.ProcessRevocations(checkAllMessages));
+                revokedCount += revokedDelta;
 
                 // Всегда обновляем данные из БД, даже если не было новых писем
                 var newList = _db?.LoadAll(_showDeleted, _currentBuildingFilter);
@@ -806,21 +868,14 @@ namespace ImapCertWatcher
                         // Автоподбор столбцов
                         AutoFitDataGridColumns();
 
-                        if (updatedCount > 0 || addedCount > 0)
+                        if (updatedCount > 0 || addedCount > 0 || revokedCount > 0)
                         {
                             string message = "";
-                            if (addedCount > 0 && updatedCount > 0)
-                            {
-                                message = $"Добавлено: {addedCount}, Обновлено: {updatedCount} ({DateTime.Now})";
-                            }
-                            else if (addedCount > 0)
-                            {
-                                message = $"Добавлено: {addedCount} ({DateTime.Now})";
-                            }
-                            else if (updatedCount > 0)
-                            {
-                                message = $"Обновлено: {updatedCount} ({DateTime.Now})";
-                            }
+                            var parts = new List<string>();
+                            if (addedCount > 0) parts.Add($"Добавлено: {addedCount}");
+                            if (updatedCount > 0) parts.Add($"Обновлено: {updatedCount}");
+                            if (revokedCount > 0) parts.Add($"Аннулировано: {revokedCount}");
+                            message = string.Join(", ", parts) + $" ({DateTime.Now})";
 
                             statusText.Text = message;
                             AddToMiniLog(message);
@@ -852,7 +907,7 @@ namespace ImapCertWatcher
                 ShowProgressBar(false);
             }
         }
-        
+
 
         private async void BtnManualCheck_Click(object sender, RoutedEventArgs e)
         {
@@ -1063,16 +1118,100 @@ namespace ImapCertWatcher
             {
                 try
                 {
-                    if (_watcher.ExtractArchive(record.ArchivePath, record.Fio))
+                    AddToMiniLog($"Попытка открыть архив для: {record.Fio}");
+
+                    // ★ ПРОВЕРЯЕМ АРХИВ В БД В ПЕРВУЮ ОЧЕРЕДЬ ★
+                    if (_db.HasArchiveInDb(record.Id))
                     {
-                        statusText.Text = "Архив распакован и открыт";
-                        AddToMiniLog($"Открыт архив: {record.Fio}"); // ← ДОБАВИТЬ
+                        AddToMiniLog($"Найден архив в БД для ID: {record.Id}");
+                        var (fileData, fileName) = _db.GetArchiveFromDb(record.Id);
+                        if (fileData != null && fileData.Length > 0)
+                        {
+                            AddToMiniLog($"Загружен архив из БД: {fileName} ({fileData.Length} байт)");
+
+                            // Создаем папку Certs в папке программы, если её нет
+                            string certsBaseDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Certs");
+                            if (!Directory.Exists(certsBaseDir))
+                                Directory.CreateDirectory(certsBaseDir);
+
+                            // Создаем папку для конкретного пользователя
+                            string userFolder = Path.Combine(certsBaseDir, MakeValidFolderName(record.Fio));
+                            if (!Directory.Exists(userFolder))
+                                Directory.CreateDirectory(userFolder);
+
+                            // Сохраняем временный архивный файл
+                            string tempArchivePath = Path.Combine(userFolder, fileName ?? "archive.zip");
+                            File.WriteAllBytes(tempArchivePath, fileData);
+
+                            AddToMiniLog($"Архив сохранен во временный файл: {tempArchivePath}");
+
+                            // Распаковываем архив
+                            if (ExtractArchiveToFolder(tempArchivePath, userFolder))
+                            {
+                                // Удаляем временный архив после распаковки
+                                try { File.Delete(tempArchivePath); } catch { }
+
+                                // Открываем папку с распакованными файлами
+                                Process.Start("explorer.exe", userFolder);
+
+                                statusText.Text = "Архив распакован и папка открыта";
+                                AddToMiniLog($"Архив распакован и открыт: {record.Fio}");
+                            }
+                            else
+                            {
+                                MessageBox.Show("Не удалось распаковать архив из БД", "Ошибка",
+                                              MessageBoxButton.OK, MessageBoxImage.Error);
+                                AddToMiniLog($"Ошибка распаковки архива из БД: {record.Fio}");
+                            }
+                        }
+                        else
+                        {
+                            MessageBox.Show("Не удалось загрузить архив из БД", "Ошибка",
+                                          MessageBoxButton.OK, MessageBoxImage.Error);
+                            AddToMiniLog($"Ошибка загрузки архива из БД: данные пустые");
+                        }
                     }
                     else
                     {
-                        MessageBox.Show("Не удалось распаковать архив", "Ошибка",
-                                      MessageBoxButton.OK, MessageBoxImage.Error);
-                        AddToMiniLog($"Ошибка открытия архива: {record.Fio}");
+                        AddToMiniLog($"Архив не найден в БД для ID: {record.Id}");
+
+                        // ★ ПРОВЕРЯЕМ СТАРУЮ ЛОГИКУ ДЛЯ ФАЙЛОВОЙ СИСТЕМЫ ★
+                        if (!string.IsNullOrEmpty(record.ArchivePath) && File.Exists(record.ArchivePath))
+                        {
+                            AddToMiniLog($"Найден архив в файловой системе: {record.ArchivePath}");
+
+                            // ★ Создаем папку Certs в папке программы, если её нет
+                            string certsBaseDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Certs");
+                            if (!Directory.Exists(certsBaseDir))
+                                Directory.CreateDirectory(certsBaseDir);
+
+                            // Создаем папку для конкретного пользователя
+                            string userFolder = Path.Combine(certsBaseDir, MakeValidFolderName(record.Fio));
+                            if (!Directory.Exists(userFolder))
+                                Directory.CreateDirectory(userFolder);
+
+                            // Распаковываем архив
+                            if (ExtractArchiveToFolder(record.ArchivePath, userFolder))
+                            {
+                                // Открываем папку с распакованными файлами
+                                Process.Start("explorer.exe", userFolder);
+
+                                statusText.Text = "Архив распакован и папка открыта";
+                                AddToMiniLog($"Открыт архив из файловой системы: {record.Fio}");
+                            }
+                            else
+                            {
+                                MessageBox.Show("Не удалось распаковать архив из файловой системы", "Ошибка",
+                                              MessageBoxButton.OK, MessageBoxImage.Error);
+                                AddToMiniLog($"Ошибка распаковки архива из файловой системы: {record.Fio}");
+                            }
+                        }
+                        else
+                        {
+                            MessageBox.Show("Архив не найден ни в базе данных, ни в файловой системе", "Ошибка",
+                                          MessageBoxButton.OK, MessageBoxImage.Error);
+                            AddToMiniLog($"Архив не найден нигде для: {record.Fio}");
+                        }
                     }
                 }
                 catch (Exception ex)
@@ -1088,14 +1227,28 @@ namespace ImapCertWatcher
         {
             try
             {
-                if (_watcher.ExtractArchive(record.ArchivePath, record.Fio))
+                // Пробуем распаковать локальный путь (если задан)
+                if (!string.IsNullOrEmpty(record.ArchivePath) && File.Exists(record.ArchivePath))
                 {
-                    statusText.Text = "Архив распакован и открыт";
+                    var safeFio = MakeValidFolderName(record.Fio);
+                    string certsBaseDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Certs");
+                    if (!Directory.Exists(certsBaseDir)) Directory.CreateDirectory(certsBaseDir);
+                    string userFolder = Path.Combine(certsBaseDir, safeFio);
+                    if (!Directory.Exists(userFolder)) Directory.CreateDirectory(userFolder);
+
+                    if (ExtractArchiveToFolder(record.ArchivePath, userFolder))
+                    {
+                        statusText.Text = "Архив распакован и открыт";
+                        Process.Start("explorer.exe", userFolder);
+                    }
+                    else
+                    {
+                        MessageBox.Show("Не удалось распаковать архив", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+                    }
                 }
                 else
                 {
-                    MessageBox.Show("Не удалось распаковать архив", "Ошибка",
-                                  MessageBoxButton.OK, MessageBoxImage.Error);
+                    MessageBox.Show("Архив отсутствует или не найден", "Информация", MessageBoxButton.OK, MessageBoxImage.Information);
                 }
             }
             catch (Exception ex)
@@ -1283,7 +1436,7 @@ namespace ImapCertWatcher
                     MailPassword = pwdMailPassword.Password
                 };
 
-                var folders = ImapWatcher.GetMailFolders(tempSettings);
+                var folders = GetMailFolders(tempSettings);
 
                 Dispatcher.Invoke(() =>
                 {
@@ -1321,6 +1474,75 @@ namespace ImapCertWatcher
             }
         }
 
+        // Получить список папок с сервера (локально в UI)
+        private List<string> GetMailFolders(AppSettings tempSettings)
+        {
+            var result = new List<string>();
+            try
+            {
+                using (var client = new ImapClient())
+                {
+                    client.Timeout = 60000;
+                    client.ServerCertificateValidationCallback = (s, c, h, e) => true;
+
+                    if (tempSettings.MailUseSsl)
+                        client.Connect(tempSettings.MailHost, tempSettings.MailPort, SecureSocketOptions.SslOnConnect);
+                    else
+                        client.Connect(tempSettings.MailHost, tempSettings.MailPort, SecureSocketOptions.StartTlsWhenAvailable);
+
+                    client.Authenticate(tempSettings.MailLogin, tempSettings.MailPassword);
+
+                    // Получаем корневые папки пользователя
+                    foreach (var ns in client.PersonalNamespaces)
+                    {
+                        try
+                        {
+                            var root = client.GetFolder(ns);
+                            if (root != null)
+                            {
+                                result.Add(root.FullName);
+
+                                try
+                                {
+                                    foreach (var f in root.GetSubfolders(false))
+                                    {
+                                        result.Add(f.FullName);
+                                    }
+                                }
+                                catch { }
+                            }
+                        }
+                        catch
+                        {
+                            // игнорируем ошибку конкретного namespace
+                        }
+                    }
+
+                    // в качестве fallback: список top-level (если есть первый namespace)
+                    try
+                    {
+                        var firstNs = client.PersonalNamespaces.FirstOrDefault();
+                        if (firstNs != null)
+                        {
+                            foreach (var f in client.GetFolders(firstNs))
+                            {
+                                result.Add(f.FullName);
+                            }
+                        }
+                    }
+                    catch { }
+
+                    client.Disconnect(true);
+                }
+            }
+            catch (Exception ex)
+            {
+                AddToMiniLog($"Ошибка получения списка папок: {ex.Message}");
+            }
+
+            return result.Distinct().ToList();
+        }
+
         private void ResetUIState()
         {
             Cursor = Cursors.Arrow;
@@ -1343,7 +1565,7 @@ namespace ImapCertWatcher
                     ImapFolder = cmbImapFolder.Text
                 };
 
-                var folders = ImapWatcher.GetMailFolders(tempSettings);
+                var folders = GetMailFolders(tempSettings);
 
                 string selectedFolder = cmbImapFolder.Text;
                 bool folderExists = folders.Contains(selectedFolder);
@@ -1407,7 +1629,9 @@ namespace ImapCertWatcher
                 try
                 {
                     _db = new DbHelper(_settings);
-                    _watcher = new ImapWatcher(_settings, _db);
+                    // пересоздаём watcher'ы с новой ссылкой на БД
+                    _newWatcher = new ImapNewCertificatesWatcher(_settings, _db, AddToMiniLog);
+                    _revWatcher = new ImapRevocationsWatcher(_settings, _db, AddToMiniLog);
                     LoadFromDb();
                 }
                 catch (Exception dbEx)
@@ -1637,7 +1861,7 @@ namespace ImapCertWatcher
             }
         }
 
-        
+
         private void TabControl_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
             if (e.Source is TabControl tabControl)

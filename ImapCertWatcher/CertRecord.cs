@@ -16,7 +16,8 @@ namespace ImapCertWatcher.Models
         public string CertNumber { get; set; }
         public string FromAddress { get; set; }
         public bool IsDeleted { get; set; }
-
+        public bool HasArchiveInDb { get; set; }
+        public bool HasArchive { get; set; }
         public string Note
         {
             get => _note;
