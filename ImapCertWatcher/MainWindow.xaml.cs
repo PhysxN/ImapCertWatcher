@@ -1,6 +1,7 @@
 ﻿using ImapCertWatcher.Data;
 using ImapCertWatcher.Services;
 using ImapCertWatcher.Utils;
+using ImapCertWatcher.Models;
 using Microsoft.Win32;
 using System;
 using System.Collections.ObjectModel;
@@ -15,6 +16,7 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using System.Diagnostics;
 using System.Security.Authentication;
+
 
 // Альтернатива Excel без использования Office Interop
 using System.Data;
@@ -32,9 +34,10 @@ namespace ImapCertWatcher
         private DbHelper _db;
         private ImapNewCertificatesWatcher _newWatcher;
         private ImapRevocationsWatcher _revWatcher;
-        private ObservableCollection<Models.CertRecord> _items = new ObservableCollection<Models.CertRecord>();
-        private ObservableCollection<Models.CertRecord> _allItems = new ObservableCollection<Models.CertRecord>();
+        private ObservableCollection<CertRecord> _items = new ObservableCollection<CertRecord>();
+        private ObservableCollection<CertRecord> _allItems = new ObservableCollection<CertRecord>();
         private Timer _timer;
+        private DispatcherTimer _refreshTimer;
         private ObservableCollection<string> _availableFolders = new ObservableCollection<string>();
         private ObservableCollection<string> _miniLogMessages = new ObservableCollection<string>();
         private const int MAX_MINI_LOG_LINES = 3;
@@ -44,17 +47,24 @@ namespace ImapCertWatcher
         private string _searchText = "";
         private bool _isDarkTheme = false;
 
+        // Новые поля для логирования сессии
+        private readonly string _sessionId;
+        private string _currentSessionLogFile;
+
         // Список доступных зданий
         private readonly ObservableCollection<string> _availableBuildings = new ObservableCollection<string>
-        {
-            "", "Краснофлотская", "Пионерская"
-        };
+    {
+        "", "Краснофлотская", "Пионерская"
+    };
 
         // Флаг для предотвращения множественного сохранения
         private bool _isSavingBuilding = false;
 
         public MainWindow()
         {
+            // Инициализируем sessionId ДО вызова InitializeComponent()
+            _sessionId = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+
             try
             {
                 InitializeComponent();
@@ -66,7 +76,7 @@ namespace ImapCertWatcher
                 // Очистка старых логов при запуске (в фоне)
                 Task.Run(() => CleanOldLogs());
 
-                // Загружаем настройки (это лёгкая операция, можно оставить в конструкторе)
+                // Загружаем настройки
                 var settingsPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "settings.txt");
                 _settings = SettingsLoader.Load(settingsPath);
 
@@ -81,16 +91,13 @@ namespace ImapCertWatcher
                 // Загрузка темы
                 LoadThemeSettings();
 
-                // Настройка DataGrid и обработчиков – это быстро
+                // Настройка DataGrid и обработчиков
                 dgCerts.CanUserAddRows = false;
                 dgCerts.ItemsSource = _items;
 
                 dgCerts.CellEditEnding += DgCerts_CellEditEnding;
                 dgCerts.BeginningEdit += DgCerts_BeginningEdit;
                 dgCerts.PreparingCellForEdit += DgCerts_PreparingCellForEdit;
-
-                // 🚩 ВАЖНО: никакого DbHelper, LoadFromDb, LoadLogs, таймера здесь!
-                // Всё тяжёлое перенесём в Loaded
 
                 this.Loaded += MainWindow_Loaded;
             }
@@ -137,7 +144,7 @@ namespace ImapCertWatcher
 
                 // Заполняем коллекции для грида
                 _allItems.Clear();
-                foreach (var rec in initResult.list)   // ← тут раньше было var e
+                foreach (var rec in initResult.list)
                 {
                     rec.HasArchiveInDb = _db.HasArchiveInDb(rec.Id);
                     _allItems.Add(rec);
@@ -146,7 +153,7 @@ namespace ImapCertWatcher
                 ApplySearchFilter();
                 AutoFitDataGridColumns();
 
-                // Инициализация таймера
+                // Инициализация таймера проверки почты
                 _timer?.Dispose();
                 if (_settings.CheckIntervalHours > 0)
                 {
@@ -156,6 +163,9 @@ namespace ImapCertWatcher
                         TimeSpan.FromMilliseconds(intervalMs),
                         TimeSpan.FromMilliseconds(intervalMs));
                 }
+
+                // ★ ДОБАВЛЯЕМ ТАЙМЕР ДЛЯ ОБНОВЛЕНИЯ ДНЕЙ ★
+                InitializeRefreshTimer();
 
                 // Логи можно подгрузить уже после всего (это быстро)
                 LoadLogs();
@@ -195,6 +205,70 @@ namespace ImapCertWatcher
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Ошибка в AddToMiniLog: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Инициализация таймера для авто-обновления дней
+        /// </summary>
+        private void InitializeRefreshTimer()
+        {
+            try
+            {
+                _refreshTimer = new DispatcherTimer();
+                _refreshTimer.Interval = TimeSpan.FromMinutes(10); // Обновляем каждые 10 минут
+                _refreshTimer.Tick += RefreshDaysLeft;
+                _refreshTimer.Start();
+
+                AddToMiniLog("Таймер обновления дней запущен (интервал: 10 минут)");
+            }
+            catch (Exception ex)
+            {
+                Log($"Ошибка инициализации таймера обновления: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Обновление отображения оставшихся дней для всех записей
+        /// </summary>
+        private void RefreshDaysLeft(object sender, EventArgs e)
+        {
+            try
+            {
+                // Принудительно обновляем отображение DaysLeft для всех записей
+                foreach (var item in _allItems)
+                {
+                    item.OnPropertyChanged(nameof(item.DaysLeft));
+                }
+
+                // Также обновляем отображение для отфильтрованных записей
+                foreach (var item in _items)
+                {
+                    item.OnPropertyChanged(nameof(item.DaysLeft));
+                }
+
+                // Логируем только при отладке (можно закомментировать в продакшене)
+                // AddToMiniLog("Авто-обновление: пересчитаны оставшиеся дни");
+            }
+            catch (Exception ex)
+            {
+                Log($"Ошибка при обновлении дней: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Ручное обновление дней (можно вызвать из кода)
+        /// </summary>
+        private void ManualRefreshDaysLeft()
+        {
+            try
+            {
+                RefreshDaysLeft(null, EventArgs.Empty);
+                AddToMiniLog("Ручное обновление дней выполнено");
+            }
+            catch (Exception ex)
+            {
+                Log($"Ошибка при ручном обновлении дней: {ex.Message}");
             }
         }
 
@@ -422,7 +496,7 @@ namespace ImapCertWatcher
                 AddToMiniLog("Начат экспорт в Excel");
 
                 var dataToExport = exportSelectedOnly && dgCerts.SelectedItem != null
-                    ? new ObservableCollection<Models.CertRecord> { (Models.CertRecord)dgCerts.SelectedItem }
+                    ? new ObservableCollection<CertRecord> { (CertRecord)dgCerts.SelectedItem }
                     : _items;
 
                 if (!dataToExport.Any())
@@ -494,7 +568,7 @@ namespace ImapCertWatcher
 
 
 
-        private void GenerateCsvFile(ObservableCollection<Models.CertRecord> data, string filePath)
+        private void GenerateCsvFile(ObservableCollection<CertRecord> data, string filePath)
         {
             using (var writer = new StreamWriter(filePath, false, System.Text.Encoding.UTF8))
             {
@@ -515,7 +589,7 @@ namespace ImapCertWatcher
             }
         }
 
-        private void GenerateExcelFile(ObservableCollection<Models.CertRecord> data, string filePath)
+        private void GenerateExcelFile(ObservableCollection<CertRecord> data, string filePath)
         {
             try
             {
@@ -640,7 +714,7 @@ namespace ImapCertWatcher
             return field;
         }
 
-        private void TryGenerateExcelWithClosedXML(ObservableCollection<Models.CertRecord> data, string filePath)
+        private void TryGenerateExcelWithClosedXML(ObservableCollection<CertRecord> data, string filePath)
         {
             try
             {
@@ -655,7 +729,7 @@ namespace ImapCertWatcher
             }
         }
 
-        private void GenerateExcelWithClosedXML(ObservableCollection<Models.CertRecord> data, string filePath)
+        private void GenerateExcelWithClosedXML(ObservableCollection<CertRecord> data, string filePath)
         {
             // Этот метод будет работать только если установлен ClosedXML
             dynamic workbook = Activator.CreateInstance(Type.GetType("ClosedXML.Excel.XLWorkbook, ClosedXML"));
@@ -961,11 +1035,13 @@ namespace ImapCertWatcher
 
         private async void BtnManualCheck_Click(object sender, RoutedEventArgs e)
         {
+            Log("Ручная проверка почты запущена");
             await DoCheckAsync(false);
         }
 
         private async void BtnProcessAll_Click(object sender, RoutedEventArgs e)
         {
+            Log("Обработка всех писем запущена");
             await DoCheckAsync(true);
         }
 
@@ -991,7 +1067,7 @@ namespace ImapCertWatcher
 
         private void NoteTextBox_LostFocus(object sender, RoutedEventArgs e)
         {
-            if (sender is TextBox textBox && textBox.DataContext is Models.CertRecord record)
+            if (sender is TextBox textBox && textBox.DataContext is CertRecord record)
             {
                 try
                 {
@@ -1023,7 +1099,7 @@ namespace ImapCertWatcher
         {
             if (_isSavingBuilding) return;
 
-            if (sender is ComboBox comboBox && comboBox.DataContext is Models.CertRecord record)
+            if (sender is ComboBox comboBox && comboBox.DataContext is CertRecord record)
             {
                 if (e.AddedItems.Count > 0)
                 {
@@ -1048,7 +1124,7 @@ namespace ImapCertWatcher
         {
             if (_isSavingBuilding) return;
 
-            if (sender is ComboBox comboBox && comboBox.DataContext is Models.CertRecord record)
+            if (sender is ComboBox comboBox && comboBox.DataContext is CertRecord record)
             {
                 _isSavingBuilding = true;
                 try
@@ -1067,7 +1143,7 @@ namespace ImapCertWatcher
             if (e.Column.Header.ToString() == "Здание")
             {
                 var comboBox = e.EditingElement as ComboBox;
-                if (comboBox != null && e.Row.DataContext is Models.CertRecord record)
+                if (comboBox != null && e.Row.DataContext is CertRecord record)
                 {
                     comboBox.ItemsSource = _availableBuildings;
                     comboBox.DisplayMemberPath = ".";
@@ -1086,14 +1162,14 @@ namespace ImapCertWatcher
             if (e.EditAction == DataGridEditAction.Commit && e.Column.Header.ToString() == "Здание")
             {
                 var comboBox = e.EditingElement as ComboBox;
-                if (comboBox?.DataContext is Models.CertRecord record)
+                if (comboBox?.DataContext is CertRecord record)
                 {
                     // Не сохраняем здесь, т.к. уже сохранили в SelectionChanged
                 }
             }
         }
 
-        private void SaveBuilding(Models.CertRecord record)
+        private void SaveBuilding(CertRecord record)
         {
             try
             {
@@ -1114,32 +1190,29 @@ namespace ImapCertWatcher
 
         private void BtnDeleteSelected_Click(object sender, RoutedEventArgs e)
         {
-            if (dgCerts.SelectedItem is Models.CertRecord record)
+            if (dgCerts.SelectedItem is CertRecord record)
             {
                 try
                 {
+                    Log($"Пометка на удаление: {record.Fio} (ID: {record.Id})");
                     _db.MarkAsDeleted(record.Id, true);
                     LoadFromDb();
                     statusText.Text = "Запись помечена на удаление";
-                    AddToMiniLog($"Удален: {record.Fio}"); // ← ДОБАВИТЬ ЭТУ СТРОКУ
+                    AddToMiniLog($"Удален: {record.Fio}");
                 }
                 catch (Exception ex)
                 {
+                    Log($"Ошибка при пометке на удаление: {ex.Message}");
                     MessageBox.Show($"Ошибка при пометке на удаление: {ex.Message}", "Ошибка",
                                   MessageBoxButton.OK, MessageBoxImage.Error);
-                    AddToMiniLog($"Ошибка удаления: {ex.Message}"); // ← И ЭТУ ДЛЯ ОШИБОК
+                    AddToMiniLog($"Ошибка удаления: {ex.Message}");
                 }
-            }
-            else
-            {
-                MessageBox.Show("Выберите запись для пометки на удаление", "Информация",
-                              MessageBoxButton.OK, MessageBoxImage.Information);
             }
         }
 
         private void BtnRestoreSelected_Click(object sender, RoutedEventArgs e)
         {
-            if (dgCerts.SelectedItem is Models.CertRecord record)
+            if (dgCerts.SelectedItem is CertRecord record)
             {
                 try
                 {
@@ -1164,7 +1237,7 @@ namespace ImapCertWatcher
 
         private void BtnOpenArchive_Click(object sender, RoutedEventArgs e)
         {
-            if (sender is Button button && button.DataContext is Models.CertRecord record)
+            if (sender is Button button && button.DataContext is CertRecord record)
             {
                 try
                 {
@@ -1273,7 +1346,7 @@ namespace ImapCertWatcher
             }
         }
 
-        private void OpenArchive(Models.CertRecord record)
+        private void OpenArchive(CertRecord record)
         {
             try
             {
@@ -1310,7 +1383,7 @@ namespace ImapCertWatcher
 
         private void DgCerts_LoadingRow(object sender, DataGridRowEventArgs e)
         {
-            if (e.Row.Item is Models.CertRecord record)
+            if (e.Row.Item is CertRecord record)
             {
                 // Устанавливаем только фон, цвет текста будет управляться стилями
                 if (record.IsDeleted)
@@ -1350,7 +1423,7 @@ namespace ImapCertWatcher
 
         private void DgCerts_ContextMenuOpening(object sender, ContextMenuEventArgs e)
         {
-            if (dgCerts.SelectedItem is Models.CertRecord record)
+            if (dgCerts.SelectedItem is CertRecord record)
             {
                 var menuItems = dgCerts.ContextMenu.Items;
                 var archiveMenuItem = (MenuItem)menuItems[0];
@@ -1373,7 +1446,7 @@ namespace ImapCertWatcher
 
         private void AddArchiveMenuItem_Click(object sender, RoutedEventArgs e)
         {
-            if (dgCerts.SelectedItem is Models.CertRecord record)
+            if (dgCerts.SelectedItem is CertRecord record)
             {
                 if (!string.IsNullOrEmpty(record.ArchivePath) && File.Exists(record.ArchivePath))
                 {
@@ -1830,31 +1903,34 @@ namespace ImapCertWatcher
                     return;
                 }
 
-                // Ищем файл лога за сегодня
-                var todayLogFile = Path.Combine(todayFolder, $"log_{DateTime.Now:yyyy-MM-dd}.log");
-                if (!File.Exists(todayLogFile))
+                // Ищем самый свежий файл сессии за сегодня
+                var sessionLogs = Directory.GetFiles(todayFolder, "session_*.log")
+                    .Select(f => new FileInfo(f))
+                    .OrderByDescending(f => f.CreationTime)
+                    .ToList();
+
+                if (!sessionLogs.Any())
                 {
                     Dispatcher.Invoke(() =>
                     {
-                        txtLogs.Text = "Файл лога за сегодня не найден";
-                        logStatusText.Text = "Файл лога не создан";
+                        txtLogs.Text = "Файлы сессий не найдены";
+                        logStatusText.Text = "Нет логов сессий";
                     });
                     return;
                 }
 
-                // Читаем весь файл лога за сегодня
-                var logContent = File.ReadAllText(todayLogFile);
+                // Берем самый свежий файл сессии (текущей сессии)
+                var latestSessionLog = sessionLogs.First();
+                var logContent = File.ReadAllText(latestSessionLog.FullName);
 
                 Dispatcher.Invoke(() =>
                 {
                     txtLogs.Text = logContent;
-                    logStatusText.Text = $"Логи за {DateTime.Now:dd.MM.yyyy} ({DateTime.Now:HH:mm:ss})";
-
-                    // Прокручиваем к концу для просмотра самых свежих записей
+                    logStatusText.Text = $"Логи текущей сессии ({latestSessionLog.CreationTime:dd.MM.yyyy HH:mm})";
                     txtLogs.ScrollToEnd();
                 });
 
-                AddToMiniLog($"Загружены логи за {DateTime.Now:dd.MM.yyyy}");
+                AddToMiniLog($"Загружены логи текущей сессии");
             }
             catch (Exception ex)
             {
@@ -1902,8 +1978,6 @@ namespace ImapCertWatcher
                         }
                     }
                 }
-
-                // Никакого логирования - это фоновый процесс
             }
             catch
             {
@@ -1997,7 +2071,7 @@ namespace ImapCertWatcher
                 MessageBox.Show($"Удалено папок с логами: {deletedCount}", "Очистка логов",
                               MessageBoxButton.OK, MessageBoxImage.Information);
 
-                LoadLogs();
+                LoadLogs(); // Перезагружаем логи после очистки
                 AddToMiniLog($"Очищено логов: {deletedCount} папок");
             }
             catch (Exception ex)
@@ -2032,20 +2106,22 @@ namespace ImapCertWatcher
         {
             try
             {
-                // Один файл на день вместо файла на каждую секунду
                 string logDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "LOG", DateTime.Now.ToString("yyyy-MM-dd"));
                 if (!Directory.Exists(logDirectory))
                     Directory.CreateDirectory(logDirectory);
 
-                // Файл с именем дня
-                string logFile = Path.Combine(logDirectory, $"log_{DateTime.Now:yyyy-MM-dd}.log");
+                // Создаем файл для текущей сессии
+                if (string.IsNullOrEmpty(_currentSessionLogFile))
+                {
+                    _currentSessionLogFile = Path.Combine(logDirectory, $"session_{_sessionId}.log");
+                    // Записываем заголовок сессии
+                    File.AppendAllText(_currentSessionLogFile, $"=== Сессия запущена: {DateTime.Now:yyyy-MM-dd HH:mm:ss} ==={Environment.NewLine}{Environment.NewLine}", System.Text.Encoding.UTF8);
+                }
+
                 string logEntry = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} - [MainWindow] {message}{Environment.NewLine}";
+                File.AppendAllText(_currentSessionLogFile, logEntry, System.Text.Encoding.UTF8);
 
-                File.AppendAllText(logFile, logEntry, System.Text.Encoding.UTF8);
-
-                // Используем прямой вызов AddToMiniLog вместо делегата
                 AddToMiniLog($"[MainWindow] {message}");
-
                 System.Diagnostics.Debug.WriteLine($"[MainWindow] {message}");
             }
             catch (Exception ex)
@@ -2058,6 +2134,11 @@ namespace ImapCertWatcher
         {
             base.OnClosed(e);
             _timer?.Dispose();
+            _refreshTimer?.Stop(); // ← ОСТАНАВЛИВАЕМ ТАЙМЕР
+            if (_refreshTimer != null)
+            {
+                _refreshTimer.Tick -= RefreshDaysLeft; // ← ОТПИСЫВАЕМСЯ ОТ СОБЫТИЯ
+            }
         }
     }
 }

@@ -767,7 +767,7 @@ ROWS 1";
                             DateTime existingDateEnd = DateTime.MinValue;
                             string existingCertNumber = null;
 
-                            // 1) Попытка найти по FIO + CERT_NUMBER (без "умной" нормализации, но с UPPER/TRIM)
+                            // 1) Попытка найти по FIO + CERT_NUMBER
                             using (var cmd = conn.CreateCommand())
                             {
                                 cmd.Transaction = tx;
@@ -791,7 +791,7 @@ ROWS 1";
                                 }
                             }
 
-                            // 2) Если не нашли по FIO+CERT_NUMBER — ищем по одному ФИО (самый свежий сертификат)
+                            // 2) Если не нашли по FIO+CERT_NUMBER — ищем по одному ФИО
                             if (existingId <= 0)
                             {
                                 using (var cmd = conn.CreateCommand())
@@ -817,7 +817,7 @@ ROWS 1";
                                 }
                             }
 
-                            // Нормализуем номер только для сравнения "sameCert"
+                            // Нормализуем номер для сравнения
                             string existingCertNorm = NormalizeCertNumber(existingCertNumber);
                             string newCertNorm = NormalizeCertNumber(entry.CertNumber);
 
@@ -837,7 +837,7 @@ UPDATE CERTS SET
     CERT_NUMBER  = @certOrig,
     DATE_START   = @dateStart,
     DATE_END     = @dateEnd,
-    DAYS_LEFT    = @daysLeft,
+    DAYS_LEFT    = 0,  -- ← Больше не сохраняем вычисленное значение
     FROM_ADDRESS = @fromAddress,
     FOLDER_PATH  = @folderPath,
     MESSAGE_DATE = @msgDate
@@ -849,7 +849,6 @@ WHERE ID = @id";
                                             entry.DateStart == DateTime.MinValue ? (object)DBNull.Value : entry.DateStart);
                                         upd.Parameters.AddWithValue("@dateEnd",
                                             entry.DateEnd == DateTime.MinValue ? (object)DBNull.Value : entry.DateEnd);
-                                        upd.Parameters.AddWithValue("@daysLeft", entry.DaysLeft);
                                         upd.Parameters.AddWithValue("@fromAddress", (object)entry.FromAddress ?? "");
                                         upd.Parameters.AddWithValue("@folderPath", (object)entry.FolderPath ?? "");
                                         upd.Parameters.AddWithValue("@msgDate",
@@ -905,7 +904,7 @@ RETURNING ID";
                                         entry.DateStart == DateTime.MinValue ? (object)DBNull.Value : entry.DateStart);
                                     ins.Parameters.AddWithValue("@dateEnd",
                                         entry.DateEnd == DateTime.MinValue ? (object)DBNull.Value : entry.DateEnd);
-                                    ins.Parameters.AddWithValue("@daysLeft", entry.DaysLeft);
+                                    ins.Parameters.AddWithValue("@daysLeft", 0);  // ← Сохраняем 0
                                     ins.Parameters.AddWithValue("@fromAddress", (object)entry.FromAddress ?? "");
                                     ins.Parameters.AddWithValue("@folderPath", (object)entry.FolderPath ?? "");
                                     ins.Parameters.AddWithValue("@msgDate",
@@ -953,7 +952,7 @@ RETURNING ID";
                 Fio = rdr.IsDBNull(1) ? "" : rdr.GetString(1),
                 DateStart = rdr.IsDBNull(2) ? DateTime.MinValue : rdr.GetDateTime(2),
                 DateEnd = rdr.IsDBNull(3) ? DateTime.MinValue : rdr.GetDateTime(3),
-                DaysLeft = rdr.IsDBNull(4) ? 0 : rdr.GetInt32(4),
+                // DaysLeft больше не читаем из БД - вычисляем динамически
                 CertNumber = rdr.IsDBNull(5) ? "" : rdr.GetString(5),
                 FromAddress = rdr.IsDBNull(6) ? "" : rdr.GetString(6),
                 IsDeleted = !rdr.IsDBNull(7) && rdr.GetInt16(7) == 1,
@@ -1278,9 +1277,27 @@ VALUES (@folder, @uid, @kind, @dt)";
                 if (!Directory.Exists(logDir)) Directory.CreateDirectory(logDir);
                 string dayDir = Path.Combine(logDir, DateTime.Now.ToString("yyyy-MM-dd"));
                 if (!Directory.Exists(dayDir)) Directory.CreateDirectory(dayDir);
-                string file = Path.Combine(dayDir, $"log_{DateTime.Now:yyyy-MM-dd}.log");
+
+                // Используем тот же файл сессии, что и в MainWindow
+                var sessionLogs = Directory.GetFiles(dayDir, "session_*.log")
+                    .Select(f => new FileInfo(f))
+                    .OrderByDescending(f => f.CreationTime)
+                    .ToList();
+
+                string sessionLogFile;
+                if (sessionLogs.Any())
+                {
+                    sessionLogFile = sessionLogs.First().FullName;
+                }
+                else
+                {
+                    sessionLogFile = Path.Combine(dayDir, $"session_{DateTime.Now:yyyyMMdd_HHmmss}.log");
+                    File.AppendAllText(sessionLogFile, $"=== Сессия запущена: {DateTime.Now:yyyy-MM-dd HH:mm:ss} ==={Environment.NewLine}{Environment.NewLine}", System.Text.Encoding.UTF8);
+                }
+
                 string entry = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} - [DbHelper] {message}{Environment.NewLine}";
-                File.AppendAllText(file, entry, System.Text.Encoding.UTF8);
+                File.AppendAllText(sessionLogFile, entry, System.Text.Encoding.UTF8);
+
                 _addToMiniLog?.Invoke($"[DbHelper] {message}");
                 System.Diagnostics.Debug.WriteLine($"[DbHelper] {message}");
             }

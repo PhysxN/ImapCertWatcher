@@ -1,4 +1,7 @@
-﻿using MailKit;
+﻿using ImapCertWatcher.Data;
+using ImapCertWatcher.Models;
+using ImapCertWatcher.Utils;
+using MailKit;
 using MailKit.Net.Imap;
 using MailKit.Search;
 using MailKit.Security;
@@ -9,9 +12,6 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
-using ImapCertWatcher.Utils;
-using ImapCertWatcher.Data;
-using ImapCertWatcher.Models;
 
 namespace ImapCertWatcher.Services
 {
@@ -39,7 +39,42 @@ namespace ImapCertWatcher.Services
                 : _settings.FilterSubjectPrefix;
         }
 
-        private void Log(string msg) => _log?.Invoke(msg);
+        // Добавляем метод для файлового логирования
+        private void FileLog(string message)
+        {
+            try
+            {
+                string logDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "LOG", DateTime.Now.ToString("yyyy-MM-dd"));
+                if (!Directory.Exists(logDirectory))
+                    Directory.CreateDirectory(logDirectory);
+
+                // Используем тот же файл сессии, что и в MainWindow
+                var sessionLogs = Directory.GetFiles(logDirectory, "session_*.log")
+                    .Select(f => new FileInfo(f))
+                    .OrderByDescending(f => f.CreationTime)
+                    .ToList();
+
+                string sessionLogFile;
+                if (sessionLogs.Any())
+                {
+                    sessionLogFile = sessionLogs.First().FullName;
+                }
+                else
+                {
+                    sessionLogFile = Path.Combine(logDirectory, $"session_{DateTime.Now:yyyyMMdd_HHmmss}.log");
+                }
+
+                string logEntry = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} - [NEW] {message}{Environment.NewLine}";
+                File.AppendAllText(sessionLogFile, logEntry, System.Text.Encoding.UTF8);
+            }
+            catch { /* игнорируем ошибки логирования */ }
+        }
+
+        private void Log(string msg)
+        {
+            _log?.Invoke(msg); // Мини-лог
+            FileLog(msg);      // Файловый лог
+        }
 
         /// <summary>
         /// Основной метод.
