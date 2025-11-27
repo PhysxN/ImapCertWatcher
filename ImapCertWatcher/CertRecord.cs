@@ -76,9 +76,15 @@ namespace ImapCertWatcher.Models
 
         public event PropertyChangedEventHandler PropertyChanged;
 
-        public virtual void OnPropertyChanged(string propertyName)
+        protected virtual void OnPropertyChanged(string propertyName)
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+        }
+
+        // ★ ДОБАВЛЯЕМ ПУБЛИЧНЫЙ МЕТОД ДЛЯ ОБНОВЛЕНИЯ ★
+        public void RefreshDaysLeft()
+        {
+            OnPropertyChanged(nameof(DaysLeft));
         }
     }
 }

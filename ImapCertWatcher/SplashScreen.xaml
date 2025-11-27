@@ -1,0 +1,73 @@
+﻿<Window x:Class="ImapCertWatcher.SplashScreen"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="SplashScreen" 
+        WindowStyle="None" 
+        AllowsTransparency="True"
+        Background="Transparent"
+        ShowInTaskbar="False"
+        Topmost="True"
+        Width="300" 
+        Height="300"
+        WindowStartupLocation="CenterScreen">
+
+    <Border Background="#FFF0F0F0" 
+            BorderBrush="#FF0078D7" 
+            BorderThickness="2"
+            CornerRadius="15">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <!-- Контейнер для анимации (GIF или XAML) -->
+            <Viewbox x:Name="animationContainer" Grid.Row="0" Stretch="Uniform" Margin="20">
+                <!-- XAML анимация по умолчанию -->
+                <Canvas Width="100" Height="100">
+                    <Ellipse x:Name="spinner" 
+                             Width="100" Height="100" 
+                             Stroke="#FF0078D7" 
+                             StrokeThickness="4"
+                             StrokeDashArray="1,10"
+                             RenderTransformOrigin="0.5,0.5">
+                        <Ellipse.RenderTransform>
+                            <RotateTransform x:Name="spinnerTransform" Angle="0"/>
+                        </Ellipse.RenderTransform>
+                        <Ellipse.Triggers>
+                            <EventTrigger RoutedEvent="Loaded">
+                                <BeginStoryboard>
+                                    <Storyboard>
+                                        <DoubleAnimation Storyboard.TargetName="spinnerTransform"
+                                                       Storyboard.TargetProperty="Angle"
+                                                       From="0" To="360" Duration="0:0:1"
+                                                       RepeatBehavior="Forever"/>
+                                    </Storyboard>
+                                </BeginStoryboard>
+                            </EventTrigger>
+                        </Ellipse.Triggers>
+                    </Ellipse>
+                </Canvas>
+            </Viewbox>
+
+            <!-- Текст статуса -->
+            <TextBlock x:Name="statusText"
+                      Grid.Row="1"
+                      Text="Инициализация..."
+                      HorizontalAlignment="Center"
+                      Margin="10"
+                      Foreground="#FF000000"
+                      FontSize="14"
+                      FontWeight="SemiBold"/>
+
+            <!-- Прогресс-бар -->
+            <ProgressBar x:Name="progressBar"
+                        Grid.Row="2"
+                        Height="8"
+                        Margin="20,10,20,20"
+                        IsIndeterminate="True"
+                        Foreground="#FF0078D7"/>
+        </Grid>
+    </Border>
+</Window>

@@ -1273,30 +1273,9 @@ VALUES (@folder, @uid, @kind, @dt)";
         {
             try
             {
-                string logDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "LOG");
-                if (!Directory.Exists(logDir)) Directory.CreateDirectory(logDir);
-                string dayDir = Path.Combine(logDir, DateTime.Now.ToString("yyyy-MM-dd"));
-                if (!Directory.Exists(dayDir)) Directory.CreateDirectory(dayDir);
-
-                // Используем тот же файл сессии, что и в MainWindow
-                var sessionLogs = Directory.GetFiles(dayDir, "session_*.log")
-                    .Select(f => new FileInfo(f))
-                    .OrderByDescending(f => f.CreationTime)
-                    .ToList();
-
-                string sessionLogFile;
-                if (sessionLogs.Any())
-                {
-                    sessionLogFile = sessionLogs.First().FullName;
-                }
-                else
-                {
-                    sessionLogFile = Path.Combine(dayDir, $"session_{DateTime.Now:yyyyMMdd_HHmmss}.log");
-                    File.AppendAllText(sessionLogFile, $"=== Сессия запущена: {DateTime.Now:yyyy-MM-dd HH:mm:ss} ==={Environment.NewLine}{Environment.NewLine}", System.Text.Encoding.UTF8);
-                }
-
+                string logFile = ImapCertWatcher.Utils.LogSession.SessionLogFile;
                 string entry = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} - [DbHelper] {message}{Environment.NewLine}";
-                File.AppendAllText(sessionLogFile, entry, System.Text.Encoding.UTF8);
+                File.AppendAllText(logFile, entry, System.Text.Encoding.UTF8);
 
                 _addToMiniLog?.Invoke($"[DbHelper] {message}");
                 System.Diagnostics.Debug.WriteLine($"[DbHelper] {message}");

@@ -1,9 +1,8 @@
 ﻿<Application x:Class="ImapCertWatcher.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:local="clr-namespace:ImapCertWatcher"
-             StartupUri="MainWindow.xaml">
+             Startup="Application_Startup">
     <Application.Resources>
-         
+        <!-- Ресурсы темы остаются здесь -->
     </Application.Resources>
 </Application>

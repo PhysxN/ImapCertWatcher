@@ -39,29 +39,14 @@ namespace ImapCertWatcher.Services
         {
             try
             {
-                string logDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "LOG", DateTime.Now.ToString("yyyy-MM-dd"));
-                if (!Directory.Exists(logDirectory))
-                    Directory.CreateDirectory(logDirectory);
-
-                var sessionLogs = Directory.GetFiles(logDirectory, "session_*.log")
-                    .Select(f => new FileInfo(f))
-                    .OrderByDescending(f => f.CreationTime)
-                    .ToList();
-
-                string sessionLogFile;
-                if (sessionLogs.Any())
-                {
-                    sessionLogFile = sessionLogs.First().FullName;
-                }
-                else
-                {
-                    sessionLogFile = Path.Combine(logDirectory, $"session_{DateTime.Now:yyyyMMdd_HHmmss}.log");
-                }
-
+                string logFile = ImapCertWatcher.Utils.LogSession.SessionLogFile;
                 string logEntry = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} - [REVOKE] {message}{Environment.NewLine}";
-                File.AppendAllText(sessionLogFile, logEntry, System.Text.Encoding.UTF8);
+                File.AppendAllText(logFile, logEntry, System.Text.Encoding.UTF8);
             }
-            catch { /* игнорируем ошибки логирования */ }
+            catch
+            {
+                // игнорируем ошибки логирования
+            }
         }
 
         private void Log(string msg)
