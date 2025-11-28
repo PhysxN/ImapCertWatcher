@@ -156,7 +156,6 @@ namespace ImapCertWatcher
                 _allItems.Clear();
                 foreach (var rec in initResult.list)
                 {
-                    rec.HasArchiveInDb = _db.HasArchiveInDb(rec.Id);
                     _allItems.Add(rec);
                 }
 
@@ -766,14 +765,19 @@ namespace ImapCertWatcher
             {
                 if (_db == null) return;
 
+                var sw = Stopwatch.StartNew();
                 var list = _db.LoadAll(_showDeleted, _currentBuildingFilter);
+                sw.Stop();
+
+                Log($"LoadFromDb: {list.Count} записей, showDeleted={_showDeleted}, " +
+                    $"filter={_currentBuildingFilter}, время={sw.ElapsedMilliseconds} мс");
+
                 Dispatcher.Invoke(() =>
                 {
                     _allItems.Clear();
                     foreach (var e in list)
                     {
-                        // ★ ПРОВЕРЯЕМ НАЛИЧИЕ АРХИВА В БД ДЛЯ КАЖДОЙ ЗАПИСИ ★
-                        e.HasArchiveInDb = _db.HasArchiveInDb(e.Id);
+                        // Больше НЕ делаем _db.HasArchiveInDb(e.Id) по каждой строке
                         _allItems.Add(e);
                     }
 

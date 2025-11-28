@@ -3,6 +3,28 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              Startup="Application_Startup">
     <Application.Resources>
-        <!-- Ресурсы темы остаются здесь -->
+        <!-- Светлая тема -->
+        <SolidColorBrush x:Key="LightWindowBackground" Color="#FFFFFFFF"/>
+        <SolidColorBrush x:Key="LightControlBackground" Color="#FFF0F0F0"/>
+        <SolidColorBrush x:Key="LightTextColor" Color="#FF000000"/>
+        <SolidColorBrush x:Key="LightBorderColor" Color="#FFCCCCCC"/>
+        <SolidColorBrush x:Key="LightAccentColor" Color="#FF0078D7"/>
+        <SolidColorBrush x:Key="LightHoverColor" Color="#FFE1E1E1"/>
+
+        <!-- Тёмная тема -->
+        <SolidColorBrush x:Key="DarkWindowBackground" Color="#FF2D2D30"/>
+        <SolidColorBrush x:Key="DarkControlBackground" Color="#FF1E1E1E"/>
+        <SolidColorBrush x:Key="DarkTextColor" Color="#FFFFFFFF"/>
+        <SolidColorBrush x:Key="DarkBorderColor" Color="#FF555555"/>
+        <SolidColorBrush x:Key="DarkAccentColor" Color="#FF007ACC"/>
+        <SolidColorBrush x:Key="DarkHoverColor" Color="#FF3E3E42"/>
+
+        <!-- Текущие кисти (меняются кодом при переключении темы) -->
+        <SolidColorBrush x:Key="WindowBackgroundBrush" Color="#FFFFFFFF"/>
+        <SolidColorBrush x:Key="ControlBackgroundBrush" Color="#FFF0F0F0"/>
+        <SolidColorBrush x:Key="TextColorBrush" Color="#FF000000"/>
+        <SolidColorBrush x:Key="BorderColorBrush" Color="#FFCCCCCC"/>
+        <SolidColorBrush x:Key="AccentColorBrush" Color="#FF0078D7"/>
+        <SolidColorBrush x:Key="HoverColorBrush" Color="#FFE1E1E1"/>
     </Application.Resources>
 </Application>

@@ -281,10 +281,12 @@ ON PROCESSED_MAILS (FOLDER_PATH, MAIL_UID, KIND)";
 
         private void EnsureIndexesAndConstraints(FbConnection conn)
         {
-            // Создаём индексы, если их нет (Firebird 2.5 не поддерживает CREATE INDEX IF NOT EXISTS)
             CreateIndexIfNotExists(conn, "IDX_CERTS_NUMBER", "CERTS", "CERT_NUMBER", false);
             CreateIndexIfNotExists(conn, "IDX_CERTS_FIO", "CERTS", "FIO", false);
             CreateIndexIfNotExists(conn, "UQ_CERTS_FIO_NUMBER", "CERTS", "FIO, CERT_NUMBER", true);
+
+            // новый индекс под фильтры грида
+            CreateIndexIfNotExists(conn, "IDX_CERTS_FILTER", "CERTS", "IS_DELETED, BUILDING, DATE_END", false);
         }
 
         private void AddMissingColumns(FbConnection conn)
@@ -952,7 +954,7 @@ RETURNING ID";
                 Fio = rdr.IsDBNull(1) ? "" : rdr.GetString(1),
                 DateStart = rdr.IsDBNull(2) ? DateTime.MinValue : rdr.GetDateTime(2),
                 DateEnd = rdr.IsDBNull(3) ? DateTime.MinValue : rdr.GetDateTime(3),
-                // DaysLeft больше не читаем из БД - вычисляем динамически
+                // DaysLeft из БД больше не используем – он всегда 0, считаешь в UI
                 CertNumber = rdr.IsDBNull(5) ? "" : rdr.GetString(5),
                 FromAddress = rdr.IsDBNull(6) ? "" : rdr.GetString(6),
                 IsDeleted = !rdr.IsDBNull(7) && rdr.GetInt16(7) == 1,
@@ -961,15 +963,20 @@ RETURNING ID";
                 FolderPath = rdr.IsDBNull(10) ? "" : rdr.GetString(10),
                 ArchivePath = rdr.IsDBNull(11) ? "" : rdr.GetString(11),
                 MessageDate = rdr.IsDBNull(12) ? DateTime.MinValue : rdr.GetDateTime(12),
-                HasArchive = HasArchiveInDb(id)
+
+                // новое поле из SELECT (HAS_ARCHIVE)
+                HasArchive = !rdr.IsDBNull(13) && rdr.GetInt32(13) > 0
             };
         }
+
 
         /// <summary>
         /// Загружает все записи с фильтрами.
         /// </summary>
         public List<CertRecord> LoadAll(bool showDeleted = false, string buildingFilter = "Все")
         {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+
             var list = new List<CertRecord>();
             using (var conn = new FbConnection(_connectionString))
             {
@@ -977,23 +984,38 @@ RETURNING ID";
                 using (var cmd = conn.CreateCommand())
                 {
                     var where = new List<string>();
-                    if (!showDeleted) where.Add("IS_DELETED = 0");
+                    if (!showDeleted) where.Add("c.IS_DELETED = 0");
                     if (!string.IsNullOrEmpty(buildingFilter) && buildingFilter != "Все")
                     {
-                        where.Add("BUILDING = @building");
+                        where.Add("c.BUILDING = @building");
                         cmd.Parameters.AddWithValue("@building", buildingFilter);
                     }
 
-                    where.Add("DATE_END >= @currentDate");
+                    // Показываем только не истёкшие
+                    where.Add("c.DATE_END >= @currentDate");
                     cmd.Parameters.AddWithValue("@currentDate", DateTime.Now.Date);
 
                     string whereClause = where.Count > 0 ? "WHERE " + string.Join(" AND ", where) : "";
 
                     cmd.CommandText = $@"
-SELECT ID, FIO, DATE_START, DATE_END, DAYS_LEFT, CERT_NUMBER, FROM_ADDRESS, IS_DELETED, NOTE, BUILDING, FOLDER_PATH, ARCHIVE_PATH, MESSAGE_DATE
-FROM CERTS
+SELECT 
+    c.ID,
+    c.FIO,
+    c.DATE_START,
+    c.DATE_END,
+    c.DAYS_LEFT,
+    c.CERT_NUMBER,
+    c.FROM_ADDRESS,
+    c.IS_DELETED,
+    c.NOTE,
+    c.BUILDING,
+    c.FOLDER_PATH,
+    c.ARCHIVE_PATH,
+    c.MESSAGE_DATE,
+    (SELECT COUNT(*) FROM CERT_ARCHIVES ca WHERE ca.CERT_ID = c.ID) AS HAS_ARCHIVE
+FROM CERTS c
 {whereClause}
-ORDER BY DATE_END ASC";
+ORDER BY c.DATE_END ASC";
 
                     using (var rdr = cmd.ExecuteReader())
                     {
@@ -1004,7 +1026,12 @@ ORDER BY DATE_END ASC";
                     }
                 }
             }
-            Log($"LoadAll: загружено {list.Count} записей (showDeleted={showDeleted}, filter={buildingFilter})");
+
+            sw.Stop();  // ⬅ стоп секундомера
+
+
+            Log($"LoadAll: {list.Count} записей, showDeleted={showDeleted}, filter={buildingFilter}, время={sw.ElapsedMilliseconds}мс");
+            // Log($"LoadAll: загружено {list.Count} записей (showDeleted={showDeleted}, filter={buildingFilter})");
             return list;
         }
 

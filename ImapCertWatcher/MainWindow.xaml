@@ -439,6 +439,10 @@
 
                     <!-- Таблица сертификатов -->
                     <DataGrid x:Name="dgCerts" Grid.Row="3" 
+                              EnableRowVirtualization="True"
+                              EnableColumnVirtualization="True"
+                              VirtualizingPanel.IsVirtualizing="True"
+                              VirtualizingPanel.VirtualizationMode="Recycling"
                               Style="{StaticResource ModernDataGridStyle}"
                               IsReadOnly="False" SelectionMode="Single"
                               CanUserSortColumns="True" CanUserResizeColumns="True"

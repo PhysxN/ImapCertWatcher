@@ -11,7 +11,10 @@
         Height="300"
         WindowStartupLocation="CenterScreen">
 
-    <Border Background="#FFF0F0F0" 
+    <!-- ДАЛЬШЕЕ СОДЕРЖИМОЕ ОКНА -->
+
+    <Border x:Name="rootBorder"
+            Background="#FFF0F0F0" 
             BorderBrush="#FF0078D7" 
             BorderThickness="2"
             CornerRadius="15">
@@ -40,9 +43,9 @@
                                 <BeginStoryboard>
                                     <Storyboard>
                                         <DoubleAnimation Storyboard.TargetName="spinnerTransform"
-                                                       Storyboard.TargetProperty="Angle"
-                                                       From="0" To="360" Duration="0:0:1"
-                                                       RepeatBehavior="Forever"/>
+                                                         Storyboard.TargetProperty="Angle"
+                                                         From="0" To="360" Duration="0:0:1"
+                                                         RepeatBehavior="Forever"/>
                                     </Storyboard>
                                 </BeginStoryboard>
                             </EventTrigger>
@@ -53,21 +56,21 @@
 
             <!-- Текст статуса -->
             <TextBlock x:Name="statusText"
-                      Grid.Row="1"
-                      Text="Инициализация..."
-                      HorizontalAlignment="Center"
-                      Margin="10"
-                      Foreground="#FF000000"
-                      FontSize="14"
-                      FontWeight="SemiBold"/>
+                       Grid.Row="1"
+                       Text="Инициализация..."
+                       HorizontalAlignment="Center"
+                       Margin="10"
+                       Foreground="#FF000000"
+                       FontSize="14"
+                       FontWeight="SemiBold"/>
 
             <!-- Прогресс-бар -->
             <ProgressBar x:Name="progressBar"
-                        Grid.Row="2"
-                        Height="8"
-                        Margin="20,10,20,20"
-                        IsIndeterminate="True"
-                        Foreground="#FF0078D7"/>
+                         Grid.Row="2"
+                         Height="8"
+                         Margin="20,10,20,20"
+                         IsIndeterminate="True"
+                         Foreground="#FF0078D7"/>
         </Grid>
     </Border>
 </Window>
