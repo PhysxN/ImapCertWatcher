@@ -17,6 +17,7 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using System.Diagnostics;
 using System.Security.Authentication;
+using System.Windows.Controls.Primitives;
 
 // Альтернатива Excel без использования Office Interop
 using System.Data;
@@ -107,6 +108,8 @@ namespace ImapCertWatcher
                 return;
             }
         }
+
+        
 
         private void OnProgressUpdated(string message, double progress)
         {
@@ -371,7 +374,6 @@ namespace ImapCertWatcher
                 resources["AccentColorBrush"] = resources["DarkAccentColor"];
                 resources["HoverColorBrush"] = resources["DarkHoverColor"];
 
-                // Явно устанавливаем цвет текста для PasswordBox
                 pwdMailPassword.Foreground = Brushes.White;
                 pwdFbPassword.Foreground = Brushes.White;
             }
@@ -385,21 +387,27 @@ namespace ImapCertWatcher
                 resources["AccentColorBrush"] = resources["LightAccentColor"];
                 resources["HoverColorBrush"] = resources["LightHoverColor"];
 
-                // Явно устанавливаем цвет текста для PasswordBox
                 pwdMailPassword.Foreground = Brushes.Black;
                 pwdFbPassword.Foreground = Brushes.Black;
             }
 
-            // Принудительно обновляем стили и перезагружаем данные
+            try
+            {
+                resources[SystemColors.WindowBrushKey] = resources["ControlBackgroundBrush"];
+                resources[SystemColors.ControlTextBrushKey] = resources["TextColorBrush"];
+                resources[SystemColors.HighlightBrushKey] = resources["AccentColorBrush"];
+                resources[SystemColors.HighlightTextBrushKey] = new SolidColorBrush(Colors.White);
+            }
+            catch { }
+
+            // Принудительно обновляем визуал
             this.InvalidateVisual();
 
             // Обновляем строки DataGrid для применения новых цветов
             var tempItems = _items.ToList();
             _items.Clear();
             foreach (var item in tempItems)
-            {
                 _items.Add(item);
-            }
         }
 
         private void ChkDarkTheme_Changed(object sender, RoutedEventArgs e)
