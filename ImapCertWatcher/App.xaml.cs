@@ -1,4 +1,6 @@
 ﻿using System;
+using System.Diagnostics;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Threading;
 
@@ -8,39 +10,52 @@ namespace ImapCertWatcher
     {
         private SplashScreen _splashScreen;
 
-        private void Application_Startup(object sender, StartupEventArgs e)
+        private async void Application_Startup(object sender, StartupEventArgs e)
         {
-            // 1) СНАЧАЛА применяем тему (чтобы Splash сразу был в нужных цветах)
+            // 1) Сначала применяем тему
             ApplyThemeFromSettings();
 
-            // 2) Показываем splash screen
+            // 2) Показываем splash
             _splashScreen = new SplashScreen();
             _splashScreen.Show();
+
+            // Замер времени показа splash
+            var sw = Stopwatch.StartNew();
 
             // 3) Создаем главное окно
             var mainWindow = new MainWindow();
 
-            // Подписываемся на события прогресса
+            // Прогресс на splash
             mainWindow.ProgressUpdated += (message, progress) =>
             {
                 _splashScreen?.UpdateStatus(message);
                 _splashScreen?.UpdateProgress(progress);
             };
 
-            // Когда данные загружены — закрываем сплэш
-            mainWindow.DataLoaded += () =>
+            // Когда данные загружены
+            mainWindow.DataLoaded += async () =>
             {
+                sw.Stop();
+                const int minShowMs = 2000; // минимум 2 секунды
+
+                int remain = minShowMs - (int)sw.ElapsedMilliseconds;
+                if (remain > 0)
+                {
+                    // ждём, чтобы суммарное время показа было не меньше 2 сек
+                    await Task.Delay(remain);
+                }
+
                 Dispatcher.BeginInvoke(new Action(() =>
                 {
-                    _splashScreen?.CloseSplash();
+                    _splashScreen?.CloseSplash();  // там теперь будет плавное исчезновение
                     _splashScreen = null;
                 }), DispatcherPriority.Background);
             };
 
-            // Показываем главное окно
+            // 4) Показываем главное окно
             mainWindow.Show();
 
-            // Защита от зависшего сплэша
+            // 5) Защита от зависшего splash (если вдруг DataLoaded не вызовется)
             var safetyTimer = new DispatcherTimer
             {
                 Interval = TimeSpan.FromSeconds(15)
@@ -60,14 +75,10 @@ namespace ImapCertWatcher
 
         /// <summary>
         /// Применяет тему к глобальным ресурсам приложения.
-        /// Сейчас просто включаем тёмную; при желании сюда можно
-        /// подставить чтение из AppSettings.
         /// </summary>
         private void ApplyThemeFromSettings()
         {
-            // TODO: здесь можно прочитать реальную настройку из файла/БД.
-            // Пока просто считаем, что всегда нужна тёмная тема:
-            bool useDarkTheme = true;
+            bool useDarkTheme = true; // как у тебя и было
 
             var res = Current.Resources;
 

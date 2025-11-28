@@ -3,6 +3,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Threading;
 
 namespace ImapCertWatcher
@@ -11,6 +12,7 @@ namespace ImapCertWatcher
     {
         private readonly string _gifPath;
         private MediaElement _gifAnimation;
+        private bool _isClosing = false;
 
         public SplashScreen(string gifPath = null)
         {
@@ -94,7 +96,7 @@ namespace ImapCertWatcher
                     {
                         LoadedBehavior = MediaState.Play,
                         UnloadedBehavior = MediaState.Manual,
-                        Stretch = System.Windows.Media.Stretch.Uniform,
+                        Stretch = Stretch.Uniform,
                         Source = new Uri(_gifPath)
                     };
 
@@ -132,17 +134,17 @@ namespace ImapCertWatcher
         {
             Dispatcher.Invoke(() =>
             {
-                var progressBar = (ProgressBar)this.FindName("progressBar");
-                if (progressBar != null)
+                var progressBarControl = (ProgressBar)this.FindName("progressBar");
+                if (progressBarControl != null)
                 {
                     if (progress >= 0 && progress <= 100)
                     {
-                        progressBar.IsIndeterminate = false;
-                        progressBar.Value = progress;
+                        progressBarControl.IsIndeterminate = false;
+                        progressBarControl.Value = progress;
                     }
                     else
                     {
-                        progressBar.IsIndeterminate = true;
+                        progressBarControl.IsIndeterminate = true;
                     }
                 }
             });
@@ -162,6 +164,11 @@ namespace ImapCertWatcher
         {
             Dispatcher.Invoke(() =>
             {
+                if (_isClosing)
+                    return;
+
+                _isClosing = true;
+
                 System.Diagnostics.Debug.WriteLine("CloseSplash вызван");
 
                 // Останавливаем анимацию перед закрытием
@@ -171,8 +178,20 @@ namespace ImapCertWatcher
                     _gifAnimation.MediaEnded -= GifAnimation_MediaEnded;
                 }
 
-                // ★ ПРОСТОЕ И БЫСТРОЕ ЗАКРЫТИЕ БЕЗ АНИМАЦИИ ★
-                this.Close();
+                // Плавное исчезновение окна
+                var anim = new DoubleAnimation
+                {
+                    From = this.Opacity,
+                    To = 0.0,
+                    Duration = TimeSpan.FromMilliseconds(300)
+                };
+
+                anim.Completed += (s, e) =>
+                {
+                    this.Close();
+                };
+
+                this.BeginAnimation(Window.OpacityProperty, anim);
             });
         }
     }
