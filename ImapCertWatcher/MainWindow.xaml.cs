@@ -32,6 +32,8 @@ namespace ImapCertWatcher
     public partial class MainWindow : Window
     {
         private AppSettings _settings;
+        private NotificationManager _notificationManager;
+        private HashSet<int> _knownCertIds = new HashSet<int>();
         private DbHelper _db;
         private ImapNewCertificatesWatcher _newWatcher;
         private ImapRevocationsWatcher _revWatcher;
@@ -110,109 +112,11 @@ namespace ImapCertWatcher
             }
         }
 
-        private List<string> GetAccountsForBuilding(string building)
-        {
-            string raw = null;
+        
 
-            if (string.Equals(building, "Краснофлотская", StringComparison.OrdinalIgnoreCase))
-                raw = _settings.BimoidAccountsKrasnoflotskaya;
-            else if (string.Equals(building, "Пионерская", StringComparison.OrdinalIgnoreCase))
-                raw = _settings.BimoidAccountsPionerskaya;
-            else
-                return new List<string>(); // для других зданий уведомления не шлём
+        
 
-            if (string.IsNullOrWhiteSpace(raw))
-                return new List<string>();
-
-            // разделяем по переводам строк, точкам с запятой и запятым
-            return raw
-                .Split(new[] { '\r', '\n', ';', ',' }, StringSplitOptions.RemoveEmptyEntries)
-                .Select(a => a.Trim())
-                .Where(a => !string.IsNullOrWhiteSpace(a))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-        }
-
-        private void SendBimoidMessage(string building, string message)
-        {
-            try
-            {
-                // Папка с ObimpCMD: .\ObimpCMD рядом с exe
-                string appDir = AppDomain.CurrentDomain.BaseDirectory;
-                string obimpDir = Path.Combine(appDir, "ObimpCMD");
-                string demoBat = Path.Combine(obimpDir, "demo.bat");
-
-                if (!Directory.Exists(obimpDir))
-                {
-                    Log($"Bimoid: папка ObimpCMD не найдена: {obimpDir}");
-                    return;
-                }
-
-                if (!File.Exists(demoBat))
-                {
-                    Log($"Bimoid: demo.bat не найден: {demoBat}");
-                    return;
-                }
-
-                var accounts = GetAccountsForBuilding(building);
-                if (accounts.Count == 0)
-                {
-                    Log($"Bimoid: нет аккаунтов для здания '{building}'");
-                    return;
-                }
-
-                // перезаписываем accounts.txt и message.txt
-                string accountsFile = Path.Combine(obimpDir, "accounts.txt");
-                string messageFile = Path.Combine(obimpDir, "message.txt");
-
-                File.WriteAllLines(accountsFile, accounts, Encoding.UTF8);
-                File.WriteAllText(messageFile, message ?? "", Encoding.UTF8);
-
-                var psi = new ProcessStartInfo
-                {
-                    FileName = "cmd.exe",
-                    Arguments = "/c \"demo.bat\"",
-                    WorkingDirectory = obimpDir,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                };
-
-                Process.Start(psi);
-
-                Log($"Bimoid: отправлено сообщение для здания '{building}' ({accounts.Count} получателей).");
-            }
-            catch (Exception ex)
-            {
-                Log($"Ошибка отправки Bimoid: {ex.Message}");
-            }
-        }
-
-        private void NotifyExpiringCerts(IEnumerable<CertRecord> records)
-        {
-            try
-            {
-                int threshold = _settings.NotifyDaysThreshold > 0 ? _settings.NotifyDaysThreshold : 10;
-
-                var expiring = records
-                    .Where(r => !r.IsDeleted && r.DaysLeft <= threshold)
-                    .ToList();
-
-                if (!expiring.Any())
-                    return;
-
-                foreach (var rec in expiring)
-                {
-                    string msg = $"У {rec.Fio} осталось {rec.DaysLeft} дней до окончания сертификата.";
-                    SendBimoidMessage(rec.Building, msg);
-                }
-
-                Log($"Bimoid: отправлены уведомления по {expiring.Count} сертификатам (порог {threshold} дней).");
-            }
-            catch (Exception ex)
-            {
-                Log($"Ошибка NotifyExpiringCerts: {ex.Message}");
-            }
-        }
+        
 
 
         private void OnProgressUpdated(string message, double progress)
@@ -265,6 +169,9 @@ namespace ImapCertWatcher
 
                 System.Diagnostics.Debug.WriteLine($"Загружено записей: {_allItems.Count}");
 
+                // Запоминаем уже известные сертификаты (для определения "новых владельцев")
+                _knownCertIds = new HashSet<int>(_allItems.Select(r => r.Id));
+
                 OnProgressUpdated("Применение фильтров...", 85);
                 ApplySearchFilter();
 
@@ -295,7 +202,8 @@ namespace ImapCertWatcher
 
                 // ★ УБИРАЕМ ЗАДЕРЖКУ - ЗАКРЫВАЕМ СРАЗУ ★
                 DataLoaded?.Invoke();
-
+                // Инициализируем менеджер уведомлений после получения настроек
+                _notificationManager = new NotificationManager(_settings, msg => Log(msg));
                 statusText.Text = "Готово";
                 AddToMiniLog($"Инициализация завершена. Загружено записей: {_allItems.Count}");
 
@@ -1052,6 +960,19 @@ namespace ImapCertWatcher
                 var newList = _db?.LoadAll(_showDeleted, _currentBuildingFilter);
                 if (newList != null)
                 {
+                    // 1) Находим "новых" владельцев сертификатов (по Id)
+                    List<CertRecord> newOwners = new List<CertRecord>();
+
+                    if (_knownCertIds != null && _knownCertIds.Count > 0)
+                    {
+                        newOwners = newList
+                            .Where(r => !_knownCertIds.Contains(r.Id) && !r.IsDeleted)
+                            .ToList();
+                    }
+                    // если _knownCertIds пустой (первый запуск) — не шлём ничего,
+                    // чтобы не заспамить всех как "новых"
+
+                    // 2) Обновляем UI
                     Dispatcher.Invoke(() =>
                     {
                         _allItems.Clear();
@@ -1084,8 +1005,18 @@ namespace ImapCertWatcher
                         }
                     });
 
-                    // после обновления данных — рассылаем уведомления
-                    NotifyExpiringCerts(newList);
+                    // 3) Обновляем набор известных сертификатов
+                    _knownCertIds = new HashSet<int>(newList.Select(r => r.Id));
+
+                    // 4) Уведомления:
+                    // 4.1. Новые владельцы сертификатов (всем контактам)
+                    if (newOwners.Count > 0)
+                    {
+                        _notificationManager?.NotifyNewUsers(newOwners);
+                    }
+
+                    // 4.2. Истекающие сертификаты (по зданию, с порогом дней)
+                    _notificationManager?.NotifyExpiringCerts(newList);
                 }
             }
             catch (Exception ex)
@@ -1108,13 +1039,7 @@ namespace ImapCertWatcher
         {
             try
             {
-                // Пример тестового сообщения
-                string msg = "Тестовое сообщение от ImapCertWatcher";
-
-                // Отправим сразу для обеих групп (если заданы аккаунты)
-                SendBimoidMessage("Краснофлотская", msg);
-                SendBimoidMessage("Пионерская", msg);
-
+                _notificationManager?.SendTestMessage();
                 MessageBox.Show("Тестовое сообщение отправлено (если указаны аккаунты).",
                                 "Bimoid", MessageBoxButton.OK, MessageBoxImage.Information);
             }

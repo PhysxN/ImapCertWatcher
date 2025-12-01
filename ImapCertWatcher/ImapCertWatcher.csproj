@@ -126,6 +126,7 @@
     <Compile Include="ImapNewCertificatesWatcher.cs" />
     <Compile Include="ImapRevocationsWatcher.cs" />
     <Compile Include="LogSession.cs" />
+    <Compile Include="NotificationManager.cs" />
     <Compile Include="SettingsLoader.cs" />
     <Compile Include="SplashScreen.xaml.cs">
       <DependentUpon>SplashScreen.xaml</DependentUpon>
