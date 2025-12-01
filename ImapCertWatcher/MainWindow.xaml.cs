@@ -1050,6 +1050,59 @@ namespace ImapCertWatcher
             }
         }
 
+        private void BtnTestNewUserNotify_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (_notificationManager == null)
+                {
+                    MessageBox.Show("Менеджер уведомлений ещё не инициализирован.",
+                                    "Тест уведомления", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+
+                if (_allItems == null || _allItems.Count == 0)
+                {
+                    MessageBox.Show("Нет записей сертификатов для теста.",
+                                    "Тест уведомления", MessageBoxButton.OK, MessageBoxImage.Information);
+                    return;
+                }
+
+                // считаем «последним» по максимальному Id, и только не удалённого
+                var testRec = _allItems
+                    .Where(r => !r.IsDeleted)
+                    .OrderByDescending(r => r.Id)
+                    .FirstOrDefault();
+
+                if (testRec == null)
+                {
+                    MessageBox.Show("Нет активных сертификатов для теста.",
+                                    "Тест уведомления", MessageBoxButton.OK, MessageBoxImage.Information);
+                    return;
+                }
+
+                // шлём как «нового пользователя»
+                _notificationManager.NotifyNewUsers(new[] { testRec });
+
+                MessageBox.Show(
+                    $"Отправлено тестовое уведомление как для нового пользователя:\n\n" +
+                    $"{testRec.Fio}\n" +
+                    $"Срок сертификата: {testRec.DateStart:dd.MM.yyyy} — {testRec.DateEnd:dd.MM.yyyy}",
+                    "Тест уведомления",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information
+                );
+
+                Log($"Тест уведомления о новом пользователе: {testRec.Fio} (ID: {testRec.Id})");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Ошибка при тестовом уведомлении: {ex.Message}",
+                                "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+                Log($"Ошибка BtnTestNewUserNotify_Click: {ex.Message}");
+            }
+        }
+
         private async void BtnManualCheck_Click(object sender, RoutedEventArgs e)
         {
             Log("Ручная проверка почты запущена");

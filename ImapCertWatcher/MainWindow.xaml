@@ -743,31 +743,40 @@
                                 <GroupBox Header="Уведомления через Bimoid" Style="{StaticResource ModernGroupBoxStyle}" Margin="0,12,0,0">
                                     <StackPanel Margin="6">
                                         <TextBlock Text="Аккаунты для Краснофлотской (по одному в строке):"
-                   Margin="0,2" Foreground="{DynamicResource TextColorBrush}"/>
+                                                    Margin="0,2" Foreground="{DynamicResource TextColorBrush}"/>
                                         <TextBox x:Name="txtBimoidKrasnoflotskaya"
-                 Text="{Binding BimoidAccountsKrasnoflotskaya}"
-                 Style="{StaticResource ModernTextBoxStyle}"
-                 AcceptsReturn="True"
-                 Height="60"
-                 VerticalScrollBarVisibility="Auto"/>
+                                                 Text="{Binding BimoidAccountsKrasnoflotskaya}"
+                                                 Style="{StaticResource ModernTextBoxStyle}"
+                                                 AcceptsReturn="True"
+                                                 Height="60"
+                                                 VerticalScrollBarVisibility="Auto"/>
 
                                         <TextBlock Text="Аккаунты для Пионерской (по одному в строке):"
-                   Margin="0,8,0,2" Foreground="{DynamicResource TextColorBrush}"/>
+                                                    Margin="0,8,0,2" Foreground="{DynamicResource TextColorBrush}"/>
                                         <TextBox x:Name="txtBimoidPionerskaya"
-                 Text="{Binding BimoidAccountsPionerskaya}"
-                 Style="{StaticResource ModernTextBoxStyle}"
-                 AcceptsReturn="True"
-                 Height="60"
-                 VerticalScrollBarVisibility="Auto"/>
+                                                 Text="{Binding BimoidAccountsPionerskaya}"
+                                                 Style="{StaticResource ModernTextBoxStyle}"
+                                                 AcceptsReturn="True"
+                                                 Height="60"
+                                                 VerticalScrollBarVisibility="Auto"/>
 
                                         <Button x:Name="btnTestBimoid"
-                Content="Тестовое сообщение"
-                Style="{StaticResource ModernButtonStyle}"
-                Width="170" Height="26"
-                HorizontalAlignment="Right"
-                Margin="0,8,0,0"
-                Click="BtnTestBimoid_Click"
-                ToolTip="Отправить тестовое сообщение на указанные аккаунты"/>
+                                                Content="Тестовое сообщение"
+                                                Style="{StaticResource ModernButtonStyle}"
+                                                Width="170" Height="26"
+                                                HorizontalAlignment="Right"
+                                                Margin="0,8,0,0"
+                                                Click="BtnTestBimoid_Click"
+                                                ToolTip="Отправить тестовое сообщение на указанные аккаунты"/>
+                                        <Button x:Name="btnTestNewUserNotify"
+                                                Content="Тест нового пользователя"
+                                                Style="{StaticResource ModernButtonStyle}"
+                                                Width="170" Height="26"
+                                                HorizontalAlignment="Right"
+                                                Margin="0,8,0,0"
+                                                Click="BtnTestNewUserNotify_Click"
+                                                ToolTip="Отправить тестовое сообщение о новых пользователях на указанные аккаунты"/>
+                                        
                                     </StackPanel>
                                 </GroupBox>
 
