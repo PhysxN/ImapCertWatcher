@@ -12,6 +12,10 @@ namespace ImapCertWatcher.Utils
         public string MailPassword { get; set; } = "";
         public string ImapFolder { get; set; } = "INBOX";
 
+        public int NotifyDaysThreshold { get; set; } = 10;          // сколько дней до окончания, чтобы слать
+        public string BimoidAccountsKrasnoflotskaya { get; set; }   // аккаунты для Краснофлотской (по одному в строке)
+        public string BimoidAccountsPionerskaya { get; set; }       // аккаунты для Пионерской (по одному в строке)
+
         // Фильтры для поиска писем
         public string FilterRecipient { get; set; } = "";
         // Префикс темы, по которому определяется "новое" письмо (по умолчанию "Сертификат №" или "Сертификат")

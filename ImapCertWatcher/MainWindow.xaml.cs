@@ -16,6 +16,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using System.Diagnostics;
+using System.Text;
 using System.Security.Authentication;
 using System.Windows.Controls.Primitives;
 
@@ -109,7 +110,110 @@ namespace ImapCertWatcher
             }
         }
 
-        
+        private List<string> GetAccountsForBuilding(string building)
+        {
+            string raw = null;
+
+            if (string.Equals(building, "Краснофлотская", StringComparison.OrdinalIgnoreCase))
+                raw = _settings.BimoidAccountsKrasnoflotskaya;
+            else if (string.Equals(building, "Пионерская", StringComparison.OrdinalIgnoreCase))
+                raw = _settings.BimoidAccountsPionerskaya;
+            else
+                return new List<string>(); // для других зданий уведомления не шлём
+
+            if (string.IsNullOrWhiteSpace(raw))
+                return new List<string>();
+
+            // разделяем по переводам строк, точкам с запятой и запятым
+            return raw
+                .Split(new[] { '\r', '\n', ';', ',' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(a => a.Trim())
+                .Where(a => !string.IsNullOrWhiteSpace(a))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        private void SendBimoidMessage(string building, string message)
+        {
+            try
+            {
+                // Папка с ObimpCMD: .\ObimpCMD рядом с exe
+                string appDir = AppDomain.CurrentDomain.BaseDirectory;
+                string obimpDir = Path.Combine(appDir, "ObimpCMD");
+                string demoBat = Path.Combine(obimpDir, "demo.bat");
+
+                if (!Directory.Exists(obimpDir))
+                {
+                    Log($"Bimoid: папка ObimpCMD не найдена: {obimpDir}");
+                    return;
+                }
+
+                if (!File.Exists(demoBat))
+                {
+                    Log($"Bimoid: demo.bat не найден: {demoBat}");
+                    return;
+                }
+
+                var accounts = GetAccountsForBuilding(building);
+                if (accounts.Count == 0)
+                {
+                    Log($"Bimoid: нет аккаунтов для здания '{building}'");
+                    return;
+                }
+
+                // перезаписываем accounts.txt и message.txt
+                string accountsFile = Path.Combine(obimpDir, "accounts.txt");
+                string messageFile = Path.Combine(obimpDir, "message.txt");
+
+                File.WriteAllLines(accountsFile, accounts, Encoding.UTF8);
+                File.WriteAllText(messageFile, message ?? "", Encoding.UTF8);
+
+                var psi = new ProcessStartInfo
+                {
+                    FileName = "cmd.exe",
+                    Arguments = "/c \"demo.bat\"",
+                    WorkingDirectory = obimpDir,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+
+                Process.Start(psi);
+
+                Log($"Bimoid: отправлено сообщение для здания '{building}' ({accounts.Count} получателей).");
+            }
+            catch (Exception ex)
+            {
+                Log($"Ошибка отправки Bimoid: {ex.Message}");
+            }
+        }
+
+        private void NotifyExpiringCerts(IEnumerable<CertRecord> records)
+        {
+            try
+            {
+                int threshold = _settings.NotifyDaysThreshold > 0 ? _settings.NotifyDaysThreshold : 10;
+
+                var expiring = records
+                    .Where(r => !r.IsDeleted && r.DaysLeft <= threshold)
+                    .ToList();
+
+                if (!expiring.Any())
+                    return;
+
+                foreach (var rec in expiring)
+                {
+                    string msg = $"У {rec.Fio} осталось {rec.DaysLeft} дней до окончания сертификата.";
+                    SendBimoidMessage(rec.Building, msg);
+                }
+
+                Log($"Bimoid: отправлены уведомления по {expiring.Count} сертификатам (порог {threshold} дней).");
+            }
+            catch (Exception ex)
+            {
+                Log($"Ошибка NotifyExpiringCerts: {ex.Message}");
+            }
+        }
+
 
         private void OnProgressUpdated(string message, double progress)
         {
@@ -979,6 +1083,9 @@ namespace ImapCertWatcher
                                 : "Проверка завершена: новых писем нет");
                         }
                     });
+
+                    // после обновления данных — рассылаем уведомления
+                    NotifyExpiringCerts(newList);
                 }
             }
             catch (Exception ex)
@@ -994,6 +1101,27 @@ namespace ImapCertWatcher
             {
                 // Скрываем прогресс-бар на всех вкладках
                 ShowProgressBar(false);
+            }
+        }
+
+        private void BtnTestBimoid_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                // Пример тестового сообщения
+                string msg = "Тестовое сообщение от ImapCertWatcher";
+
+                // Отправим сразу для обеих групп (если заданы аккаунты)
+                SendBimoidMessage("Краснофлотская", msg);
+                SendBimoidMessage("Пионерская", msg);
+
+                MessageBox.Show("Тестовое сообщение отправлено (если указаны аккаунты).",
+                                "Bimoid", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Ошибка при отправке тестового сообщения: {ex.Message}",
+                                "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 
@@ -1800,43 +1928,52 @@ namespace ImapCertWatcher
             {
                 var settingsPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "settings.txt");
 
+                // Обновляем пароли/значения из UI перед сохранением
+                _settings.MailPassword = pwdMailPassword.Password;
+                _settings.FbPassword = pwdFbPassword.Password;
+                // NotifyDaysThreshold и аккаунты уже привязаны через Binding к TextBox'ам
+
                 var lines = new[]
                 {
-                    "# Mail settings",
-                    $"MailHost={_settings.MailHost}",
-                    $"MailPort={_settings.MailPort}",
-                    $"MailUseSsl={_settings.MailUseSsl}",
-                    $"MailLogin={_settings.MailLogin}",
-                    $"MailPassword={_settings.MailPassword}",
-                    $"ImapFolder={_settings.ImapFolder}",
-                    "",
-                    "# Filter",
-                    $"FilterRecipient={_settings.FilterRecipient}",
-                    $"FilterSubjectPrefix={_settings.FilterSubjectPrefix}",
-                    "",
-                    "# Firebird settings",
-                    $"FirebirdDbPath={_settings.FirebirdDbPath}",
-                    $"FbServer={_settings.FbServer}",
-                    $"FbUser={_settings.FbUser}",
-                    $"FbPassword={_settings.FbPassword}",
-                    $"FbDialect={_settings.FbDialect}",
-                    "",
-                    "# App behavior",
-                    $"CheckIntervalHours={_settings.CheckIntervalHours}"
-                };
+            "# Mail settings",
+            $"MailHost={_settings.MailHost}",
+            $"MailPort={_settings.MailPort}",
+            $"MailUseSsl={_settings.MailUseSsl}",
+            $"MailLogin={_settings.MailLogin}",
+            $"MailPassword={_settings.MailPassword}",
+            $"ImapFolder={_settings.ImapFolder}",
+            "",
+            "# Filter",
+            $"FilterRecipient={_settings.FilterRecipient}",
+            $"FilterSubjectPrefix={_settings.FilterSubjectPrefix}",
+            "",
+            "# Firebird settings",
+            $"FirebirdDbPath={_settings.FirebirdDbPath}",
+            $"FbServer={_settings.FbServer}",
+            $"FbUser={_settings.FbUser}",
+            $"FbPassword={_settings.FbPassword}",
+            $"FbDialect={_settings.FbDialect}",
+            "",
+            "# App behavior",
+            $"CheckIntervalHours={_settings.CheckIntervalHours}",
+            "",
+            "# Bimoid / ObimpCMD",
+            $"NotifyDaysThreshold={_settings.NotifyDaysThreshold}",
+            "BimoidAccountsKrasnoflotskaya=" + (_settings.BimoidAccountsKrasnoflotskaya ?? "").Replace(Environment.NewLine, "\\n"),
+            "BimoidAccountsPionerskaya="   + (_settings.BimoidAccountsPionerskaya   ?? "").Replace(Environment.NewLine, "\\n")
+        };
 
                 File.WriteAllLines(settingsPath, lines, System.Text.Encoding.UTF8);
 
                 _timer?.Dispose();
                 if (_settings.CheckIntervalHours > 0)
                 {
-                    // Конвертируем часы в миллисекунды для таймера
                     var intervalMs = _settings.CheckIntervalHours * 60 * 60 * 1000;
                     _timer = new Timer(async _ => await DoCheckAsync(false),
                         null, TimeSpan.Zero, TimeSpan.FromMilliseconds(intervalMs));
                 }
 
-                txtInterval.Text = _settings.CheckIntervalHours.ToString(); // Обновляем отображение
+                txtInterval.Text = _settings.CheckIntervalHours.ToString();
             }
             catch (Exception ex)
             {

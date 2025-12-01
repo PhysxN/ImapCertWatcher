@@ -720,15 +720,54 @@
                                     <StackPanel Margin="6">
                                         <TextBlock Text="Интервал проверки (часы):" Margin="0,2" Foreground="{DynamicResource TextColorBrush}"/>
                                         <TextBox x:Name="txtCheckInterval" Text="{Binding CheckIntervalHours}" 
-                                                 Style="{StaticResource ModernTextBoxStyle}" Height="26"/>
+                 Style="{StaticResource ModernTextBoxStyle}" Height="26"/>
                                         <TextBlock Text="Рекомендуется: 1-24 часа" 
-                                                   FontStyle="Italic" FontSize="10" 
-                                                   Foreground="{DynamicResource TextColorBrush}"
-                                                   Margin="0,4,0,8"/>
+                   FontStyle="Italic" FontSize="10" 
+                   Foreground="{DynamicResource TextColorBrush}"
+                   Margin="0,4,0,8"/>
+
+                                        <TextBlock Text="Дней до окончания для уведомлений:" Margin="0,8,0,2"
+                   Foreground="{DynamicResource TextColorBrush}"/>
+                                        <TextBox x:Name="txtNotifyDays" Text="{Binding NotifyDaysThreshold}" 
+                 Style="{StaticResource ModernTextBoxStyle}" Height="26"
+                 ToolTip="Если осталось меньше или равно этому количеству дней — отправить сообщение"/>
 
                                         <CheckBox x:Name="chkDarkTheme" Content="Темная тема" 
-                                                  Style="{StaticResource ModernCheckBoxStyle}"
-                                                  Checked="ChkDarkTheme_Changed" Unchecked="ChkDarkTheme_Changed"/>
+                  Style="{StaticResource ModernCheckBoxStyle}"
+                  Margin="0,8,0,0"
+                  Checked="ChkDarkTheme_Changed" Unchecked="ChkDarkTheme_Changed"/>
+                                    </StackPanel>
+                                </GroupBox>
+
+                                <!-- Bimoid / ObimpCMD уведомления -->
+                                <GroupBox Header="Уведомления через Bimoid" Style="{StaticResource ModernGroupBoxStyle}" Margin="0,12,0,0">
+                                    <StackPanel Margin="6">
+                                        <TextBlock Text="Аккаунты для Краснофлотской (по одному в строке):"
+                   Margin="0,2" Foreground="{DynamicResource TextColorBrush}"/>
+                                        <TextBox x:Name="txtBimoidKrasnoflotskaya"
+                 Text="{Binding BimoidAccountsKrasnoflotskaya}"
+                 Style="{StaticResource ModernTextBoxStyle}"
+                 AcceptsReturn="True"
+                 Height="60"
+                 VerticalScrollBarVisibility="Auto"/>
+
+                                        <TextBlock Text="Аккаунты для Пионерской (по одному в строке):"
+                   Margin="0,8,0,2" Foreground="{DynamicResource TextColorBrush}"/>
+                                        <TextBox x:Name="txtBimoidPionerskaya"
+                 Text="{Binding BimoidAccountsPionerskaya}"
+                 Style="{StaticResource ModernTextBoxStyle}"
+                 AcceptsReturn="True"
+                 Height="60"
+                 VerticalScrollBarVisibility="Auto"/>
+
+                                        <Button x:Name="btnTestBimoid"
+                Content="Тестовое сообщение"
+                Style="{StaticResource ModernButtonStyle}"
+                Width="170" Height="26"
+                HorizontalAlignment="Right"
+                Margin="0,8,0,0"
+                Click="BtnTestBimoid_Click"
+                ToolTip="Отправить тестовое сообщение на указанные аккаунты"/>
                                     </StackPanel>
                                 </GroupBox>
 
