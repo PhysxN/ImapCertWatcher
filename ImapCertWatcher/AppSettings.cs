@@ -27,6 +27,14 @@ namespace ImapCertWatcher.Utils
         public string FbUser { get; set; } = "SYSDBA";
         public string FbPassword { get; set; } = "masterkey";
         public int FbDialect { get; set; } = 3;
+
+        // Автозагрузка и трей
+        public bool AutoStart { get; set; } = false;
+        public bool MinimizeToTrayOnClose { get; set; } = true;
+
+        // Отправлять уведомления / запускать авто-проверку только в рабочие часы
+        public bool NotifyOnlyInWorkHours { get; set; } = true;
+
         // Кодировка (если DbHelper ожидает поле FbCharset)
         public string FbCharset { get; set; } = "UTF8";
 

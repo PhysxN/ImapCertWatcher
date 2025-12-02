@@ -1,10 +1,10 @@
 ﻿using System;
 using System.IO;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
-using System.Windows.Threading;
 
 namespace ImapCertWatcher
 {
@@ -160,39 +160,96 @@ namespace ImapCertWatcher
             }
         }
 
-        public void CloseSplash()
+        /// <summary>
+        /// Плавно закрывает SplashScreen и возвращает Task,
+        /// завершающийся по окончании анимации закрытия.
+        /// Можно вызывать из любого потока — реализация перемещается в UI-поток через Dispatcher.
+        /// </summary>
+        public Task CloseSplashAsync()
         {
-            Dispatcher.Invoke(() =>
+            // Если уже закрываем — вернуть завершённую задачу
+            if (_isClosing)
+                return Task.CompletedTask;
+
+            var tcs = new TaskCompletionSource<object>();
+
+            // Выполняем всю работу в UI-потоке
+            Dispatcher.BeginInvoke(new Action(() =>
             {
-                if (_isClosing)
-                    return;
-
-                _isClosing = true;
-
-                System.Diagnostics.Debug.WriteLine("CloseSplash вызван");
-
-                // Останавливаем анимацию перед закрытием
-                if (_gifAnimation != null)
+                try
                 {
-                    _gifAnimation.Stop();
-                    _gifAnimation.MediaEnded -= GifAnimation_MediaEnded;
+                    if (_isClosing)
+                    {
+                        tcs.TrySetResult(null);
+                        return;
+                    }
+
+                    _isClosing = true;
+
+                    // Останавливаем анимацию перед закрытием
+                    try
+                    {
+                        if (_gifAnimation != null)
+                        {
+                            _gifAnimation.Stop();
+                            _gifAnimation.MediaEnded -= GifAnimation_MediaEnded;
+                        }
+                    }
+                    catch { /* ignore */ }
+
+                    // Если окно уже скрыто/закрыто — сразу завершаем
+                    if (!this.IsVisible)
+                    {
+                        try { this.Close(); } catch { }
+                        tcs.TrySetResult(null);
+                        return;
+                    }
+
+                    // Плавное исчезновение окна
+                    var anim = new DoubleAnimation
+                    {
+                        From = this.Opacity,
+                        To = 0.0,
+                        Duration = TimeSpan.FromMilliseconds(300),
+                        FillBehavior = FillBehavior.Stop
+                    };
+
+                    anim.Completed += (s, e) =>
+                    {
+                        try
+                        {
+                            // Устанавливаем Opacity в 0 и закрываем окно
+                            this.Opacity = 0;
+                            try { this.Close(); } catch { }
+                        }
+                        catch { /* ignore */ }
+                        finally
+                        {
+                            tcs.TrySetResult(null);
+                        }
+                    };
+
+                    // Запускаем анимацию
+                    try
+                    {
+                        this.BeginAnimation(Window.OpacityProperty, anim);
+                    }
+                    catch (Exception exStart)
+                    {
+                        System.Diagnostics.Debug.WriteLine("Ошибка запуска анимации закрытия Splash: " + exStart);
+                        try { this.Close(); } catch { }
+                        tcs.TrySetResult(null);
+                    }
                 }
-
-                // Плавное исчезновение окна
-                var anim = new DoubleAnimation
+                catch (Exception ex)
                 {
-                    From = this.Opacity,
-                    To = 0.0,
-                    Duration = TimeSpan.FromMilliseconds(300)
-                };
+                    System.Diagnostics.Debug.WriteLine("Ошибка в CloseSplashAsync: " + ex);
+                    try { this.Close(); } catch { }
+                    tcs.TrySetResult(null);
+                }
+            }), System.Windows.Threading.DispatcherPriority.Normal);
 
-                anim.Completed += (s, e) =>
-                {
-                    this.Close();
-                };
-
-                this.BeginAnimation(Window.OpacityProperty, anim);
-            });
+            return tcs.Task;
         }
     }
 }

@@ -12,12 +12,19 @@ namespace ImapCertWatcher
 
         private async void Application_Startup(object sender, StartupEventArgs e)
         {
-            // 1) Сначала применяем тему
+            // 1) Сначала применяем тему (чтобы Splash сразу был в нужных цветах)
             ApplyThemeFromSettings();
 
             // 2) Показываем splash
             _splashScreen = new SplashScreen();
-            _splashScreen.Show();
+            try
+            {
+                _splashScreen.Show();
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("Не удалось показать SplashScreen: " + ex);
+            }
 
             // Замер времени показа splash
             var sw = Stopwatch.StartNew();
@@ -25,49 +32,99 @@ namespace ImapCertWatcher
             // 3) Создаем главное окно
             var mainWindow = new MainWindow();
 
-            // Прогресс на splash
+            // Перенаправляем прогресс в splash
             mainWindow.ProgressUpdated += (message, progress) =>
             {
-                _splashScreen?.UpdateStatus(message);
-                _splashScreen?.UpdateProgress(progress);
+                try
+                {
+                    _splashScreen?.UpdateStatus(message);
+                    _splashScreen?.UpdateProgress(progress);
+                }
+                catch { /* игнорируем ошибки в обновлении сплэша */ }
             };
 
-            // Когда данные загружены
+            // Когда данные загружены — подождём минимум и затем закроем splash
             mainWindow.DataLoaded += async () =>
             {
-                sw.Stop();
-                const int minShowMs = 2000; // минимум 2 секунды
-
-                int remain = minShowMs - (int)sw.ElapsedMilliseconds;
-                if (remain > 0)
+                try
                 {
-                    // ждём, чтобы суммарное время показа было не меньше 2 сек
-                    await Task.Delay(remain);
+                    sw.Stop();
+                    const int minShowMs = 2000; // минимум 2 секунды показа
+
+                    int remain = minShowMs - (int)sw.ElapsedMilliseconds;
+                    if (remain > 0)
+                    {
+                        await Task.Delay(remain);
+                    }
+
+                    // Закрываем splash и ждём завершения анимации.
+                    // CloseSplashAsync должен выполняться в UI-потоке, поэтому используем Dispatcher.InvokeAsync
+                    if (_splashScreen != null)
+                    {
+                        var op = Dispatcher.InvokeAsync(() => _splashScreen.CloseSplashAsync(), DispatcherPriority.Background);
+                        // op.Result is Task (CloseSplashAsync), unwrap:
+                        await (await op.Task).ConfigureAwait(false);
+                        _splashScreen = null;
+                    }
                 }
-
-                Dispatcher.BeginInvoke(new Action(() =>
+                catch (Exception ex)
                 {
-                    _splashScreen?.CloseSplash();  // там теперь будет плавное исчезновение
-                    _splashScreen = null;
-                }), DispatcherPriority.Background);
+                    Debug.WriteLine("Ошибка в DataLoaded handler (splash): " + ex);
+                    try
+                    {
+                        if (_splashScreen != null)
+                        {
+                            var op = Dispatcher.InvokeAsync(() => _splashScreen.CloseSplashAsync(), DispatcherPriority.Background);
+                            await (await op.Task).ConfigureAwait(false);
+                            _splashScreen = null;
+                        }
+                    }
+                    catch { /* silent */ }
+                }
             };
 
             // 4) Показываем главное окно
-            mainWindow.Show();
+            try
+            {
+                mainWindow.Show();
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("Не удалось показать MainWindow: " + ex);
+            }
 
             // 5) Защита от зависшего splash (если вдруг DataLoaded не вызовется)
             var safetyTimer = new DispatcherTimer
             {
                 Interval = TimeSpan.FromSeconds(15)
             };
-            safetyTimer.Tick += (s, args) =>
+            safetyTimer.Tick += async (s, args) =>
             {
                 safetyTimer.Stop();
-                if (_splashScreen != null && _splashScreen.IsVisible)
+                try
                 {
-                    System.Diagnostics.Debug.WriteLine("Safety timer: принудительное закрытие SplashScreen");
-                    _splashScreen.CloseSplash();
-                    _splashScreen = null;
+                    if (_splashScreen != null && _splashScreen.IsVisible)
+                    {
+                        Debug.WriteLine("Safety timer: принудительное закрытие SplashScreen");
+                        try
+                        {
+                            var op = Dispatcher.InvokeAsync(() => _splashScreen.CloseSplashAsync(), DispatcherPriority.Background);
+                            await (await op.Task).ConfigureAwait(false);
+                        }
+                        catch (Exception exClose)
+                        {
+                            Debug.WriteLine("Ошибка при safety CloseSplashAsync(): " + exClose);
+                            try { _splashScreen?.Close(); } catch { }
+                        }
+                        finally
+                        {
+                            _splashScreen = null;
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine("Ошибка в safetyTimer.Tick: " + ex);
                 }
             };
             safetyTimer.Start();
@@ -78,7 +135,7 @@ namespace ImapCertWatcher
         /// </summary>
         private void ApplyThemeFromSettings()
         {
-            bool useDarkTheme = true; // как у тебя и было
+            bool useDarkTheme = true; // можно менять на чтение из настроек
 
             var res = Current.Resources;
 

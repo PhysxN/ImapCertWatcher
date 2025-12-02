@@ -59,6 +59,21 @@ namespace ImapCertWatcher.Utils
                     case "BimoidAccountsPionerskaya":
                         s.BimoidAccountsPionerskaya = val.Replace("\\n", Environment.NewLine);
                         break;
+
+                    case "AutoStart":
+                        if (bool.TryParse(val, out bool auto))
+                            s.AutoStart = auto;
+                        break;
+
+                    case "MinimizeToTrayOnClose":
+                        if (bool.TryParse(val, out bool mt))
+                            s.MinimizeToTrayOnClose = mt;
+                        break;
+
+                    case "NotifyOnlyInWorkHours":
+                        if (bool.TryParse(val, out bool nw))
+                            s.NotifyOnlyInWorkHours = nw;
+                        break;
                 }
             }
 

@@ -3,6 +3,7 @@ using ImapCertWatcher.Models;
 using ImapCertWatcher.Services;
 using ImapCertWatcher.Utils;
 using Microsoft.Win32;
+using System.Reflection;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -19,6 +20,8 @@ using System.Diagnostics;
 using System.Text;
 using System.Security.Authentication;
 using System.Windows.Controls.Primitives;
+using Forms = System.Windows.Forms;
+using System.ComponentModel;
 
 // Альтернатива Excel без использования Office Interop
 using System.Data;
@@ -45,12 +48,43 @@ namespace ImapCertWatcher
         private ObservableCollection<string> _miniLogMessages = new ObservableCollection<string>();
         private const int MAX_MINI_LOG_LINES = 3;
 
+        private Forms.NotifyIcon _trayIcon;
+        private bool _reallyExit = false;
         private string _currentBuildingFilter = "Все";
         private bool _showDeleted = false;
         private string _searchText = "";
         private bool _isDarkTheme = false;
+        private const string AUTOSTART_REG_PATH = @"Software\Microsoft\Windows\CurrentVersion\Run";
+        private const string AUTOSTART_VALUE_NAME = "ImapCertWatcher";
 
-        
+        private void ApplyAutoStartSetting()
+        {
+            try
+            {
+                using (var key = Registry.CurrentUser.OpenSubKey(AUTOSTART_REG_PATH, true))
+                {
+                    if (key == null) return;
+
+                    string exePath = Assembly.GetExecutingAssembly().Location;
+                    exePath = "\"" + exePath + "\"";
+
+                    if (_settings.AutoStart)
+                    {
+                        key.SetValue(AUTOSTART_VALUE_NAME, exePath);
+                        Log("Автозапуск включен");
+                    }
+                    else
+                    {
+                        key.DeleteValue(AUTOSTART_VALUE_NAME, false);
+                        Log("Автозапуск выключен");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"Ошибка настройки автозапуска: {ex.Message}");
+            }
+        }
 
         // Список доступных зданий
         private readonly ObservableCollection<string> _availableBuildings = new ObservableCollection<string>
@@ -71,6 +105,7 @@ namespace ImapCertWatcher
             {
                 InitializeComponent();
 
+
                 // Инициализация мини-лога
                 _miniLogMessages = new ObservableCollection<string>();
                 AddToMiniLog("Приложение запущено");
@@ -81,9 +116,10 @@ namespace ImapCertWatcher
                 // Загружаем настройки
                 var settingsPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "settings.txt");
                 _settings = SettingsLoader.Load(settingsPath);
+                ApplyAutoStartSetting();
 
                 this.DataContext = _settings;
-
+                _notificationManager = new NotificationManager(_settings, Log);
                 pwdMailPassword.Password = _settings.MailPassword;
                 pwdFbPassword.Password = _settings.FbPassword;
 
@@ -92,6 +128,9 @@ namespace ImapCertWatcher
 
                 // Загрузка темы
                 LoadThemeSettings();
+
+                //Трей
+                InitTrayIcon();
 
                 // Настройка DataGrid и обработчиков
                 dgCerts.CanUserAddRows = false;
@@ -112,12 +151,93 @@ namespace ImapCertWatcher
             }
         }
 
-        
+        private bool IsWorkingTime()
+        {
+            var now = DateTime.Now;
 
-        
+            // Суббота/воскресенье — не рабочие
+            if (now.DayOfWeek == DayOfWeek.Saturday || now.DayOfWeek == DayOfWeek.Sunday)
+                return false;
 
-        
+            var t = now.TimeOfDay;
+            var start = new TimeSpan(8, 0, 0);   // 08:00
+            var end = new TimeSpan(16, 30, 0); // 16:30
 
+            return t >= start && t <= end;
+        }
+
+        private void InitTrayIcon()
+        {
+            try
+            {
+                _trayIcon = new Forms.NotifyIcon();
+                _trayIcon.Icon = System.Drawing.Icon.ExtractAssociatedIcon(
+                    System.Reflection.Assembly.GetExecutingAssembly().Location);
+                _trayIcon.Visible = true;
+                _trayIcon.Text = "ImapCertWatcher";
+
+                var menu = new Forms.ContextMenuStrip();
+                menu.Items.Add("Открыть", null, (s, e) => ShowFromTray());
+                menu.Items.Add("Проверить почту сейчас", null, async (s, e) =>
+                {
+                    await Dispatcher.InvokeAsync(async () => await DoCheckAsync(false));
+                });
+                menu.Items.Add(new Forms.ToolStripSeparator());
+                menu.Items.Add("Выход", null, (s, e) => ExitFromTray());
+
+                _trayIcon.ContextMenuStrip = menu;
+                _trayIcon.DoubleClick += (s, e) => ShowFromTray();
+            }
+            catch (Exception ex)
+            {
+                Log($"Ошибка инициализации трея: {ex.Message}");
+            }
+        }
+
+        private void ShowFromTray()
+        {
+            try
+            {
+                this.Show();
+                this.WindowState = WindowState.Normal;
+                this.Activate();
+            }
+            catch { }
+        }
+
+        private void ExitFromTray()
+        {
+            try
+            {
+                _reallyExit = true;
+                if (_trayIcon != null)
+                {
+                    _trayIcon.Visible = false;
+                    _trayIcon.Dispose();
+                    _trayIcon = null;
+                }
+                this.Close();
+            }
+            catch { }
+        }
+
+        protected override void OnStateChanged(EventArgs e)
+        {
+            base.OnStateChanged(e);
+
+            // Если свернули окно и включен режим "в трей"
+            if (_settings != null &&
+                _settings.MinimizeToTrayOnClose &&
+                this.WindowState == WindowState.Minimized)
+            {
+                this.Hide();
+                _trayIcon?.ShowBalloonTip(
+                    1000,
+                    "ImapCertWatcher",
+                    "Приложение свернуто в трей и продолжит работать.",
+                    Forms.ToolTipIcon.Info);
+            }
+        }
 
         private void OnProgressUpdated(string message, double progress)
         {
@@ -183,10 +303,13 @@ namespace ImapCertWatcher
                 if (_settings.CheckIntervalHours > 0)
                 {
                     var intervalMs = _settings.CheckIntervalHours * 60 * 60 * 1000;
-                    _timer = new Timer(async _ => await DoCheckAsync(false),
+
+                    // Первый запуск — через intervalMs (чтобы при сохранении настроек не запускать проверку немедленно)
+                    _timer = new Timer(
+                        async _ => await DoCheckAsync(false, true), // isFromTimer = true
                         null,
-                        TimeSpan.FromMilliseconds(intervalMs),
-                        TimeSpan.FromMilliseconds(intervalMs));
+                        TimeSpan.FromMilliseconds(intervalMs),       // отложенный первый запуск
+                        TimeSpan.FromMilliseconds(intervalMs));      // и потом по интервалу
                 }
 
                 // Таймер для обновления дней
@@ -203,7 +326,6 @@ namespace ImapCertWatcher
                 // ★ УБИРАЕМ ЗАДЕРЖКУ - ЗАКРЫВАЕМ СРАЗУ ★
                 DataLoaded?.Invoke();
                 // Инициализируем менеджер уведомлений после получения настроек
-                _notificationManager = new NotificationManager(_settings, msg => Log(msg));
                 statusText.Text = "Готово";
                 AddToMiniLog($"Инициализация завершена. Загружено записей: {_allItems.Count}");
 
@@ -921,8 +1043,15 @@ namespace ImapCertWatcher
             });
         }
 
-        private async Task DoCheckAsync(bool checkAllMessages)
+        private async Task DoCheckAsync(bool checkAllMessages, bool isFromTimer = false)
         {
+            // если вызов по таймеру и включено ограничение — выходим вне рабочего времени
+            if (isFromTimer && _settings.NotifyOnlyInWorkHours && !IsWorkingTime())
+            {
+                Log("Проверка по таймеру пропущена: вне рабочего времени.");
+                return;
+            }
+
             if (_newWatcher == null || _revWatcher == null)
             {
                 Dispatcher.Invoke(() => statusText.Text = "Ошибка: компоненты не инициализированы");
@@ -1040,7 +1169,7 @@ namespace ImapCertWatcher
             try
             {
                 _notificationManager?.SendTestMessage();
-                MessageBox.Show("Тестовое сообщение отправлено (если указаны аккаунты).",
+                MessageBox.Show("Тестовое сообщение для Bimoid отправлено (если настроены аккаунты).",
                                 "Bimoid", MessageBoxButton.OK, MessageBoxImage.Information);
             }
             catch (Exception ex)
@@ -1054,66 +1183,42 @@ namespace ImapCertWatcher
         {
             try
             {
-                if (_notificationManager == null)
-                {
-                    MessageBox.Show("Менеджер уведомлений ещё не инициализирован.",
-                                    "Тест уведомления", MessageBoxButton.OK, MessageBoxImage.Warning);
-                    return;
-                }
-
-                if (_allItems == null || _allItems.Count == 0)
-                {
-                    MessageBox.Show("Нет записей сертификатов для теста.",
-                                    "Тест уведомления", MessageBoxButton.OK, MessageBoxImage.Information);
-                    return;
-                }
-
-                // считаем «последним» по максимальному Id, и только не удалённого
-                var testRec = _allItems
-                    .Where(r => !r.IsDeleted)
-                    .OrderByDescending(r => r.Id)
+                var last = _allItems
+                    .OrderByDescending(r => r.DateStart)
                     .FirstOrDefault();
 
-                if (testRec == null)
+                if (last == null)
                 {
-                    MessageBox.Show("Нет активных сертификатов для теста.",
-                                    "Тест уведомления", MessageBoxButton.OK, MessageBoxImage.Information);
+                    MessageBox.Show("Нет записей сертификатов для теста.",
+                                    "Информация", MessageBoxButton.OK, MessageBoxImage.Information);
                     return;
                 }
 
-                // шлём как «нового пользователя»
-                _notificationManager.NotifyNewUsers(new[] { testRec });
+                _notificationManager?.SendTestNewUserNotification(last);
 
-                MessageBox.Show(
-                    $"Отправлено тестовое уведомление как для нового пользователя:\n\n" +
-                    $"{testRec.Fio}\n" +
-                    $"Срок сертификата: {testRec.DateStart:dd.MM.yyyy} — {testRec.DateEnd:dd.MM.yyyy}",
-                    "Тест уведомления",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Information
-                );
-
-                Log($"Тест уведомления о новом пользователе: {testRec.Fio} (ID: {testRec.Id})");
+                MessageBox.Show($"Отправлено тестовое уведомление о пользователе:\n{last.Fio}",
+                                "Тест нового пользователя",
+                                MessageBoxButton.OK, MessageBoxImage.Information);
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Ошибка при тестовом уведомлении: {ex.Message}",
+                MessageBox.Show($"Ошибка тестового уведомления: {ex.Message}",
                                 "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
-                Log($"Ошибка BtnTestNewUserNotify_Click: {ex.Message}");
             }
         }
 
         private async void BtnManualCheck_Click(object sender, RoutedEventArgs e)
         {
             Log("Ручная проверка почты запущена");
-            await DoCheckAsync(false);
+            await DoCheckAsync(false, false); // ручной запуск, игнорируем рабочее время
         }
 
         private async void BtnProcessAll_Click(object sender, RoutedEventArgs e)
         {
             Log("Обработка всех писем запущена");
-            await DoCheckAsync(true);
+            await DoCheckAsync(true, false);
         }
+
 
         private void BuildingFilter_Checked(object sender, RoutedEventArgs e)
         {
@@ -1934,6 +2039,9 @@ namespace ImapCertWatcher
             "",
             "# App behavior",
             $"CheckIntervalHours={_settings.CheckIntervalHours}",
+            $"AutoStart={_settings.AutoStart}",
+            $"MinimizeToTrayOnClose={_settings.MinimizeToTrayOnClose}",
+            $"NotifyOnlyInWorkHours={_settings.NotifyOnlyInWorkHours}",
             "",
             "# Bimoid / ObimpCMD",
             $"NotifyDaysThreshold={_settings.NotifyDaysThreshold}",
@@ -1947,8 +2055,16 @@ namespace ImapCertWatcher
                 if (_settings.CheckIntervalHours > 0)
                 {
                     var intervalMs = _settings.CheckIntervalHours * 60 * 60 * 1000;
-                    _timer = new Timer(async _ => await DoCheckAsync(false),
-                        null, TimeSpan.Zero, TimeSpan.FromMilliseconds(intervalMs));
+
+                    // Первый запуск откладываем на полный интервал, чтобы при сохранении настроек
+                    // не запускать немедленно проверку и рассылку.
+                    var due = TimeSpan.FromMilliseconds(intervalMs);
+
+                    _timer = new Timer(
+                        async _ => await DoCheckAsync(false, true), // isFromTimer = true
+                        null,
+                        due,                                     // первый запуск через interval
+                        TimeSpan.FromMilliseconds(intervalMs));  // и потом по интервалу
                 }
 
                 txtInterval.Text = _settings.CheckIntervalHours.ToString();
@@ -1957,6 +2073,7 @@ namespace ImapCertWatcher
             {
                 throw new Exception($"Не удалось сохранить настройки: {ex.Message}", ex);
             }
+            ApplyAutoStartSetting();
         }
 
         private void LoadLogs()
@@ -2202,14 +2319,41 @@ namespace ImapCertWatcher
             }
         }
 
+        protected override void OnClosing(CancelEventArgs e)
+        {
+            if (!_reallyExit && _settings != null && _settings.MinimizeToTrayOnClose)
+            {
+                // перехватываем крестик – прячем в трей
+                e.Cancel = true;
+                this.WindowState = WindowState.Minimized;
+                this.Hide();
+
+                _trayIcon?.ShowBalloonTip(
+                    1000,
+                    "ImapCertWatcher",
+                    "Приложение продолжит работать в трее. Для выхода используйте меню значка.",
+                    Forms.ToolTipIcon.Info);
+
+                return;
+            }
+
+            base.OnClosing(e);
+        }
+
         protected override void OnClosed(EventArgs e)
         {
             base.OnClosed(e);
+
             _timer?.Dispose();
             _refreshTimer?.Stop();
             if (_refreshTimer != null)
-            {
                 _refreshTimer.Tick -= RefreshDaysLeft;
+
+            if (_trayIcon != null)
+            {
+                _trayIcon.Visible = false;
+                _trayIcon.Dispose();
+                _trayIcon = null;
             }
         }
     }

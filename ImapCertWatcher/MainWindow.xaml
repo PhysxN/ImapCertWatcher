@@ -736,6 +736,22 @@
                   Style="{StaticResource ModernCheckBoxStyle}"
                   Margin="0,8,0,0"
                   Checked="ChkDarkTheme_Changed" Unchecked="ChkDarkTheme_Changed"/>
+
+                                        <CheckBox x:Name="chkAutoStart"
+          Content="Добавить в автозагрузку Windows"
+          IsChecked="{Binding AutoStart, Mode=TwoWay}"
+          Margin="0,4,0,0"/>
+
+                                        <CheckBox x:Name="chkMinimizeToTray"
+          Content="Сворачивать в трей при закрытии окна"
+          IsChecked="{Binding MinimizeToTrayOnClose, Mode=TwoWay}"
+          Margin="0,4,0,0"/>
+
+                                        <CheckBox x:Name="chkNotifyWorkHours"
+          Content="Проверять почту и отправлять уведомления только в рабочее время (Пн–Пт, 08:00–16:30)"
+          IsChecked="{Binding NotifyOnlyInWorkHours, Mode=TwoWay}"
+          Margin="0,4,0,0"/>
+
                                     </StackPanel>
                                 </GroupBox>
 
@@ -760,23 +776,23 @@
                                                  Height="60"
                                                  VerticalScrollBarVisibility="Auto"/>
 
-                                        <Button x:Name="btnTestBimoid"
-                                                Content="Тестовое сообщение"
-                                                Style="{StaticResource ModernButtonStyle}"
-                                                Width="170" Height="26"
-                                                HorizontalAlignment="Right"
-                                                Margin="0,8,0,0"
-                                                Click="BtnTestBimoid_Click"
-                                                ToolTip="Отправить тестовое сообщение на указанные аккаунты"/>
-                                        <Button x:Name="btnTestNewUserNotify"
-                                                Content="Тест нового пользователя"
-                                                Style="{StaticResource ModernButtonStyle}"
-                                                Width="170" Height="26"
-                                                HorizontalAlignment="Right"
-                                                Margin="0,8,0,0"
-                                                Click="BtnTestNewUserNotify_Click"
-                                                ToolTip="Отправить тестовое сообщение о новых пользователях на указанные аккаунты"/>
-                                        
+                                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0" HorizontalAlignment="Right">
+                                            <Button x:Name="btnTestBimoid"
+            Content="Тестовое сообщение"
+            Style="{StaticResource ModernButtonStyle}"
+            Width="190" Height="28"
+            Margin="0,0,8,0"
+            Click="BtnTestBimoid_Click"
+            ToolTip="Отправить тестовое сообщение на указанные аккаунты"/>
+
+                                            <Button x:Name="btnTestNewUserNotify"
+            Content="Тест нового пользователя"
+            Style="{StaticResource ModernButtonStyle}"
+            Width="190" Height="28"
+            Click="BtnTestNewUserNotify_Click"
+            ToolTip="Отправить тестовое сообщение о новых пользователях на указанные аккаунты"/>
+                                        </StackPanel>
+
                                     </StackPanel>
                                 </GroupBox>
 

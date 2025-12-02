@@ -1,191 +1,290 @@
-﻿using ImapCertWatcher.Models;
-using ImapCertWatcher.Utils;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
+using ImapCertWatcher.Models;
+using ImapCertWatcher.Utils;
 
 namespace ImapCertWatcher.Services
 {
-    /// <summary>
-    /// Отвечает за отправку уведомлений через ObimpCMD + лог + анти-спам.
-    /// </summary>
     public class NotificationManager
     {
         private readonly AppSettings _settings;
-        private readonly Action<string> _log; // логгер из MainWindow (в session_*.log + мини-лог)
-
+        private readonly Action<string> _log;
         private readonly string _obimpDir;
-        private readonly string _notificationsLogFile;
-        private readonly string _sentTodayFile;
+        private readonly string _stateFile;
+        private readonly object _sync = new object();
 
-        private readonly HashSet<string> _sentToday = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        private readonly object _lock = new object();
+        // ===== ВНУТРЕННЕЕ СОСТОЯНИЕ АНТИ-СПАМА =====
+        private class NotificationState
+        {
+            // ключ: "expiring:CertId"
+            public Dictionary<string, DateTime> ExpiringLastSent { get; set; }
+            // ключ: "newuser:CertId"
+            public Dictionary<string, DateTime> NewUserLastSent { get; set; }
 
-        public NotificationManager(AppSettings settings, Action<string> logAction)
+            public NotificationState()
+            {
+                ExpiringLastSent = new Dictionary<string, DateTime>();
+                NewUserLastSent = new Dictionary<string, DateTime>();
+            }
+        }
+
+        private NotificationState _state = new NotificationState();
+
+        public NotificationManager(AppSettings settings, Action<string> log)
         {
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
-            _log = logAction ?? (_ => { });
+            _log = log ?? (_ => { });
 
-            string appDir = AppDomain.CurrentDomain.BaseDirectory;
+            var baseDir = AppDomain.CurrentDomain.BaseDirectory;
+            _obimpDir = Path.Combine(baseDir, "ObimpCMD");
 
-            _obimpDir = Path.Combine(appDir, "ObimpCMD");
+            var logDir = Path.Combine(baseDir, "LOG");
+            if (!Directory.Exists(logDir))
+                Directory.CreateDirectory(logDir);
 
-            string logBaseDirectory = Path.Combine(appDir, "LOG", DateTime.Now.ToString("yyyy-MM-dd"));
-            Directory.CreateDirectory(logBaseDirectory);
-
-            _notificationsLogFile = Path.Combine(logBaseDirectory, "notifications.log");
-            _sentTodayFile = Path.Combine(logBaseDirectory, "notifications_sent.txt");
-
-            LoadSentToday();
+            _stateFile = Path.Combine(logDir, "notifications_state.txt");
+            LoadState();
         }
 
+        // ===== ПУБЛИЧНЫЕ МЕТОДЫ =====
+
         /// <summary>
-        /// Загружаем список уже отправленных сегодня уведомлений (антиспам).
+        /// Уведомления об истекающих сертификатах (с анти-спамом "не чаще раза в сутки").
         /// </summary>
-        private void LoadSentToday()
+        public void NotifyExpiringCerts(IEnumerable<CertRecord> records)
         {
-            try
+            if (records == null) return;
+
+            lock (_sync)
             {
-                if (File.Exists(_sentTodayFile))
+                int threshold = _settings.NotifyDaysThreshold > 0 ? _settings.NotifyDaysThreshold : 10;
+                DateTime today = DateTime.Today;
+                int sentCount = 0;
+
+                var expiring = records
+                    .Where(r => !r.IsDeleted &&
+                                r.DaysLeft > 0 &&
+                                r.DaysLeft <= threshold &&
+                                !string.IsNullOrWhiteSpace(r.Fio))
+                    .ToList();
+
+                foreach (var rec in expiring)
                 {
-                    foreach (var line in File.ReadAllLines(_sentTodayFile, Encoding.UTF8))
+                    string key = string.Format("expiring:{0}", rec.Id);
+                    DateTime last;
+                    if (_state.ExpiringLastSent.TryGetValue(key, out last) &&
+                        last.Date == today)
                     {
-                        var key = line.Trim();
-                        if (!string.IsNullOrEmpty(key))
-                            _sentToday.Add(key);
+                        // уже слали сегодня — пропускаем
+                        continue;
+                    }
+
+                    string msg = string.Format(
+                        "У {0} осталось {1} дней до окончания сертификата.",
+                        rec.Fio, rec.DaysLeft);
+
+                    if (SendForBuilding(rec.Building, msg))
+                    {
+                        _state.ExpiringLastSent[key] = today;
+                        sentCount++;
                     }
                 }
-            }
-            catch (Exception ex)
-            {
-                _log($"[Notify] Ошибка чтения {_sentTodayFile}: {ex.Message}");
-            }
-        }
 
-        private void SaveSentToday()
-        {
-            try
-            {
-                File.WriteAllLines(_sentTodayFile, _sentToday, Encoding.UTF8);
+                if (sentCount > 0)
+                {
+                    _log(string.Format(
+                        "[Notify] Отправлены уведомления об истекании по {0} сертификатам (порог {1} дней).",
+                        sentCount, threshold));
+                    SaveState();
+                }
             }
-            catch (Exception ex)
-            {
-                _log($"[Notify] Ошибка записи {_sentTodayFile}: {ex.Message}");
-            }
-        }
-
-        private void LogNotification(string message)
-        {
-            string line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} - {message}";
-            try
-            {
-                File.AppendAllText(_notificationsLogFile, line + Environment.NewLine, Encoding.UTF8);
-            }
-            catch { /* не валим приложение из-за лога */ }
-
-            _log($"[Notify] {message}");
         }
 
         /// <summary>
-        /// Возвращает список аккаунтов для здания
-        /// building: "Краснофлотская", "Пионерская" или "ALL" (объединить).
-        ///</summary>
+        /// Уведомления о НОВЫХ пользователях (анти-спам: не более одного раза в сутки на сертификат).
+        /// </summary>
+        public void NotifyNewUsers(IEnumerable<CertRecord> newRecords)
+        {
+            if (newRecords == null) return;
+
+            lock (_sync)
+            {
+                DateTime today = DateTime.Today;
+                int sentCount = 0;
+
+                var allAccounts = GetAllAccounts();
+                if (allAccounts.Count == 0)
+                {
+                    _log("[Notify] Нет bimoid-аккаунтов для уведомлений о новых пользователях.");
+                    return;
+                }
+
+                foreach (var rec in newRecords)
+                {
+                    if (rec == null || string.IsNullOrWhiteSpace(rec.Fio))
+                        continue;
+
+                    string key = string.Format("newuser:{0}", rec.Id);
+                    DateTime last;
+                    if (_state.NewUserLastSent.TryGetValue(key, out last) &&
+                        last.Date == today)
+                    {
+                        // Уже уведомляли сегодня
+                        continue;
+                    }
+
+                    string msg = string.Format(
+                        "Добавлен новый пользователь: {0}. Сертификат действует с {1:dd.MM.yyyy} по {2:dd.MM.yyyy}.",
+                        rec.Fio, rec.DateStart, rec.DateEnd);
+
+                    if (SendToAccounts(allAccounts, msg))
+                    {
+                        _state.NewUserLastSent[key] = today;
+                        sentCount++;
+                    }
+                }
+
+                if (sentCount > 0)
+                {
+                    _log(string.Format("[Notify] Отправлены уведомления о новых пользователях: {0} шт.", sentCount));
+                    SaveState();
+                }
+            }
+        }
+
+        /// <summary>
+        /// Тестовое обычное сообщение (проверка канала).
+        /// </summary>
+        public void SendTestMessage()
+        {
+            var allAccounts = GetAllAccounts();
+            if (allAccounts.Count == 0)
+            {
+                _log("[Notify] Тест: нет аккаунтов для отправки.");
+                return;
+            }
+
+            string msg = "Тестовое сообщение от ImapCertWatcher (проверка канала связи).";
+            if (SendToAccounts(allAccounts, msg))
+            {
+                _log(string.Format("[Notify] Тестовое сообщение отправлено ({0} получателей).", allAccounts.Count));
+            }
+        }
+
+        /// <summary>
+        /// Тестовое уведомление о "новом пользователе" (для последнего/произвольного).
+        /// </summary>
+        public void SendTestNewUserNotification(CertRecord rec)
+        {
+            if (rec == null)
+            {
+                _log("[Notify] Тест нового пользователя: запись не передана.");
+                return;
+            }
+
+            var allAccounts = GetAllAccounts();
+            if (allAccounts.Count == 0)
+            {
+                _log("[Notify] Тест нового пользователя: нет аккаунтов.");
+                return;
+            }
+
+            string msg = string.Format(
+                "[ТЕСТ] Добавлен новый пользователь: {0}. Сертификат действует с {1:dd.MM.yyyy} по {2:dd.MM.yyyy}.",
+                rec.Fio, rec.DateStart, rec.DateEnd);
+
+            if (SendToAccounts(allAccounts, msg))
+            {
+                _log("[Notify] Тестовое уведомление о новом пользователе отправлено.");
+            }
+        }
+
+        // ===== ВНУТРЕННИЕ ХЕЛПЕРЫ =====
+
         private List<string> GetAccountsForBuilding(string building)
         {
-            string raw;
+            string raw = null;
 
             if (string.Equals(building, "Краснофлотская", StringComparison.OrdinalIgnoreCase))
-            {
                 raw = _settings.BimoidAccountsKrasnoflotskaya;
-            }
             else if (string.Equals(building, "Пионерская", StringComparison.OrdinalIgnoreCase))
-            {
                 raw = _settings.BimoidAccountsPionerskaya;
-            }
-            else if (string.Equals(building, "ALL", StringComparison.OrdinalIgnoreCase))
-            {
-                raw = string.Join(Environment.NewLine,
-                    _settings.BimoidAccountsKrasnoflotskaya ?? string.Empty,
-                    _settings.BimoidAccountsPionerskaya ?? string.Empty);
-            }
             else
-            {
-                // неизвестное здание — ничего не шлём
                 return new List<string>();
-            }
 
             if (string.IsNullOrWhiteSpace(raw))
                 return new List<string>();
 
             return raw
-                .Split(new[] { '\r', '\n', ';', ',', '\t' }, StringSplitOptions.RemoveEmptyEntries)
+                .Split(new[] { '\r', '\n', ';', ',' }, StringSplitOptions.RemoveEmptyEntries)
                 .Select(a => a.Trim())
                 .Where(a => !string.IsNullOrWhiteSpace(a))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
         }
 
-        /// <summary>
-        /// Генерирует ключ для антиспама "один раз в сутки".
-        /// type: "expiry" / "new".
-        /// </summary>
-        private string MakeSpamKey(string type, CertRecord rec)
+        private List<string> GetAllAccounts()
         {
-            // Привязываемся к конкретному сертификату + зданию + дате проверки
-            return $"{DateTime.Today:yyyy-MM-dd}|{type}|{rec.Fio}|{rec.Building}|{rec.CertNumber}";
+            var all = new List<string>();
+
+            Action<string> addFrom = raw =>
+            {
+                if (string.IsNullOrWhiteSpace(raw)) return;
+                var parts = raw
+                    .Split(new[] { '\r', '\n', ';', ',' }, StringSplitOptions.RemoveEmptyEntries)
+                    .Select(a => a.Trim());
+                all.AddRange(parts);
+            };
+
+            addFrom(_settings.BimoidAccountsKrasnoflotskaya);
+            addFrom(_settings.BimoidAccountsPionerskaya);
+
+            return all
+                .Where(a => !string.IsNullOrWhiteSpace(a))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
         }
 
-        /// <summary>
-        /// true = уже сегодня слали, повторять нельзя.
-        /// </summary>
-        private bool AlreadySentToday(string type, CertRecord rec)
+        private bool SendForBuilding(string building, string message)
         {
-            var key = MakeSpamKey(type, rec);
-            lock (_lock)
+            var accounts = GetAccountsForBuilding(building);
+            if (accounts.Count == 0)
             {
-                if (_sentToday.Contains(key))
-                    return true;
-
-                _sentToday.Add(key);
-                SaveSentToday();
+                _log(string.Format("[Notify] Для здания '{0}' не настроены bimoid-аккаунты.", building));
                 return false;
             }
+
+            return SendToAccounts(accounts, message);
         }
 
-        /// <summary>
-        /// Низкоуровневый запуск demo.bat с указанными аккаунтами и текстом.
-        /// </summary>
-        private void SendMessageInternal(IEnumerable<string> accounts, string message, string tagForLog)
+        private bool SendToAccounts(List<string> accounts, string message)
         {
+            if (accounts == null || accounts.Count == 0)
+                return false;
+
             try
             {
                 if (!Directory.Exists(_obimpDir))
                 {
-                    _log($"[Notify] ObimpCMD не найден: {_obimpDir}");
-                    return;
+                    _log(string.Format("[Notify] ObimpCMD не найден: {0}", _obimpDir));
+                    return false;
                 }
 
                 string demoBat = Path.Combine(_obimpDir, "demo.bat");
                 if (!File.Exists(demoBat))
                 {
-                    _log($"[Notify] demo.bat не найден: {demoBat}");
-                    return;
-                }
-
-                var accList = (accounts ?? Enumerable.Empty<string>()).ToList();
-                if (accList.Count == 0)
-                {
-                    _log($"[Notify] Нет аккаунтов для отправки ({tagForLog})");
-                    return;
+                    _log(string.Format("[Notify] demo.bat не найден: {0}", demoBat));
+                    return false;
                 }
 
                 string accountsFile = Path.Combine(_obimpDir, "accounts.txt");
                 string messageFile = Path.Combine(_obimpDir, "message.txt");
 
-                File.WriteAllLines(accountsFile, accList, Encoding.UTF8);
+                File.WriteAllLines(accountsFile, accounts, Encoding.UTF8);
                 File.WriteAllText(messageFile, message ?? string.Empty, Encoding.UTF8);
 
                 var psi = new ProcessStartInfo
@@ -199,126 +298,98 @@ namespace ImapCertWatcher.Services
 
                 Process.Start(psi);
 
-                LogNotification($"Отправлено ({tagForLog}) {accList.Count} получателям.");
+                _log(string.Format("[Notify] Отправлено через ObimpCMD ({0} получателей).", accounts.Count));
+                return true;
             }
             catch (Exception ex)
             {
-                _log($"[Notify] Ошибка отправки через ObimpCMD: {ex.Message}");
+                _log(string.Format("[Notify] Ошибка отправки через ObimpCMD: {0}", ex.Message));
+                return false;
             }
         }
 
-        /// <summary>
-        /// Уведомления о скором окончании сертификата.
-        /// Антиспам: по одному сообщению в сутки на каждый сертификат.
-        /// </summary>
-        public void NotifyExpiringCerts(IEnumerable<CertRecord> records)
+        // ===== ЗАГРУЗКА / СОХРАНЕНИЕ СОСТОЯНИЯ (ПРОСТОЙ ТЕКСТ) =====
+
+        private void LoadState()
         {
             try
             {
-                int threshold = _settings.NotifyDaysThreshold > 0
-                    ? _settings.NotifyDaysThreshold
-                    : 10;
-
-                var list = records?
-                    .Where(r => !r.IsDeleted && r.DaysLeft >= 0 && r.DaysLeft <= threshold)
-                    .ToList() ?? new List<CertRecord>();
-
-                if (list.Count == 0)
-                    return;
-
-                foreach (var rec in list)
+                if (!File.Exists(_stateFile))
                 {
-                    if (AlreadySentToday("expiry", rec))
-                        continue; // уже слали сегодня
+                    _state = new NotificationState();
+                    return;
+                }
 
-                    var accounts = GetAccountsForBuilding(rec.Building);
-                    if (accounts.Count == 0)
-                    {
-                        _log($"[Notify] Нет аккаунтов для здания '{rec.Building}', пропуск {rec.Fio}");
+                var state = new NotificationState();
+                var lines = File.ReadAllLines(_stateFile, Encoding.UTF8);
+
+                foreach (var rawLine in lines)
+                {
+                    var line = rawLine.Trim();
+                    if (string.IsNullOrEmpty(line)) continue;
+
+                    // Формат:
+                    // E|key|2025-12-01T10:00:00.0000000
+                    // N|key|2025-12-01T10:00:00.0000000
+                    var parts = line.Split('|');
+                    if (parts.Length != 3) continue;
+
+                    string type = parts[0];
+                    string key = parts[1];
+                    string dtStr = parts[2];
+
+                    DateTime dt;
+                    if (!DateTime.TryParse(dtStr, null, System.Globalization.DateTimeStyles.RoundtripKind, out dt))
                         continue;
+
+                    if (type == "E")
+                    {
+                        state.ExpiringLastSent[key] = dt;
                     }
-
-                    string msg = $"У {rec.Fio} осталось {rec.DaysLeft} дней до окончания сертификата.";
-                    string tag = $"expiry, {rec.Fio}, {rec.Building}";
-                    SendMessageInternal(accounts, msg, tag);
+                    else if (type == "N")
+                    {
+                        state.NewUserLastSent[key] = dt;
+                    }
                 }
 
-                if (list.Count > 0)
-                    LogNotification($"Проверка истекающих сертификатов: найдено {list.Count} записей (порог {threshold} дней).");
+                _state = state;
             }
             catch (Exception ex)
             {
-                _log($"[Notify] Ошибка NotifyExpiringCerts: {ex.Message}");
+                _log(string.Format("[Notify] Ошибка загрузки состояния уведомлений: {0}", ex.Message));
+                _state = new NotificationState();
             }
         }
 
-        /// <summary>
-        /// Уведомление о новых пользователях:
-        /// принимает уже отфильтрованный список "новых" записей.
-        /// Оповещает всех контактов (объединённый список по зданиям).
-        /// Антиспам: по одному сообщению в сутки на пользователя+сертификат.
-        /// </summary>
-        public void NotifyNewUsers(IEnumerable<CertRecord> records)
+        private void SaveState()
         {
             try
             {
-                var list = records?
-                    .Where(r => !r.IsDeleted)
-                    .ToList() ?? new List<CertRecord>();
+                var sb = new StringBuilder();
 
-                if (list.Count == 0)
-                    return;
-
-                // Берём все контакты (объединяем списки для Краснофлотской и Пионерской)
-                var allAccounts = GetAccountsForBuilding("ALL");
-                if (allAccounts.Count == 0)
+                foreach (var kv in _state.ExpiringLastSent)
                 {
-                    _log("[Notify] Нет Bimoid аккаунтов для оповещения о новых пользователях.");
-                    return;
+                    sb.Append("E|")
+                      .Append(kv.Key)
+                      .Append("|")
+                      .Append(kv.Value.ToString("o"))
+                      .AppendLine();
                 }
 
-                foreach (var rec in list)
+                foreach (var kv in _state.NewUserLastSent)
                 {
-                    if (AlreadySentToday("new", rec))
-                        continue; // уже оповещали сегодня
-
-                    string msg =
-                        $"Добавлен новый пользователь: {rec.Fio}. " +
-                        $"Дата сертификата: {rec.DateStart:dd.MM.yyyy} - {rec.DateEnd:dd.MM.yyyy}.";
-
-                    string tag = $"new, {rec.Fio}, {rec.Building}";
-                    SendMessageInternal(allAccounts, msg, tag);
+                    sb.Append("N|")
+                      .Append(kv.Key)
+                      .Append("|")
+                      .Append(kv.Value.ToString("o"))
+                      .AppendLine();
                 }
 
-                if (list.Count > 0)
-                    LogNotification($"Оповещены о новых пользователях: {list.Count} записей.");
+                File.WriteAllText(_stateFile, sb.ToString(), Encoding.UTF8);
             }
             catch (Exception ex)
             {
-                _log($"[Notify] Ошибка NotifyNewUsers: {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// Тестовое сообщение для кнопки "Тестовое сообщение".
-        /// </summary>
-        public void SendTestMessage()
-        {
-            try
-            {
-                var allAccounts = GetAccountsForBuilding("ALL");
-                if (allAccounts.Count == 0)
-                {
-                    _log("[Notify] Тест: нет аккаунтов для отправки.");
-                    return;
-                }
-
-                string msg = "Тестовое сообщение от ImapCertWatcher (Bimoid/ObimpCMD).";
-                SendMessageInternal(allAccounts, msg, "test");
-            }
-            catch (Exception ex)
-            {
-                _log($"[Notify] Ошибка SendTestMessage: {ex.Message}");
+                _log(string.Format("[Notify] Ошибка сохранения состояния уведомлений: {0}", ex.Message));
             }
         }
     }
