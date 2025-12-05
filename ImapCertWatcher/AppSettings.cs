@@ -39,7 +39,7 @@ namespace ImapCertWatcher.Utils
         public string FbCharset { get; set; } = "UTF8";
 
         // Интервал проверки почты (в часах)
-        public int CheckIntervalHours { get; set; } = 1;
+        public int CheckIntervalMinutes { get; set; } = 60; // по умолчанию 60 минут
 
         // Любые дополнительные настройки, которые захотите
         public bool SomeFeatureToggle { get; set; } = false;

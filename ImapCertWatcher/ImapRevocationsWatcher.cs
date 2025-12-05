@@ -138,7 +138,7 @@ namespace ImapCertWatcher.Services
                     uids = folder.Search(SearchQuery.All);
                 else
                     // Аннулирования могут приходить задним числом — берём за последний год
-                    uids = folder.Search(SearchQuery.DeliveredAfter(DateTime.Now.AddDays(-365)));
+                    uids = folder.Search(SearchQuery.DeliveredAfter(DateTime.Now.AddDays(-5)));
 
                 Log($"[REVOKE][Search] Папка='{folder.FullName}', checkAll={checkAllMessages}, найдено UID={uids?.Count ?? 0}");
             }

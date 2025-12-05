@@ -42,7 +42,7 @@ namespace ImapCertWatcher.Utils
                     case "FbCharset": s.FbCharset = val; break;
 
                     case "CheckIntervalHours":
-                        if (int.TryParse(val, out int ch)) s.CheckIntervalHours = ch;
+                        if (int.TryParse(val, out int ch)) s.CheckIntervalMinutes = ch;
                         break;
 
                     // === НОВЫЕ НАСТРОЙКИ ДЛЯ ОБИМПА ===

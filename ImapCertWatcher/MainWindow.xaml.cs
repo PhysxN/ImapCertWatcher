@@ -124,7 +124,8 @@ namespace ImapCertWatcher
                 pwdFbPassword.Password = _settings.FbPassword;
 
                 cmbImapFolder.ItemsSource = _availableFolders;
-                txtInterval.Text = _settings.CheckIntervalHours.ToString();
+                txtInterval.Text = _settings.CheckIntervalMinutes.ToString();
+
 
                 // Загрузка темы
                 LoadThemeSettings();
@@ -300,9 +301,9 @@ namespace ImapCertWatcher
 
                 // Инициализация таймера проверки почты
                 _timer?.Dispose();
-                if (_settings.CheckIntervalHours > 0)
+                if (_settings.CheckIntervalMinutes > 0)
                 {
-                    var intervalMs = _settings.CheckIntervalHours * 60 * 60 * 1000;
+                    var intervalMs = _settings.CheckIntervalMinutes * 60 * 60 * 1000;
 
                     // Первый запуск — через intervalMs (чтобы при сохранении настроек не запускать проверку немедленно)
                     _timer = new Timer(
@@ -2038,7 +2039,8 @@ namespace ImapCertWatcher
             $"FbDialect={_settings.FbDialect}",
             "",
             "# App behavior",
-            $"CheckIntervalHours={_settings.CheckIntervalHours}",
+            // Переведено на минуты
+            $"CheckIntervalMinutes={_settings.CheckIntervalMinutes}",
             $"AutoStart={_settings.AutoStart}",
             $"MinimizeToTrayOnClose={_settings.MinimizeToTrayOnClose}",
             $"NotifyOnlyInWorkHours={_settings.NotifyOnlyInWorkHours}",
@@ -2051,30 +2053,49 @@ namespace ImapCertWatcher
 
                 File.WriteAllLines(settingsPath, lines, System.Text.Encoding.UTF8);
 
+                // Перезапускаем/перенастраиваем таймер проверки почты.
+                // ВАЖНО: первый запуск теперь происходит через указанный интервал,
+                // чтобы при сохранении настроек не вызывать проверку немедленно.
                 _timer?.Dispose();
-                if (_settings.CheckIntervalHours > 0)
-                {
-                    var intervalMs = _settings.CheckIntervalHours * 60 * 60 * 1000;
+                _timer = null;
 
-                    // Первый запуск откладываем на полный интервал, чтобы при сохранении настроек
-                    // не запускать немедленно проверку и рассылку.
+                if (_settings.CheckIntervalMinutes > 0)
+                {
+                    var intervalMs = (long)_settings.CheckIntervalMinutes * 60 * 1000;
+
+                    // Используем TimeSpan для задания задержки первого срабатывания
                     var due = TimeSpan.FromMilliseconds(intervalMs);
+                    var period = TimeSpan.FromMilliseconds(intervalMs);
 
                     _timer = new Timer(
                         async _ => await DoCheckAsync(false, true), // isFromTimer = true
                         null,
-                        due,                                     // первый запуск через interval
-                        TimeSpan.FromMilliseconds(intervalMs));  // и потом по интервалу
+                        due,    // первый запуск через due (не сразу)
+                        period  // последующие запуски с периодом
+                    );
+
+                    AddToMiniLog($"Таймер проверки почты запущен (интервал: {_settings.CheckIntervalMinutes} мин).");
+                }
+                else
+                {
+                    AddToMiniLog("Таймер проверки почты отключён (интервал = 0 мин).");
                 }
 
-                txtInterval.Text = _settings.CheckIntervalHours.ToString();
+                // Обновляем текстовое поле на UI (если оно есть)
+                try
+                {
+                    txtInterval.Text = _settings.CheckIntervalMinutes.ToString();
+                }
+                catch { /* игнорируем, если UI ещё не готов */ }
             }
             catch (Exception ex)
             {
                 throw new Exception($"Не удалось сохранить настройки: {ex.Message}", ex);
             }
+
             ApplyAutoStartSetting();
         }
+
 
         private void LoadLogs()
         {

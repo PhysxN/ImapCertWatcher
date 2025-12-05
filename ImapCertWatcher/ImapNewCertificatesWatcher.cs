@@ -153,7 +153,7 @@ namespace ImapCertWatcher.Services
                     uids = folder.Search(SearchQuery.All);
                 else
                     // За последние 10 дней (можно увеличить при необходимости)
-                    uids = folder.Search(SearchQuery.DeliveredAfter(DateTime.Now.AddDays(-10)));
+                    uids = folder.Search(SearchQuery.DeliveredAfter(DateTime.Now.AddDays(-5)));
 
                 Log($"[NEW][Search] Папка='{folder.FullName}', checkAll={checkAllMessages}, найдено UID: {uids?.Count ?? 0}");
             }
