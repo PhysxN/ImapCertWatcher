@@ -124,7 +124,10 @@ namespace ImapCertWatcher
                 pwdFbPassword.Password = _settings.FbPassword;
 
                 cmbImapFolder.ItemsSource = _availableFolders;
+                cmbNewCertsFolder.ItemsSource = _availableFolders;
+                cmbRevocationsFolder.ItemsSource = _availableFolders;
                 txtInterval.Text = _settings.CheckIntervalMinutes.ToString();
+
 
 
                 // Загрузка темы
@@ -1068,23 +1071,14 @@ namespace ImapCertWatcher
                 AddToMiniLog(checkAllMessages ? "Начата обработка всех писем" : "Начата проверка почты");
             });
 
-            int addedCount = 0;
-            int updatedCount = 0;
-            int revokedCount = 0;
-
+            
             try
             {
-                // Первый модуль: новые сертификаты (деструктуризация tuple)
-                var (processedEntries, updatedDelta, addedDelta) =
-                    await Task.Run(() => _newWatcher.ProcessNewCertificates(checkAllMessages));
 
-                // Аккумулируем счётчики
-                addedCount += addedDelta;
-                updatedCount += updatedDelta;
+                await Task.Run(() => _newWatcher.ProcessNewCertificates(checkAllMessages));
 
                 // Второй модуль: аннулирования — ожидаем, что метод возвращает int (число аннулирований)
-                int revokedDelta = await Task.Run(() => _revWatcher.ProcessRevocations(checkAllMessages));
-                revokedCount += revokedDelta;
+                await Task.Run(() => _revWatcher.ProcessRevocations(checkAllMessages));
 
                 // Всегда обновляем данные из БД, даже если не было новых писем
                 var newList = _db?.LoadAll(_showDeleted, _currentBuildingFilter);
@@ -1112,27 +1106,12 @@ namespace ImapCertWatcher
                         // Автоподбор столбцов
                         AutoFitDataGridColumns();
 
-                        if (updatedCount > 0 || addedCount > 0 || revokedCount > 0)
-                        {
-                            string message = "";
-                            var parts = new List<string>();
-                            if (addedCount > 0) parts.Add($"Добавлено: {addedCount}");
-                            if (updatedCount > 0) parts.Add($"Обновлено: {updatedCount}");
-                            if (revokedCount > 0) parts.Add($"Аннулировано: {revokedCount}");
-                            message = string.Join(", ", parts) + $" ({DateTime.Now})";
+                        statusText.Text = checkAllMessages
+                        ? $"Обработка писем завершена ({DateTime.Now})"
+                        : $"Проверка почты завершена ({DateTime.Now})";
 
-                            statusText.Text = message;
-                            AddToMiniLog(message);
-                        }
-                        else
-                        {
-                            statusText.Text = checkAllMessages
-                                ? $"Обработка завершена: изменений нет ({DateTime.Now})"
-                                : $"Проверка завершена: новых писем нет ({DateTime.Now})";
-                            AddToMiniLog(checkAllMessages
-                                ? "Обработка завершена: изменений нет"
-                                : "Проверка завершена: новых писем нет");
-                        }
+                        AddToMiniLog(statusText.Text);
+
                     });
 
                     // 3) Обновляем набор известных сертификатов
@@ -1754,6 +1733,18 @@ namespace ImapCertWatcher
                     {
                         cmbImapFolder.SelectedItem = _settings.ImapFolder;
                     }
+
+                    if (!string.IsNullOrEmpty(_settings.ImapNewCertificatesFolder) &&
+                    _availableFolders.Contains(_settings.ImapNewCertificatesFolder))
+                    {
+                        cmbNewCertsFolder.SelectedItem = _settings.ImapNewCertificatesFolder;
+                    }
+
+                    if (!string.IsNullOrEmpty(_settings.ImapRevocationsFolder) &&
+                        _availableFolders.Contains(_settings.ImapRevocationsFolder))
+                    {
+                        cmbRevocationsFolder.SelectedItem = _settings.ImapRevocationsFolder;
+                    }
                     else if (_availableFolders.Count > 0)
                     {
                         cmbImapFolder.SelectedIndex = 0;
@@ -1864,36 +1855,56 @@ namespace ImapCertWatcher
                     MailPort = _settings.MailPort,
                     MailUseSsl = _settings.MailUseSsl,
                     MailLogin = _settings.MailLogin,
-                    MailPassword = pwdMailPassword.Password,
-                    ImapFolder = cmbImapFolder.Text
+                    MailPassword = pwdMailPassword.Password
                 };
 
                 var folders = GetMailFolders(tempSettings);
 
-                string selectedFolder = cmbImapFolder.Text;
-                bool folderExists = folders.Contains(selectedFolder);
+                var checks = new List<(string Name, string Folder)>
+        {
+            ("Общая папка", cmbImapFolder.Text),
+            ("Новые сертификаты", cmbNewCertsFolder.Text),
+            ("Аннулирования", cmbRevocationsFolder.Text)
+        };
 
-                if (folderExists)
+                var sb = new StringBuilder();
+                bool hasErrors = false;
+
+                foreach (var (name, folder) in checks)
                 {
-                    MessageBox.Show($"Подключение к почтовому серверу успешно!\n" +
-                                  $"Выбранная папка '{selectedFolder}' доступна.\n" +
-                                  $"Всего папок на сервере: {folders.Count}",
-                                  "Тест подключения",
-                                  MessageBoxButton.OK, MessageBoxImage.Information);
+                    if (string.IsNullOrWhiteSpace(folder))
+                    {
+                        sb.AppendLine($"❌ {name}: не указана");
+                        hasErrors = true;
+                    }
+                    else if (!folders.Contains(folder))
+                    {
+                        sb.AppendLine($"⚠️ {name}: папка '{folder}' не найдена");
+                    }
+                    else
+                    {
+                        sb.AppendLine($"✅ {name}: OK ({folder})");
+                    }
                 }
-                else
-                {
-                    MessageBox.Show($"Подключение установлено, но папка '{selectedFolder}' не найдена.\n" +
-                                  $"Доступные папки: {string.Join(", ", folders.Take(10))}" +
-                                  (folders.Count > 10 ? $"\n... и еще {folders.Count - 10} папок" : ""),
-                                  "Предупреждение",
-                                  MessageBoxButton.OK, MessageBoxImage.Warning);
-                }
+
+                sb.AppendLine();
+                sb.AppendLine($"Всего папок на сервере: {folders.Count}");
+
+                MessageBox.Show(
+                    sb.ToString(),
+                    hasErrors ? "Тест с ошибками" : "Тест подключения успешен",
+                    MessageBoxButton.OK,
+                    hasErrors ? MessageBoxImage.Warning : MessageBoxImage.Information
+                );
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Ошибка подключения к почтовому серверу: {ex.Message}", "Ошибка",
-                              MessageBoxButton.OK, MessageBoxImage.Error);
+                MessageBox.Show(
+                    $"Ошибка подключения к почтовому серверу:\n{ex.Message}",
+                    "Ошибка",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error
+                );
             }
             finally
             {
@@ -1907,6 +1918,8 @@ namespace ImapCertWatcher
             {
                 _settings.MailPassword = pwdMailPassword.Password;
                 _settings.ImapFolder = cmbImapFolder.Text;
+                _settings.ImapNewCertificatesFolder = cmbNewCertsFolder.Text;
+                _settings.ImapRevocationsFolder = cmbRevocationsFolder.Text;
 
                 SaveSettings();
                 MessageBox.Show("Настройки почты сохранены!", "Успех",
@@ -2026,6 +2039,8 @@ namespace ImapCertWatcher
             $"MailLogin={_settings.MailLogin}",
             $"MailPassword={_settings.MailPassword}",
             $"ImapFolder={_settings.ImapFolder}",
+            $"ImapNewCertificatesFolder={_settings.ImapNewCertificatesFolder}",
+            $"ImapRevocationsFolder={_settings.ImapRevocationsFolder}",
             "",
             "# Filter",
             $"FilterRecipient={_settings.FilterRecipient}",
@@ -2096,6 +2111,103 @@ namespace ImapCertWatcher
             ApplyAutoStartSetting();
         }
 
+        private void ProcessSigFile(string sigPath)
+        {
+            try
+            {
+                if (SigCertificateParser.TryParse(sigPath, Log, out var info))
+                {
+                    Log($"[SIG] Обработка файла завершена успешно: {sigPath}");
+                }
+                else
+                {
+                    Log($"[SIG] Не удалось обработать файл: {sigPath}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"[SIG] Ошибка обработки файла {sigPath}: {ex.Message}");
+            }
+        }
+
+        private void BtnLoadSig_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                var dlg = new Microsoft.Win32.OpenFileDialog
+                {
+                    Title = "Выбор файла подписи",
+                    Filter = "Файлы подписи (*.sig;*.p7s)|*.sig;*.p7s|Все файлы (*.*)|*.*",
+                    Multiselect = false
+                };
+
+                if (dlg.ShowDialog() != true)
+                    return;
+
+                string filePath = dlg.FileName;
+
+                Log($"[SIG] Выбран файл для ручной обработки: {filePath}");
+
+                ProcessSigFile(filePath);
+            }
+            catch (Exception ex)
+            {
+                Log($"[SIG] Ошибка выбора файла: {ex.Message}");
+                MessageBox.Show(
+                    $"Ошибка при выборе файла:\n{ex.Message}",
+                    "Ошибка",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+            }
+        }
+
+        private void BtnLoadCer_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                var dlg = new Microsoft.Win32.OpenFileDialog
+                {
+                    Title = "Выбор файла сертификата",
+                    Filter = "Файлы сертификатов (*.cer)|*.cer|Все файлы (*.*)|*.*",
+                    Multiselect = false
+                };
+
+                if (dlg.ShowDialog() != true)
+                    return;
+
+                Log($"[CER] Выбран файл для ручной загрузки: {dlg.FileName}");
+
+                ProcessCerFile(dlg.FileName);
+            }
+            catch (Exception ex)
+            {
+                Log($"[CER] Ошибка выбора файла: {ex.Message}");
+                MessageBox.Show(
+                    $"Ошибка при выборе файла:\n{ex.Message}",
+                    "Ошибка",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+            }
+        }
+
+        private void ProcessCerFile(string cerPath)
+        {
+            try
+            {
+                if (CerCertificateParser.TryParse(cerPath, Log, out var info))
+                {
+                    Log($"[CER] Файл успешно обработан: {cerPath}");
+                }
+                else
+                {
+                    Log($"[CER] Не удалось обработать файл: {cerPath}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"[CER] Ошибка обработки файла {cerPath}: {ex.Message}");
+            }
+        }
 
         private void LoadLogs()
         {

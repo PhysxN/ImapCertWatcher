@@ -11,7 +11,7 @@ FilterRecipient=uc_fk@roskazna.ru
 FilterSubjectPrefix=Сертификат №
 
 # Firebird settings
-FirebirdDbPath=E:\DB\certs.fdb
+FirebirdDbPath=C:\DB_PHYSXN\certs.fdb
 FbUser=SYSDBA
 FbPassword=masterkey
 FbDialect=3

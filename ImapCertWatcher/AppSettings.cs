@@ -11,7 +11,9 @@ namespace ImapCertWatcher.Utils
         public string MailLogin { get; set; } = "";
         public string MailPassword { get; set; } = "";
         public string ImapFolder { get; set; } = "INBOX";
-
+        // Папка с письмами, содержащими ZIP/CER с новыми сертификатами
+        public string ImapNewCertificatesFolder { get; set; }
+            = "INBOX";
         public int NotifyDaysThreshold { get; set; } = 10;          // сколько дней до окончания, чтобы слать
         public string BimoidAccountsKrasnoflotskaya { get; set; }   // аккаунты для Краснофлотской (по одному в строке)
         public string BimoidAccountsPionerskaya { get; set; }       // аккаунты для Пионерской (по одному в строке)

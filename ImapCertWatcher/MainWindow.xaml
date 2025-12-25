@@ -401,6 +401,14 @@
                         <Button x:Name="btnRestoreSelected" Content="Восстановить" 
                                 Style="{StaticResource ModernButtonStyle}" 
                                 Click="BtnRestoreSelected_Click"/>
+                        <Button x:Name="btnLoadSig" Content="Загрузить SIG"  
+                                Style="{StaticResource ModernButtonStyle}"
+                                Click="BtnLoadSig_Click"
+                                ToolTip="Загрузить файл подписи (.sig, .p7s) и извлечь данные сертификата"/>
+                        <Button x:Name="btnLoadCer" Content="Загрузить CER"
+                                Style="{StaticResource ModernButtonStyle}"
+                                Click="BtnLoadCer_Click"
+                                ToolTip="Загрузить файл сертификата (*.cer)"/>
                     </StackPanel>
 
                     <!-- Поиск по ФИО -->
@@ -611,37 +619,58 @@
                                                      Padding="6,4" 
                                                      Style="{StaticResource ModernPasswordBoxStyle}"/>
 
-                                        <TextBlock Text="Папка IMAP:" Margin="0,8,0,2" Foreground="{DynamicResource TextColorBrush}"/>
-                                        <Grid>
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                            </Grid.ColumnDefinitions>
-                                            <ComboBox x:Name="cmbImapFolder"
-          Grid.Column="0"
+                                        <TextBlock Text="Папки IMAP:" Margin="0,8,0,4"
+           Foreground="{DynamicResource TextColorBrush}"/>
+
+                                        <!-- Основная (устаревшая) -->
+                                        <TextBlock Text="Основная папка (не используется напрямую)"
+           FontSize="10"
+           Foreground="Gray"/>
+
+                                        <ComboBox x:Name="cmbImapFolder"
           Text="{Binding ImapFolder}"
           IsEditable="True"
-          Margin="0,2,6,8"
+          Margin="0,2,0,6"
           Height="26"
-          VerticalAlignment="Top"
-          ToolTip="Выберите папку из списка или введите вручную"
-          Style="{StaticResource EditableImapComboBoxStyle}">
+          ToolTip="Общая папка IMAP (устаревшая)"
+          Style="{StaticResource EditableImapComboBoxStyle}"/>
 
-                                                
-                                            </ComboBox>
+                                        <!-- Новые сертификаты -->
+                                        <TextBlock Text="Папка с новыми сертификатами (ZIP / CER)"
+           Margin="0,6,0,2"
+           Foreground="{DynamicResource TextColorBrush}"/>
 
-                                            <Button x:Name="btnRefreshFolders" 
-                                                    Grid.Column="1"
-                                                    Content="Обновить" 
-                                                    Style="{StaticResource ModernButtonStyle}" 
-                                                    Click="BtnRefreshFolders_Click" 
-                                                    Width="90" Height="26" 
-                                                    Margin="0,2,0,8"
-                                                    VerticalAlignment="Top"
-                                                    Padding="6,2"
-                                                    FontSize="11"
-                                                    ToolTip="Обновить список папок"/>
-                                        </Grid>
+                                        <ComboBox x:Name="cmbNewCertsFolder"
+          Text="{Binding ImapNewCertificatesFolder}"
+          IsEditable="True"
+          Margin="0,2,0,6"
+          Height="26"
+          ToolTip="Папка с письмами, содержащими ZIP или CER"
+          Style="{StaticResource EditableImapComboBoxStyle}"/>
+
+                                        <!-- Аннулирования -->
+                                        <TextBlock Text="Папка с аннулированными сертификатами"
+           Margin="0,6,0,2"
+           Foreground="{DynamicResource TextColorBrush}"/>
+
+                                        <ComboBox x:Name="cmbRevocationsFolder"
+          Text="{Binding ImapRevocationsFolder}"
+          IsEditable="True"
+          Margin="0,2,0,8"
+          Height="26"
+          ToolTip="Папка с письмами об аннулировании сертификатов"
+          Style="{StaticResource EditableImapComboBoxStyle}"/>
+
+                                        <!-- Кнопка обновления папок -->
+                                        <Button x:Name="btnRefreshFolders"
+        Content="Обновить список папок"
+        Style="{StaticResource ModernButtonStyle}"
+        Click="BtnRefreshFolders_Click"
+        Width="200"
+        Height="26"
+        Margin="0,4,0,8"
+        FontSize="11"
+        ToolTip="Получить список папок с сервера IMAP"/>
                                         <TextBlock x:Name="txtFoldersStatus" 
                                                    FontStyle="Italic" FontSize="10" 
                                                    Foreground="{DynamicResource TextColorBrush}"

@@ -125,7 +125,9 @@
       <SubType>Designer</SubType>
     </ApplicationDefinition>
     <Compile Include="AppSettings.cs" />
+    <Compile Include="CerCertificateParser.cs" />
     <Compile Include="CertEntry.cs" />
+    <Compile Include="CertEntryFactory.cs" />
     <Compile Include="CertRecord.cs" />
     <Compile Include="DbHelper.cs" />
     <Compile Include="ImapNewCertificatesWatcher.cs" />
@@ -133,9 +135,11 @@
     <Compile Include="LogSession.cs" />
     <Compile Include="NotificationManager.cs" />
     <Compile Include="SettingsLoader.cs" />
+    <Compile Include="SigCertificateParser.cs" />
     <Compile Include="SplashScreen.xaml.cs">
       <DependentUpon>SplashScreen.xaml</DependentUpon>
     </Compile>
+    <Compile Include="ZipCerExtractor.cs" />
     <Page Include="MainWindow.xaml">
       <Generator>MSBuild:Compile</Generator>
       <SubType>Designer</SubType>
