@@ -2191,26 +2191,41 @@ namespace ImapCertWatcher
 
                 if (existing != null)
                 {
-                    var oldCert = DbHelper.NormalizeCertNumber(existing.CertNumber);
-                    var newCert = DbHelper.NormalizeCertNumber(info.CertNumber);
+                    bool isNewer =
+                        info.DateStart > existing.DateStart &&
+                        info.DateEnd > existing.DateEnd;
 
-                    if (oldCert != newCert)
+                    if (!isNewer)
                     {
-                        var res = MessageBox.Show(
-                            $"В базе уже есть запись на это ФИО:\n\n" +
+                        MessageBox.Show(
+                            $"В базе уже есть более актуальный или равный сертификат:\n\n" +
                             $"ФИО: {existing.Fio}\n" +
-                            $"Старый сертификат: {existing.CertNumber}\n" +
-                            $"Новый сертификат: {info.CertNumber}\n\n" +
-                            $"Заменить сертификат?",
-                            "Совпадение ФИО",
-                            MessageBoxButton.YesNo,
-                            MessageBoxImage.Question);
+                            $"Текущий: {existing.DateStart:dd.MM.yyyy} — {existing.DateEnd:dd.MM.yyyy}\n" +
+                            $"Новый:   {info.DateStart:dd.MM.yyyy} — {info.DateEnd:dd.MM.yyyy}\n\n" +
+                            $"Замена не требуется.",
+                            "Сертификат не новее",
+                            MessageBoxButton.OK,
+                            MessageBoxImage.Information);
 
-                        if (res != MessageBoxResult.Yes)
-                        {
-                            Log($"[CER] Пользователь отменил замену сертификата для {info.Fio}");
-                            return;
-                        }
+                        Log($"[CER] Сертификат НЕ заменён (не новее существующего): {info.Fio}");
+                        return;
+                    }
+
+                    // 🔔 если сюда дошли — сертификат действительно новее
+                    var res = MessageBox.Show(
+                        $"Найден более новый сертификат:\n\n" +
+                        $"ФИО: {existing.Fio}\n" +
+                        $"Старый: {existing.DateStart:dd.MM.yyyy} — {existing.DateEnd:dd.MM.yyyy}\n" +
+                        $"Новый:  {info.DateStart:dd.MM.yyyy} — {info.DateEnd:dd.MM.yyyy}\n\n" +
+                        $"Заменить сертификат?",
+                        "Новый сертификат",
+                        MessageBoxButton.YesNo,
+                        MessageBoxImage.Question);
+
+                    if (res != MessageBoxResult.Yes)
+                    {
+                        Log($"[CER] Пользователь отменил замену сертификата для {info.Fio}");
+                        return;
                     }
                 }
 
