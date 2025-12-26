@@ -674,11 +674,25 @@ ROWS 1";
                     {
                         // Берём самую "свежую" запись по дате окончания
                         cmd.CommandText = @"
-SELECT ID, FIO, DATE_START, DATE_END, DAYS_LEFT, CERT_NUMBER, FROM_ADDRESS, IS_DELETED, NOTE, BUILDING, FOLDER_PATH, ARCHIVE_PATH, MESSAGE_DATE
-FROM CERTS
-WHERE UPPER(TRIM(FIO)) = @fio
-ORDER BY DATE_END DESC
-ROWS 1";
+                                            SELECT
+                                                c.ID,
+                                                c.FIO,
+                                                c.DATE_START,
+                                                c.DATE_END,
+                                                c.DAYS_LEFT,
+                                                c.CERT_NUMBER,
+                                                c.FROM_ADDRESS,
+                                                c.IS_DELETED,
+                                                c.NOTE,
+                                                c.BUILDING,
+                                                c.FOLDER_PATH,
+                                                c.ARCHIVE_PATH,
+                                                c.MESSAGE_DATE,
+                                                (SELECT COUNT(*) FROM CERT_ARCHIVES ca WHERE ca.CERT_ID = c.ID) AS HAS_ARCHIVE
+                                            FROM CERTS c
+                                            WHERE UPPER(TRIM(c.FIO)) = @fio
+                                            ORDER BY c.DATE_END DESC
+                                            ROWS 1";
                         cmd.Parameters.AddWithValue("@fio", fioNorm);
                         using (var rdr = cmd.ExecuteReader())
                         {
@@ -1292,7 +1306,63 @@ VALUES (@folder, @uid, @kind, @dt)";
             }
         }
 
+        public void UpdateCertificate(int id, string certNumber, DateTime start, DateTime end)
+        {
+            using (var conn = GetConnection())
+            {
+                conn.Open();
+
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = @"
+UPDATE CERTS
+SET
+    CERT_NUMBER = @cert,
+    DATE_START = @start,
+    DATE_END   = @end,
+    IS_DELETED = 0
+WHERE ID = @id";
+
+                    cmd.Parameters.AddWithValue("@cert", certNumber);
+                    cmd.Parameters.AddWithValue("@start", start);
+                    cmd.Parameters.AddWithValue("@end", end);
+                    cmd.Parameters.AddWithValue("@id", id);
+
+                    cmd.ExecuteNonQuery();
+                }
+            }
+        }
+
         #endregion
+
+        public CertRecord GetByFio(string fio)
+        {
+            using (var conn = GetConnection())
+            {
+                conn.Open();
+
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = @"
+SELECT FIRST 1 *
+FROM CERTS
+WHERE FIO = @fio
+ORDER BY DATE_START DESC";
+
+                    cmd.Parameters.AddWithValue("@fio", fio);
+
+                    using (var reader = cmd.ExecuteReader())
+                    {
+                        if (reader.Read())
+                        {
+                            return MapReaderToCertRecord(reader);
+                        }
+                    }
+                }
+            }
+
+            return null;
+        }
 
         #region Logging
 

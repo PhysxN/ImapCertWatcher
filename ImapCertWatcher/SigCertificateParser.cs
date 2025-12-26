@@ -12,7 +12,7 @@ namespace ImapCertWatcher.Utils
         public DateTime NotBefore { get; set; }
         public DateTime NotAfter { get; set; }
         public string SubjectRaw { get; set; }
-        public string IssuerRaw { get; set; }
+        public string Issuer { get; set; }
         public string Thumbprint { get; set; }
     }
 
@@ -72,7 +72,7 @@ namespace ImapCertWatcher.Utils
                     NotBefore = cert.NotBefore,
                     NotAfter = cert.NotAfter,
                     SubjectRaw = cert.Subject,
-                    IssuerRaw = cert.Issuer,
+                    Issuer = cert.Issuer,
                     Thumbprint = cert.Thumbprint
                 };
 
@@ -137,7 +137,7 @@ namespace ImapCertWatcher.Utils
             log?.Invoke($"[SIG] Действует по : {info.NotAfter:dd.MM.yyyy HH:mm:ss}");
             log?.Invoke($"[SIG] Thumbprint   : {info.Thumbprint}");
             log?.Invoke($"[SIG] Subject      : {info.SubjectRaw}");
-            log?.Invoke($"[SIG] Issuer       : {info.IssuerRaw}");
+            log?.Invoke($"[SIG] Issuer       : {info.Issuer}");
             log?.Invoke("================================");
         }
     }

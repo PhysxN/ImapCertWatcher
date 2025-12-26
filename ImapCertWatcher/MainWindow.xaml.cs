@@ -1,7 +1,6 @@
 ﻿using ImapCertWatcher.Data;
 using ImapCertWatcher.Models;
 using ImapCertWatcher.Services;
-using ImapCertWatcher.Utils;
 using Microsoft.Win32;
 using System.Reflection;
 using System;
@@ -22,6 +21,8 @@ using System.Security.Authentication;
 using System.Windows.Controls.Primitives;
 using Forms = System.Windows.Forms;
 using System.ComponentModel;
+using ImapCertWatcher;
+using ImapCertWatcher.Utils;
 
 // Альтернатива Excel без использования Office Interop
 using System.Data;
@@ -2163,52 +2164,87 @@ namespace ImapCertWatcher
 
         private void BtnLoadCer_Click(object sender, RoutedEventArgs e)
         {
-            try
+            var dlg = new Microsoft.Win32.OpenFileDialog
             {
-                var dlg = new Microsoft.Win32.OpenFileDialog
-                {
-                    Title = "Выбор файла сертификата",
-                    Filter = "Файлы сертификатов (*.cer)|*.cer|Все файлы (*.*)|*.*",
-                    Multiselect = false
-                };
+                Filter = "Сертификат (*.cer)|*.cer",
+                Multiselect = false
+            };
 
-                if (dlg.ShowDialog() != true)
-                    return;
+            if (dlg.ShowDialog() != true)
+                return;
 
-                Log($"[CER] Выбран файл для ручной загрузки: {dlg.FileName}");
-
-                ProcessCerFile(dlg.FileName);
-            }
-            catch (Exception ex)
-            {
-                Log($"[CER] Ошибка выбора файла: {ex.Message}");
-                MessageBox.Show(
-                    $"Ошибка при выборе файла:\n{ex.Message}",
-                    "Ошибка",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Error);
-            }
+            ProcessCerManual(dlg.FileName);
         }
 
-        private void ProcessCerFile(string cerPath)
+        private void ProcessCerManual(string cerPath)
         {
             try
             {
-                if (CerCertificateParser.TryParse(cerPath, Log, out var info))
+                if (!CerCertificateParser.TryParse(cerPath, Log, out var info))
                 {
-                    Log($"[CER] Файл успешно обработан: {cerPath}");
+                    MessageBox.Show("Не удалось прочитать сертификат", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+                    return;
                 }
+
+                // 🔍 Ищем по ФИО
+                var existing = _db.FindByFio(info.Fio);
+
+                if (existing != null)
+                {
+                    var oldCert = DbHelper.NormalizeCertNumber(existing.CertNumber);
+                    var newCert = DbHelper.NormalizeCertNumber(info.CertNumber);
+
+                    if (oldCert != newCert)
+                    {
+                        var res = MessageBox.Show(
+                            $"В базе уже есть запись на это ФИО:\n\n" +
+                            $"ФИО: {existing.Fio}\n" +
+                            $"Старый сертификат: {existing.CertNumber}\n" +
+                            $"Новый сертификат: {info.CertNumber}\n\n" +
+                            $"Заменить сертификат?",
+                            "Совпадение ФИО",
+                            MessageBoxButton.YesNo,
+                            MessageBoxImage.Question);
+
+                        if (res != MessageBoxResult.Yes)
+                        {
+                            Log($"[CER] Пользователь отменил замену сертификата для {info.Fio}");
+                            return;
+                        }
+                    }
+                }
+
+                // ⬇️ сохраняем через уже существующий механизм
+                var entry = new CertEntry
+                {
+                    Fio = info.Fio,
+                    CertNumber = info.CertNumber,
+                    DateStart = info.DateStart,
+                    DateEnd = info.DateEnd,
+                    FromAddress = "MANUAL",
+                    FolderPath = "MANUAL",
+                    MessageDate = DateTime.Now
+                };
+
+                var (updated, added, certId) = _db.InsertOrUpdateAndGetId(entry);
+
+                if (added)
+                    Log($"[CER] Добавлен новый сертификат: {info.Fio}");
+                else if (updated)
+                    Log($"[CER] Сертификат обновлён: {info.Fio}");
                 else
-                {
-                    Log($"[CER] Не удалось обработать файл: {cerPath}");
-                }
+                    Log($"[CER] Сертификат не изменён: {info.Fio}");
+
+                LoadFromDb();
             }
             catch (Exception ex)
             {
-                Log($"[CER] Ошибка обработки файла {cerPath}: {ex.Message}");
+                Log($"[CER] Ошибка ручной загрузки: {ex.Message}");
+                MessageBox.Show(ex.Message, "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
 
+        
         private void LoadLogs()
         {
             try

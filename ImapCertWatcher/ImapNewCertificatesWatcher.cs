@@ -210,9 +210,9 @@ namespace ImapCertWatcher.Services
                     var entry = new CertEntry
                     {
                         Fio = certInfo.Fio,
-                        CertNumber = certInfo.SerialNumber,
-                        DateStart = certInfo.NotBefore,
-                        DateEnd = certInfo.NotAfter,
+                        CertNumber = certInfo.CertNumber,
+                        DateStart = certInfo.DateStart,
+                        DateEnd = certInfo.DateEnd,
                         FolderPath = folderPath,
                         MailUid = uidStr,
                         MessageDate = DateTime.Now

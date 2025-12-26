@@ -10,9 +10,9 @@ namespace ImapCertWatcher.Services
             return new CertEntry
             {
                 Fio = info.Fio,
-                CertNumber = info.SerialNumber,
-                DateStart = info.NotBefore,
-                DateEnd = info.NotAfter
+                CertNumber = info.CertNumber,
+                DateStart = info.DateStart,
+                DateEnd = info.DateEnd
             };
         }
     }

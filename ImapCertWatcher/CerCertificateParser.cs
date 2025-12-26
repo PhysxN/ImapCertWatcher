@@ -7,11 +7,11 @@ namespace ImapCertWatcher.Utils
     public class CerCertificateInfo
     {
         public string Fio { get; set; }
-        public string SerialNumber { get; set; }
-        public DateTime NotBefore { get; set; }
-        public DateTime NotAfter { get; set; }
+        public string CertNumber { get; set; }
+        public DateTime DateStart { get; set; }
+        public DateTime DateEnd { get; set; }
         public string SubjectRaw { get; set; }
-        public string IssuerRaw { get; set; }
+        public string Issuer { get; set; }
         public string Thumbprint { get; set; }
     }
 
@@ -41,11 +41,11 @@ namespace ImapCertWatcher.Utils
                 certInfo = new CerCertificateInfo
                 {
                     Fio = ExtractFio(cert),
-                    SerialNumber = NormalizeSerial(cert.SerialNumber),
-                    NotBefore = cert.NotBefore,
-                    NotAfter = cert.NotAfter,
+                    CertNumber = NormalizeSerial(cert.SerialNumber),
+                    DateStart = cert.NotBefore,
+                    DateEnd = cert.NotAfter,
                     SubjectRaw = cert.Subject,
-                    IssuerRaw = cert.Issuer,
+                    Issuer = cert.Issuer,
                     Thumbprint = cert.Thumbprint
                 };
 
@@ -104,12 +104,12 @@ namespace ImapCertWatcher.Utils
         {
             log?.Invoke("=== [CER] Сертификат загружен ===");
             log?.Invoke($"[CER] ФИО            : {info.Fio}");
-            log?.Invoke($"[CER] Серийный №    : {info.SerialNumber}");
-            log?.Invoke($"[CER] Действует с  : {info.NotBefore:dd.MM.yyyy HH:mm:ss}");
-            log?.Invoke($"[CER] Действует по : {info.NotAfter:dd.MM.yyyy HH:mm:ss}");
+            log?.Invoke($"[CER] Серийный №    : {info.CertNumber}");
+            log?.Invoke($"[CER] Действует с  : {info.DateStart:dd.MM.yyyy HH:mm:ss}");
+            log?.Invoke($"[CER] Действует по : {info.DateEnd:dd.MM.yyyy HH:mm:ss}");
             log?.Invoke($"[CER] Thumbprint   : {info.Thumbprint}");
             log?.Invoke($"[CER] Subject      : {info.SubjectRaw}");
-            log?.Invoke($"[CER] Issuer       : {info.IssuerRaw}");
+            log?.Invoke($"[CER] Issuer       : {info.Issuer}");
             log?.Invoke("================================");
         }
     }
