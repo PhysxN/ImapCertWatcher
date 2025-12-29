@@ -38,10 +38,12 @@ namespace ImapCertWatcher.Data
                 Charset = string.IsNullOrEmpty(_settings.FbCharset) ? "WIN1251" : _settings.FbCharset,
                 Dialect = _settings.FbDialect,
                 ServerType = FbServerType.Default,
-                Pooling = false
+                Pooling = true,
+                MaxPoolSize = 50,
+                MinPoolSize = 5
             };
 
-            Log($"Построена строка подключения: Server={csb.DataSource}, DB={csb.Database}, Charset={csb.Charset}");
+            Log($"Построена строка подключения: Server={csb.DataSource}, DB={csb.Database}, Charset={csb.Charset}, Pooling=ON");
             return csb.ToString();
         }
 
@@ -287,6 +289,9 @@ ON PROCESSED_MAILS (FOLDER_PATH, MAIL_UID, KIND)";
 
             // новый индекс под фильтры грида
             CreateIndexIfNotExists(conn, "IDX_CERTS_FILTER", "CERTS", "IS_DELETED, BUILDING, DATE_END", false);
+
+            
+            CreateIndexIfNotExists(conn, "IDX_CERTS_CERT_DELETED", "CERTS", "CERT_NUMBER, IS_DELETED", false);
         }
 
         private void AddMissingColumns(FbConnection conn)
@@ -364,7 +369,7 @@ ON PROCESSED_MAILS (FOLDER_PATH, MAIL_UID, KIND)";
             {
                 if (IndexExists(conn, indexName))
                 {
-                    Log($"Индекс {indexName} уже существует — пропускаем создание.");
+                    //Log($"Индекс {indexName} уже существует — пропускаем создание.");
                     return;
                 }
 
@@ -1212,9 +1217,14 @@ VALUES (@folder, @uid, @kind, @dt)";
         /// Находит сертификат по номеру и помечает как аннулированный, добавляя в NOTE дату отзыва (если указана).
         /// Возвращает true если найден и обновлён.
         /// </summary>
-        public bool FindAndMarkAsRevokedByCertNumber(string certNumber, string fio, string folderPath, string revokeDateShort)
+        public bool FindAndMarkAsRevokedByCertNumber(
+    string certNumber,
+    string fio,
+    string folderPath,
+    string revokeDateShort)
         {
             Log($"FindAndMarkAsRevokedByCertNumber: cert={certNumber}, fio={fio}, date={revokeDateShort}");
+
             try
             {
                 var certNorm = NormalizeCertNumber(certNumber);
@@ -1222,36 +1232,71 @@ VALUES (@folder, @uid, @kind, @dt)";
                 using (var conn = new FbConnection(_connectionString))
                 {
                     conn.Open();
+
                     using (var cmd = conn.CreateCommand())
                     {
-                        cmd.CommandText = "SELECT ID, NOTE FROM CERTS WHERE UPPER(TRIM(CERT_NUMBER)) = @cert";
+                        cmd.CommandText = @"
+                    SELECT ID, NOTE, IS_DELETED
+                    FROM CERTS
+                    WHERE UPPER(TRIM(CERT_NUMBER)) = @cert
+                ";
+
                         cmd.Parameters.AddWithValue("@cert", certNorm);
 
                         using (var rdr = cmd.ExecuteReader())
                         {
                             if (!rdr.Read())
                             {
-                                Log($"FindAndMarkAsRevokedByCertNumber: сертификат не найден {certNumber}");
+                                //Log($"FindAndMarkAsRevokedByCertNumber: сертификат не найден {certNumber}");
                                 return false;
                             }
 
                             int id = rdr.GetInt32(0);
                             string oldNote = rdr.IsDBNull(1) ? "" : rdr.GetString(1);
-                            rdr.Close();
+                            bool isDeleted = !rdr.IsDBNull(2) && rdr.GetInt32(2) == 1;
 
-                            string newNote = !string.IsNullOrEmpty(revokeDateShort) ? $"аннулирован ({revokeDateShort})" : "аннулирован";
-                            string noteToSet = string.IsNullOrEmpty(oldNote) ? newNote : $"{oldNote}; {newNote}";
+                            // ★ КЛЮЧЕВОЕ ИЗМЕНЕНИЕ ★
+                            if (isDeleted)
+                            {
+                                //Log($"FindAndMarkAsRevokedByCertNumber: уже аннулирован ID={id}, cert={certNumber}");
+                                return false; // ❗ НЕ считаем повторным аннулированием
+                            }
+
+                            string newNote = !string.IsNullOrEmpty(revokeDateShort)
+                                ? $"аннулирован ({revokeDateShort})"
+                                : "аннулирован";
+
+                            string noteToSet = string.IsNullOrEmpty(oldNote)
+                                ? newNote
+                                : $"{oldNote}; {newNote}";
+
+                            rdr.Close();
 
                             using (var upd = conn.CreateCommand())
                             {
-                                upd.CommandText = "UPDATE CERTS SET IS_DELETED = 1, NOTE = @note, FOLDER_PATH = @folder WHERE ID = @id";
+                                upd.CommandText = @"
+                            UPDATE CERTS
+                            SET IS_DELETED = 1,
+                                NOTE = @note,
+                                FOLDER_PATH = @folder
+                            WHERE ID = @id
+                              AND IS_DELETED = 0
+                        ";
+
                                 upd.Parameters.AddWithValue("@note", noteToSet);
                                 upd.Parameters.AddWithValue("@folder", folderPath ?? "");
                                 upd.Parameters.AddWithValue("@id", id);
-                                upd.ExecuteNonQuery();
+
+                                int rows = upd.ExecuteNonQuery();
+
+                                if (rows == 0)
+                                {
+                                    Log($"FindAndMarkAsRevokedByCertNumber: UPDATE пропущен (уже удалён) ID={id}");
+                                    return false;
+                                }
                             }
 
-                            Log($"FindAndMarkAsRevokedByCertNumber: аннулирован ID={id}, cert={certNumber}");
+                            //Log($"FindAndMarkAsRevokedByCertNumber: аннулирован ID={id}, cert={certNumber}");
                             return true;
                         }
                     }
@@ -1263,6 +1308,7 @@ VALUES (@folder, @uid, @kind, @dt)";
                 return false;
             }
         }
+
 
         /// <summary>
         /// Находит по FIO+certNumber и помечает аннулированным.

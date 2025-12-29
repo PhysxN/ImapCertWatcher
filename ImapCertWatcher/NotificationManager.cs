@@ -61,44 +61,85 @@ namespace ImapCertWatcher.Services
 
             lock (_sync)
             {
-                int threshold = _settings.NotifyDaysThreshold > 0 ? _settings.NotifyDaysThreshold : 10;
-                DateTime today = DateTime.Today;
-                int sentCount = 0;
+                int threshold = _settings.NotifyDaysThreshold > 0
+                    ? _settings.NotifyDaysThreshold
+                    : 10;
 
+                DateTime today = DateTime.Today;
+
+                // Отбираем кандидатов
                 var expiring = records
-                    .Where(r => !r.IsDeleted &&
-                                r.DaysLeft > 0 &&
-                                r.DaysLeft <= threshold &&
-                                !string.IsNullOrWhiteSpace(r.Fio))
+                    .Where(r => r != null
+                                && !r.IsDeleted
+                                && r.DaysLeft > 0
+                                && r.DaysLeft <= threshold
+                                && !string.IsNullOrWhiteSpace(r.Fio))
                     .ToList();
 
-                foreach (var rec in expiring)
+                if (expiring.Count == 0)
+                    return;
+
+                // Группируем по зданию
+                var byBuilding = expiring
+                    .GroupBy(r => string.IsNullOrWhiteSpace(r.Building) ? "UNKNOWN" : r.Building)
+                    .ToList();
+
+                int totalSent = 0;
+
+                foreach (var group in byBuilding)
                 {
-                    string key = string.Format("expiring:{0}", rec.Id);
-                    DateTime last;
-                    if (_state.ExpiringLastSent.TryGetValue(key, out last) &&
-                        last.Date == today)
+                    string building = group.Key;
+
+                    var accounts = GetAccountsForBuilding(building);
+                    if (accounts.Count == 0)
                     {
-                        // уже слали сегодня — пропускаем
+                        _log($"[Notify] Для здания '{building}' не настроены bimoid-аккаунты.");
                         continue;
                     }
 
-                    string msg = string.Format(
-                        "У {0} осталось {1} дней до окончания сертификата.",
-                        rec.Fio, rec.DaysLeft);
+                    // Фильтруем уже уведомлённые сегодня
+                    var toNotify = new List<CertRecord>();
 
-                    if (SendForBuilding(rec.Building, msg))
+                    foreach (var rec in group)
                     {
-                        _state.ExpiringLastSent[key] = today;
-                        sentCount++;
+                        string key = $"expiring:{rec.Id}";
+                        if (_state.ExpiringLastSent.TryGetValue(key, out var last) &&
+                            last.Date == today)
+                            continue;
+
+                        toNotify.Add(rec);
+                    }
+
+                    if (toNotify.Count == 0)
+                        continue;
+
+                    // Формируем ОДНО сообщение
+                    var sb = new StringBuilder();
+                    sb.AppendLine($"Истекают сертификаты (порог {threshold} дней):");
+                    sb.AppendLine();
+
+                    foreach (var rec in toNotify.OrderBy(r => r.DaysLeft))
+                    {
+                        sb.AppendLine(
+                            $"• {rec.Fio} — осталось {rec.DaysLeft} дн. (до {rec.DateEnd:dd.MM.yyyy})");
+                    }
+
+                    string message = sb.ToString();
+
+                    if (SendToAccounts(accounts, message))
+                    {
+                        foreach (var rec in toNotify)
+                        {
+                            _state.ExpiringLastSent[$"expiring:{rec.Id}"] = today;
+                        }
+
+                        totalSent += toNotify.Count;
                     }
                 }
 
-                if (sentCount > 0)
+                if (totalSent > 0)
                 {
-                    _log(string.Format(
-                        "[Notify] Отправлены уведомления об истекании по {0} сертификатам (порог {1} дней).",
-                        sentCount, threshold));
+                    _log($"[Notify] Отправлены уведомления об истекающих сертификатах: {totalSent} шт.");
                     SaveState();
                 }
             }
@@ -114,7 +155,6 @@ namespace ImapCertWatcher.Services
             lock (_sync)
             {
                 DateTime today = DateTime.Today;
-                int sentCount = 0;
 
                 var allAccounts = GetAllAccounts();
                 if (allAccounts.Count == 0)
@@ -123,34 +163,45 @@ namespace ImapCertWatcher.Services
                     return;
                 }
 
+                // ★ собираем новых пользователей
+                var newUsers = new List<CertRecord>();
+
                 foreach (var rec in newRecords)
                 {
                     if (rec == null || string.IsNullOrWhiteSpace(rec.Fio))
                         continue;
 
-                    string key = string.Format("newuser:{0}", rec.Id);
-                    DateTime last;
-                    if (_state.NewUserLastSent.TryGetValue(key, out last) &&
+                    string key = $"newuser:{rec.Id}";
+                    if (_state.NewUserLastSent.TryGetValue(key, out var last) &&
                         last.Date == today)
-                    {
-                        // Уже уведомляли сегодня
                         continue;
-                    }
 
-                    string msg = string.Format(
-                        "Добавлен новый пользователь: {0}. Сертификат действует с {1:dd.MM.yyyy} по {2:dd.MM.yyyy}.",
-                        rec.Fio, rec.DateStart, rec.DateEnd);
-
-                    if (SendToAccounts(allAccounts, msg))
-                    {
-                        _state.NewUserLastSent[key] = today;
-                        sentCount++;
-                    }
+                    newUsers.Add(rec);
                 }
 
-                if (sentCount > 0)
+                if (newUsers.Count == 0)
+                    return;
+
+                // ★ формируем ОДНО сообщение
+                var sb = new StringBuilder();
+                sb.AppendLine("Добавлены новые пользователи:");
+                sb.AppendLine();
+
+                foreach (var rec in newUsers)
                 {
-                    _log(string.Format("[Notify] Отправлены уведомления о новых пользователях: {0} шт.", sentCount));
+                    sb.AppendLine($"• {rec.Fio} (с {rec.DateStart:dd.MM.yyyy} по {rec.DateEnd:dd.MM.yyyy})");
+                }
+
+                string message = sb.ToString();
+
+                if (SendToAccounts(allAccounts, message))
+                {
+                    foreach (var rec in newUsers)
+                    {
+                        _state.NewUserLastSent[$"newuser:{rec.Id}"] = today;
+                    }
+
+                    _log($"[Notify] Отправлено уведомление о {newUsers.Count} новых пользователях.");
                     SaveState();
                 }
             }

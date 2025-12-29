@@ -133,7 +133,7 @@ namespace ImapCertWatcher.Services
                         }
                         else
                         {
-                            Log($"Сертификат не найден в БД: {certNumber}");
+                            //Log($"Сертификат не найден в БД: {certNumber}");
                         }
 
                         MarkProcessed(folder, uidStr);

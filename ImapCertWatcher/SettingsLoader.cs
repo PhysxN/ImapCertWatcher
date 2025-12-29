@@ -41,8 +41,13 @@ namespace ImapCertWatcher.Utils
                     case "FbDialect": if (int.TryParse(val, out int d)) s.FbDialect = d; break;
                     case "FbCharset": s.FbCharset = val; break;
 
+                    // Интервал проверки: ожидаем минуты.
+                    // Поддерживаем старый ключ "CheckIntervalHours" (legacy) — в этом случае умножаем на 60.
+                    case "CheckIntervalMinutes":
+                        if (int.TryParse(val, out int cm)) s.CheckIntervalMinutes = cm;
+                        break;
                     case "CheckIntervalHours":
-                        if (int.TryParse(val, out int ch)) s.CheckIntervalMinutes = ch;
+                        if (int.TryParse(val, out int ch)) s.CheckIntervalMinutes = ch * 60;
                         break;
 
                     // === НОВЫЕ НАСТРОЙКИ ДЛЯ ОБИМПА ===

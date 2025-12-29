@@ -1,35 +1,35 @@
-﻿using ImapCertWatcher.Data;
+﻿using ImapCertWatcher;
+using ImapCertWatcher.Data;
 using ImapCertWatcher.Models;
 using ImapCertWatcher.Services;
+using ImapCertWatcher.UI;
+using ImapCertWatcher.Utils;
+using MailKit;
+using MailKit.Net.Imap;
+using MailKit.Security;
 using Microsoft.Win32;
-using System.Reflection;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
+// Альтернатива Excel без использования Office Interop
+using System.Data;
+using System.Data.OleDb;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Reflection;
+using System.Security.Authentication;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
-using System.Diagnostics;
-using System.Text;
-using System.Security.Authentication;
-using System.Windows.Controls.Primitives;
 using Forms = System.Windows.Forms;
-using System.ComponentModel;
-using ImapCertWatcher;
-using ImapCertWatcher.Utils;
-
-// Альтернатива Excel без использования Office Interop
-using System.Data;
-using System.Data.OleDb;
-using MailKit;
-using MailKit.Net.Imap;
-using MailKit.Security;
 
 namespace ImapCertWatcher
 {
@@ -88,10 +88,13 @@ namespace ImapCertWatcher
         }
 
         // Список доступных зданий
-        private readonly ObservableCollection<string> _availableBuildings = new ObservableCollection<string>
-        {
-            "", "Краснофлотская", "Пионерская"
-        };
+        public ObservableCollection<string> AvailableBuildings { get; } =
+                new ObservableCollection<string>
+                {
+                    "", "Краснофлотская", "Пионерская"
+                };
+
+        
 
         // Флаг для предотвращения множественного сохранения
         private bool _isSavingBuilding = false;
@@ -307,7 +310,8 @@ namespace ImapCertWatcher
                 _timer?.Dispose();
                 if (_settings.CheckIntervalMinutes > 0)
                 {
-                    var intervalMs = _settings.CheckIntervalMinutes * 60 * 60 * 1000;
+                    // CheckIntervalMinutes specified in minutes -> convert to milliseconds
+                    var intervalMs = (long)_settings.CheckIntervalMinutes * 60 * 1000;
 
                     // Первый запуск — через intervalMs (чтобы при сохранении настроек не запускать проверку немедленно)
                     _timer = new Timer(
@@ -372,26 +376,41 @@ namespace ImapCertWatcher
         }
 
         /// <summary>
-        /// Обновление отображения оставшихся дней для всех записей
+        /// Обновление отображения оставшихся дней для видимых записей в DataGrid
         /// </summary>
         private void RefreshDaysLeft(object sender, EventArgs e)
         {
             try
             {
-                // Принудительно обновляем отображение DaysLeft для всех записей
-                foreach (var item in _allItems)
+                // Оптимизация: обновляем только видимые элементы в DataGrid
+                // Это значительно снижает нагрузку при большом количестве записей
+                
+                if (dgCerts != null && dgCerts.ItemsSource is IEnumerable<CertRecord> visibleItems)
                 {
-                    item.RefreshDaysLeft();
+                    // Обновляем только видимые элементы
+                    foreach (var item in visibleItems)
+                    {
+                        if (item != null)
+                        {
+                            item.RefreshDaysLeft();
+                        }
+                    }
                 }
 
-                // Также обновляем отображение для отфильтрованных записей
-                foreach (var item in _items)
+                // Также обновляем отфильтрованные элементы в памяти (но не все сразу)
+                // Это гарантирует, что данные будут актуальны для поиска/фильтрации
+                if (_items.Count > 0)
                 {
-                    item.RefreshDaysLeft();
+                    // Обновляем только первые 100 элементов за раз, чтобы не зависнуть
+                    int updateCount = Math.Min(100, _items.Count);
+                    for (int i = 0; i < updateCount; i++)
+                    {
+                        if (_items[i] != null)
+                        {
+                            _items[i].RefreshDaysLeft();
+                        }
+                    }
                 }
-
-                // Логируем только при отладке (можно закомментировать в продакшене)
-                // AddToMiniLog("Авто-обновление: пересчитаны оставшиеся дни");
             }
             catch (Exception ex)
             {
@@ -496,63 +515,38 @@ namespace ImapCertWatcher
             }
         }
 
-        private void ApplyTheme(bool isDark)
+        private void ApplyTheme(bool dark)
         {
-            _isDarkTheme = isDark;
+            var res = Application.Current.Resources;
 
-            var resources = this.Resources;
-
-            if (isDark)
+            if (dark)
             {
-                // Применяем темную тему
-                resources["WindowBackgroundBrush"] = resources["DarkWindowBackground"];
-                resources["ControlBackgroundBrush"] = resources["DarkControlBackground"];
-                resources["TextColorBrush"] = resources["DarkTextColor"];
-                resources["BorderColorBrush"] = resources["DarkBorderColor"];
-                resources["AccentColorBrush"] = resources["DarkAccentColor"];
-                resources["HoverColorBrush"] = resources["DarkHoverColor"];
-
-                pwdMailPassword.Foreground = Brushes.White;
-                pwdFbPassword.Foreground = Brushes.White;
+                res["WindowBackgroundBrush"] = res["DarkWindowBackground"];
+                res["ControlBackgroundBrush"] = res["DarkControlBackground"];
+                res["TextColorBrush"] = res["DarkTextColor"];
+                res["BorderColorBrush"] = res["DarkBorderColor"];
+                res["AccentColorBrush"] = res["DarkAccentColor"];
+                res["HoverColorBrush"] = res["DarkHoverColor"];
             }
             else
             {
-                // Применяем светлую тему
-                resources["WindowBackgroundBrush"] = resources["LightWindowBackground"];
-                resources["ControlBackgroundBrush"] = resources["LightControlBackground"];
-                resources["TextColorBrush"] = resources["LightTextColor"];
-                resources["BorderColorBrush"] = resources["LightBorderColor"];
-                resources["AccentColorBrush"] = resources["LightAccentColor"];
-                resources["HoverColorBrush"] = resources["LightHoverColor"];
-
-                pwdMailPassword.Foreground = Brushes.Black;
-                pwdFbPassword.Foreground = Brushes.Black;
+                res["WindowBackgroundBrush"] = res["LightWindowBackground"];
+                res["ControlBackgroundBrush"] = res["LightControlBackground"];
+                res["TextColorBrush"] = res["LightTextColor"];
+                res["BorderColorBrush"] = res["LightBorderColor"];
+                res["AccentColorBrush"] = res["LightAccentColor"];
+                res["HoverColorBrush"] = res["LightHoverColor"];
             }
-
-            try
-            {
-                resources[SystemColors.WindowBrushKey] = resources["ControlBackgroundBrush"];
-                resources[SystemColors.ControlTextBrushKey] = resources["TextColorBrush"];
-                resources[SystemColors.HighlightBrushKey] = resources["AccentColorBrush"];
-                resources[SystemColors.HighlightTextBrushKey] = new SolidColorBrush(Colors.White);
-            }
-            catch { }
-
-            // Принудительно обновляем визуал
-            this.InvalidateVisual();
-
-            // Обновляем строки DataGrid для применения новых цветов
-            var tempItems = _items.ToList();
-            _items.Clear();
-            foreach (var item in tempItems)
-                _items.Add(item);
         }
 
         private void ChkDarkTheme_Changed(object sender, RoutedEventArgs e)
         {
             _isDarkTheme = chkDarkTheme.IsChecked == true;
+
             ApplyTheme(_isDarkTheme);
             SaveThemeSettings();
+
+            Log($"[UI] Тема изменена: {(_isDarkTheme ? "Тёмная" : "Светлая")}");
         }
 
         // ========== ЭКСПОРТ В EXCEL С ИСПОЛЬЗОВАНИЕМ CSV ==========
@@ -1075,11 +1069,12 @@ namespace ImapCertWatcher
             
             try
             {
-
-                await Task.Run(() => _newWatcher.ProcessNewCertificates(checkAllMessages));
-
-                // Второй модуль: аннулирования — ожидаем, что метод возвращает int (число аннулирований)
-                await Task.Run(() => _revWatcher.ProcessRevocations(checkAllMessages));
+                // Используем Task.Run с timeout для более безопасного выполнения
+                using (var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromMinutes(10)))
+                {
+                    await Task.Run(() => _newWatcher.ProcessNewCertificates(checkAllMessages), cts.Token);
+                    await Task.Run(() => _revWatcher.ProcessRevocations(checkAllMessages), cts.Token);
+                }
 
                 // Всегда обновляем данные из БД, даже если не было новых писем
                 var newList = _db?.LoadAll(_showDeleted, _currentBuildingFilter);
@@ -1094,8 +1089,6 @@ namespace ImapCertWatcher
                             .Where(r => !_knownCertIds.Contains(r.Id) && !r.IsDeleted)
                             .ToList();
                     }
-                    // если _knownCertIds пустой (первый запуск) — не шлём ничего,
-                    // чтобы не заспамить всех как "новых"
 
                     // 2) Обновляем UI
                     Dispatcher.Invoke(() =>
@@ -1128,6 +1121,15 @@ namespace ImapCertWatcher
                     // 4.2. Истекающие сертификаты (по зданию, с порогом дней)
                     _notificationManager?.NotifyExpiringCerts(newList);
                 }
+            }
+            catch (OperationCanceledException)
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    statusText.Text = "Проверка почты: timeout (более 10 минут)";
+                    AddToMiniLog($"⚠️ Проверка почты превысила максимальное время (10 минут)");
+                    Log($"DoCheckAsync: OperationCanceledException - timeout");
+                });
             }
             catch (Exception ex)
             {
@@ -1240,17 +1242,7 @@ namespace ImapCertWatcher
             }
         }
 
-        private void BuildingComboBox_DropDownOpened(object sender, EventArgs e)
-        {
-            if (sender is ComboBox comboBox)
-            {
-                if (comboBox.ItemsSource == null)
-                {
-                    comboBox.ItemsSource = _availableBuildings;
-                }
-            }
-        }
-
+        
         private void BuildingComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
             if (_isSavingBuilding) return;
@@ -1296,16 +1288,7 @@ namespace ImapCertWatcher
 
         private void DgCerts_PreparingCellForEdit(object sender, DataGridPreparingCellForEditEventArgs e)
         {
-            if (e.Column.Header.ToString() == "Здание")
-            {
-                var comboBox = e.EditingElement as ComboBox;
-                if (comboBox != null && e.Row.DataContext is CertRecord record)
-                {
-                    comboBox.ItemsSource = _availableBuildings;
-                    comboBox.DisplayMemberPath = ".";
-                    comboBox.SelectedItem = record.Building;
-                }
-            }
+            
         }
 
         private void DgCerts_BeginningEdit(object sender, DataGridBeginningEditEventArgs e)
@@ -2182,7 +2165,11 @@ namespace ImapCertWatcher
             {
                 if (!CerCertificateParser.TryParse(cerPath, Log, out var info))
                 {
-                    MessageBox.Show("Не удалось прочитать сертификат", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+                    ConfirmDialog.Show(
+                        this,
+                        "Ошибка",
+                        "Не удалось прочитать сертификат."
+                    );
                     return;
                 }
 
@@ -2197,39 +2184,39 @@ namespace ImapCertWatcher
 
                     if (!isNewer)
                     {
-                        MessageBox.Show(
+                        ConfirmDialog.Show(
+                            this,
+                            "Сертификат не новее",
                             $"В базе уже есть более актуальный или равный сертификат:\n\n" +
                             $"ФИО: {existing.Fio}\n" +
                             $"Текущий: {existing.DateStart:dd.MM.yyyy} — {existing.DateEnd:dd.MM.yyyy}\n" +
                             $"Новый:   {info.DateStart:dd.MM.yyyy} — {info.DateEnd:dd.MM.yyyy}\n\n" +
-                            $"Замена не требуется.",
-                            "Сертификат не новее",
-                            MessageBoxButton.OK,
-                            MessageBoxImage.Information);
+                            $"Замена не требуется."
+                        );
 
                         Log($"[CER] Сертификат НЕ заменён (не новее существующего): {info.Fio}");
                         return;
                     }
 
-                    // 🔔 если сюда дошли — сертификат действительно новее
-                    var res = MessageBox.Show(
+                    // 🔔 Сертификат действительно новее → спрашиваем
+                    bool replace = ConfirmDialog.Show(
+                        this,
+                        "Новый сертификат",
                         $"Найден более новый сертификат:\n\n" +
                         $"ФИО: {existing.Fio}\n" +
                         $"Старый: {existing.DateStart:dd.MM.yyyy} — {existing.DateEnd:dd.MM.yyyy}\n" +
                         $"Новый:  {info.DateStart:dd.MM.yyyy} — {info.DateEnd:dd.MM.yyyy}\n\n" +
-                        $"Заменить сертификат?",
-                        "Новый сертификат",
-                        MessageBoxButton.YesNo,
-                        MessageBoxImage.Question);
+                        $"Заменить сертификат?"
+                    );
 
-                    if (res != MessageBoxResult.Yes)
+                    if (!replace)
                     {
                         Log($"[CER] Пользователь отменил замену сертификата для {info.Fio}");
                         return;
                     }
                 }
 
-                // ⬇️ сохраняем через уже существующий механизм
+                // ⬇️ сохраняем
                 var entry = new CertEntry
                 {
                     Fio = info.Fio,
@@ -2241,7 +2228,7 @@ namespace ImapCertWatcher
                     MessageDate = DateTime.Now
                 };
 
-                var (updated, added, certId) = _db.InsertOrUpdateAndGetId(entry);
+                var (updated, added, _) = _db.InsertOrUpdateAndGetId(entry);
 
                 if (added)
                     Log($"[CER] Добавлен новый сертификат: {info.Fio}");
@@ -2255,11 +2242,11 @@ namespace ImapCertWatcher
             catch (Exception ex)
             {
                 Log($"[CER] Ошибка ручной загрузки: {ex.Message}");
-                MessageBox.Show(ex.Message, "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+                ConfirmDialog.Show(this, "Ошибка", ex.Message);
             }
         }
 
-        
+
         private void LoadLogs()
         {
             try

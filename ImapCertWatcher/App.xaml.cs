@@ -1,8 +1,10 @@
 ﻿using System;
 using System.Diagnostics;
+using System.IO;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Threading;
+using System.Windows.Media;
 
 namespace ImapCertWatcher
 {
@@ -135,9 +137,20 @@ namespace ImapCertWatcher
         /// </summary>
         private void ApplyThemeFromSettings()
         {
-            bool useDarkTheme = true; // можно менять на чтение из настроек
+            // Читаем theme.txt (если есть) — fallback: light
+            bool useDarkTheme = false;
+            try
+            {
+                var themeFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "theme.txt");
+                if (File.Exists(themeFile))
+                {
+                    var theme = File.ReadAllText(themeFile).Trim();
+                    useDarkTheme = string.Equals(theme, "dark", StringComparison.OrdinalIgnoreCase);
+                }
+            }
+            catch { /* ignore */ }
 
-            var res = Current.Resources;
+            var res = Application.Current.Resources;
 
             if (useDarkTheme)
             {
@@ -147,6 +160,16 @@ namespace ImapCertWatcher
                 res["BorderColorBrush"] = res["DarkBorderColor"];
                 res["AccentColorBrush"] = res["DarkAccentColor"];
                 res["HoverColorBrush"] = res["DarkHoverColor"];
+
+                // Привязать системные кисти для всплывающих окон/выделения
+                try
+                {
+                    res[SystemColors.WindowBrushKey] = res["DarkWindowBackground"];
+                    res[SystemColors.ControlTextBrushKey] = res["DarkTextColor"];
+                    res[SystemColors.HighlightBrushKey] = res["DarkAccentColor"];
+                    res[SystemColors.HighlightTextBrushKey] = Brushes.White;
+                }
+                catch { }
             }
             else
             {
@@ -156,6 +179,15 @@ namespace ImapCertWatcher
                 res["BorderColorBrush"] = res["LightBorderColor"];
                 res["AccentColorBrush"] = res["LightAccentColor"];
                 res["HoverColorBrush"] = res["LightHoverColor"];
+
+                try
+                {
+                    res[SystemColors.WindowBrushKey] = res["LightWindowBackground"];
+                    res[SystemColors.ControlTextBrushKey] = res["LightTextColor"];
+                    res[SystemColors.HighlightBrushKey] = res["LightAccentColor"];
+                    res[SystemColors.HighlightTextBrushKey] = Brushes.White;
+                }
+                catch { }
             }
         }
     }
