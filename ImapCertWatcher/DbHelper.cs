@@ -98,6 +98,10 @@ namespace ImapCertWatcher.Data
                     if (!CheckTableExists(conn, "PROCESSED_MAILS"))
                         CreateProcessedMailsTable(conn);
 
+                    // --- НОВОЕ: таблица IMAP_LAST_UID ---
+                    if (!CheckTableExists(conn, "IMAP_LAST_UID"))
+                        CreateImapLastUidTable(conn);
+
                 }
             }
             catch (Exception ex)
@@ -281,6 +285,24 @@ ON PROCESSED_MAILS (FOLDER_PATH, MAIL_UID, KIND)";
             }
         }
 
+        private void CreateImapLastUidTable(FbConnection conn, FbTransaction transaction = null)
+        {
+            using (var cmd = conn.CreateCommand())
+            {
+                if (transaction != null)
+                    cmd.Transaction = transaction;
+
+                cmd.CommandText = @"
+CREATE TABLE IMAP_LAST_UID (
+    FOLDER_PATH VARCHAR(500) NOT NULL PRIMARY KEY,
+    LAST_UID BIGINT
+)";
+                TryExecuteNoThrow(cmd);
+
+                Log("Таблица IMAP_LAST_UID создана (если не существовала)");
+            }
+        }
+
         private void EnsureIndexesAndConstraints(FbConnection conn)
         {
             CreateIndexIfNotExists(conn, "IDX_CERTS_NUMBER", "CERTS", "CERT_NUMBER", false);
@@ -417,6 +439,58 @@ ON PROCESSED_MAILS (FOLDER_PATH, MAIL_UID, KIND)";
         #endregion
 
         #region Archive methods (transactional + non-transactional)
+
+        public List<CertRecord> GetCertificatesAddedAfter(DateTime fromUtc)
+        {
+            var list = new List<CertRecord>();
+
+            try
+            {
+                using (var conn = new FbConnection(_connectionString))
+                {
+                    conn.Open();
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        cmd.CommandText = @"
+SELECT
+    c.ID,
+    c.FIO,
+    c.DATE_START,
+    c.DATE_END,
+    c.DAYS_LEFT,
+    c.CERT_NUMBER,
+    c.FROM_ADDRESS,
+    c.IS_DELETED,
+    c.NOTE,
+    c.BUILDING,
+    c.FOLDER_PATH,
+    c.ARCHIVE_PATH,
+    c.MESSAGE_DATE,
+    (SELECT COUNT(*) FROM CERT_ARCHIVES ca WHERE ca.CERT_ID = c.ID) AS HAS_ARCHIVE
+FROM CERTS c
+WHERE c.MESSAGE_DATE >= @dt
+  AND c.IS_DELETED = 0
+ORDER BY c.MESSAGE_DATE ASC";
+
+                        cmd.Parameters.AddWithValue("@dt", fromUtc);
+
+                        using (var rdr = cmd.ExecuteReader())
+                        {
+                            while (rdr.Read())
+                            {
+                                list.Add(MapReaderToCertRecord(rdr));
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"GetCertificatesAddedAfter error: {ex.Message}");
+            }
+
+            return list;
+        }
 
         /// <summary>
         /// Сохраняет файл архива в таблицу CERT_ARCHIVES (не транзакционно).
@@ -754,8 +828,8 @@ ROWS 1";
         /// </summary>
         public (bool wasUpdated, bool wasAdded) InsertOrUpdate(CertEntry entry)
         {
-            var res = InsertOrUpdateAndGetId(entry);
-            return (res.wasUpdated, res.wasAdded);
+            var (wasUpdated, wasAdded, _) = InsertOrUpdateAndGetId(entry);
+            return (wasUpdated, wasAdded);
         }
 
         /// <summary>
@@ -988,6 +1062,46 @@ RETURNING ID";
             };
         }
 
+
+        public long GetLastUid(string folderPath)
+        {
+            using (var conn = new FbConnection(_connectionString))
+            {
+                conn.Open();
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = @"
+SELECT LAST_UID
+FROM IMAP_LAST_UID
+WHERE FOLDER_PATH = @p";
+
+                    cmd.Parameters.AddWithValue("@p", folderPath);
+
+                    var val = cmd.ExecuteScalar();
+                    return val == null || val == DBNull.Value ? 0 : Convert.ToInt64(val);
+                }
+            }
+        }
+
+        public void UpdateLastUid(string folderPath, long lastUid)
+        {
+            using (var conn = new FbConnection(_connectionString))
+            {
+                conn.Open();
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = @"
+UPDATE OR INSERT INTO IMAP_LAST_UID (FOLDER_PATH, LAST_UID)
+VALUES (@p, @u)
+MATCHING (FOLDER_PATH)";
+
+                    cmd.Parameters.AddWithValue("@p", folderPath);
+                    cmd.Parameters.AddWithValue("@u", lastUid);
+
+                    cmd.ExecuteNonQuery();
+                }
+            }
+        }
 
         /// <summary>
         /// Загружает все записи с фильтрами.

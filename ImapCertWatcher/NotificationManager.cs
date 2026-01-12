@@ -282,17 +282,17 @@ namespace ImapCertWatcher.Services
         {
             var all = new List<string>();
 
-            Action<string> addFrom = raw =>
+            void AddFrom(string raw)
             {
                 if (string.IsNullOrWhiteSpace(raw)) return;
                 var parts = raw
                     .Split(new[] { '\r', '\n', ';', ',' }, StringSplitOptions.RemoveEmptyEntries)
                     .Select(a => a.Trim());
                 all.AddRange(parts);
-            };
+            }
 
-            addFrom(_settings.BimoidAccountsKrasnoflotskaya);
-            addFrom(_settings.BimoidAccountsPionerskaya);
+            AddFrom(_settings.BimoidAccountsKrasnoflotskaya);
+            AddFrom(_settings.BimoidAccountsPionerskaya);
 
             return all
                 .Where(a => !string.IsNullOrWhiteSpace(a))
@@ -389,8 +389,11 @@ namespace ImapCertWatcher.Services
                     string key = parts[1];
                     string dtStr = parts[2];
 
-                    DateTime dt;
-                    if (!DateTime.TryParse(dtStr, null, System.Globalization.DateTimeStyles.RoundtripKind, out dt))
+                    if (!DateTime.TryParse(
+                            dtStr,
+                            null,
+                            System.Globalization.DateTimeStyles.RoundtripKind,
+                            out DateTime dt))
                         continue;
 
                     if (type == "E")

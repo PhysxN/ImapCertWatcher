@@ -1,4 +1,5 @@
 ﻿using ImapCertWatcher.Data;
+using ImapCertWatcher.Models;
 using ImapCertWatcher.Utils;
 using MailKit;
 using MailKit.Net.Imap;
@@ -9,6 +10,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 
 namespace ImapCertWatcher.Services
 {
@@ -114,9 +116,18 @@ namespace ImapCertWatcher.Services
 
             try
             {
+                long lastUid = checkAllMessages
+                    ? 0
+                    : _db.GetLastUid(folder.FullName);
+
+                var allUids = folder.Search(SearchQuery.All);
+
                 uids = checkAllMessages
-                    ? folder.Search(SearchQuery.All)
-                    : folder.Search(SearchQuery.DeliveredAfter(DateTime.Now.AddDays(-5)));
+                    ? allUids
+                    : allUids
+                        .Where(u => u.Id > lastUid)
+                        .OrderBy(u => u.Id)
+                        .ToList();
             }
             catch (Exception ex)
             {
@@ -143,16 +154,24 @@ namespace ImapCertWatcher.Services
                 }
             }
 
+            // ⬇⬇⬇ ВОТ ЗДЕСЬ ⬇⬇⬇
+            if (!checkAllMessages && uids.Count > 0)
+            {
+                long maxUid = uids.Max(u => u.Id);
+                _db.UpdateLastUid(folder.FullName, maxUid);
+            }
+
             try { folder.Close(); } catch { }
 
             foreach (var sub in folder.GetSubfolders(false))
                 ProcessFolderRecursive(client, sub, checkAllMessages);
         }
 
+
         private void ProcessMessage(
             IMailFolder folder,
             MimeMessage message,
-            UniqueId uid,
+            UniqueId _,
             string uidStr)
         {
             string folderPath = folder.FullName;
@@ -237,6 +256,14 @@ namespace ImapCertWatcher.Services
                     try { File.Delete(cerPath); } catch { }
                 }
             }
+        }
+
+        public Task CheckNewCertificatesFastAsync()
+        {
+            return Task.Run(() =>
+            {
+                ProcessNewCertificates(checkAllMessages: false);
+            });
         }
 
         // =====================================================================

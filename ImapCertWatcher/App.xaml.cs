@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Threading;
 using System.Windows.Media;
+using System.Linq;
 
 namespace ImapCertWatcher
 {
@@ -14,6 +15,12 @@ namespace ImapCertWatcher
 
         private async void Application_Startup(object sender, StartupEventArgs e)
         {
+            // ===== SERVER MODE =====
+            if (e.Args != null && e.Args.Any(a => a.Equals("-server", StringComparison.OrdinalIgnoreCase)))
+            {
+                RunServerModeWithWindow();
+                return;
+            }
             // 1) Сначала применяем тему (чтобы Splash сразу был в нужных цветах)
             ApplyThemeFromSettings();
 
@@ -130,6 +137,21 @@ namespace ImapCertWatcher
                 }
             };
             safetyTimer.Start();
+        }
+
+        private void RunServerModeWithWindow()
+        {
+            var serverWindow = new ServerWindow();
+            serverWindow.Show();
+
+            serverWindow.AppendLog("Сервер запущен");
+            serverWindow.SetStatus("Ожидание команд...");
+
+            // ПОКА без IMAP и IPC
+            // далее подключим:
+            // - таймер
+            // - watchers
+            // - pipes
         }
 
         /// <summary>

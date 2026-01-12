@@ -10,6 +10,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 
 namespace ImapCertWatcher.Services
 {
@@ -154,6 +155,13 @@ namespace ImapCertWatcher.Services
             Log($"Завершено. Обработано писем={processed}, аннулировано={applied}");
         }
 
+        public Task CheckRevocationsFastAsync()
+        {
+            return Task.Run(() =>
+            {
+                ProcessRevocations(checkAllMessages: false);
+            });
+        }
         private void MarkProcessed(IMailFolder folder, string uid)
         {
             try
