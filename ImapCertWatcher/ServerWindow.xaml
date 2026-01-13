@@ -18,17 +18,25 @@
                    FontWeight="Bold"
                    Margin="0,0,0,8"/>
 
-        <TextBox x:Name="LogBox"
-                 Grid.Row="1"
-                 IsReadOnly="True"
-                 TextWrapping="Wrap"
-                 VerticalScrollBarVisibility="Auto"/>
+        <RichTextBox x:Name="LogBox"
+             Grid.Row="1"
+             IsReadOnly="True"
+             VerticalScrollBarVisibility="Auto"
+             IsDocumentEnabled="False"
+             BorderThickness="1"
+             Padding="4" />
 
         <StackPanel Grid.Row="2"
                     Orientation="Horizontal"
                     HorizontalAlignment="Right"
                     Margin="0,8,0,0">
-            <Button Content="Проверить сейчас"
+            <Button x:Name="CheckAllButton"
+                    Content="Проверить всё"
+                    Width="140"
+                    Margin="0,0,8,0"
+                    Click="CheckAll_Click"/>    
+            <Button x:Name="CheckNowButton"
+                    Content="Проверить сейчас"
                     Width="140"
                     Margin="0,0,8,0"
                     Click="CheckNow_Click"/>

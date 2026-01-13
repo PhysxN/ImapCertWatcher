@@ -2,6 +2,7 @@
 using ImapCertWatcher.Services;
 using ImapCertWatcher.Utils;
 using System;
+using System.Threading.Tasks;
 using System.Windows;
 
 namespace ImapCertWatcher
@@ -9,7 +10,7 @@ namespace ImapCertWatcher
     public partial class ServerWindow : Window
     {
         private readonly Server.ServerHost _server;
-
+        private bool _isChecking;
         public ServerWindow(AppSettings settings)
         {
             InitializeComponent();
@@ -79,14 +80,77 @@ namespace ImapCertWatcher
                 return;
             }
 
-            LogBox.AppendText($"{DateTime.Now:HH:mm:ss} {text}{Environment.NewLine}");
+            // создаём Paragraph один раз
+            if (LogBox.Document.Blocks.Count == 0)
+                LogBox.Document.Blocks.Add(new System.Windows.Documents.Paragraph());
+
+            var paragraph = (System.Windows.Documents.Paragraph)LogBox.Document.Blocks.FirstBlock;
+
+            var run = new System.Windows.Documents.Run(
+                $"{DateTime.Now:HH:mm:ss} {text}\n");
+
+            if (text.Contains("ОШИБКА") || text.Contains("КРИТИЧЕСК"))
+                run.Foreground = System.Windows.Media.Brushes.Red;
+            else if (text.Contains("ДОБАВЛЕНО") || text.Contains("обновл"))
+                run.Foreground = System.Windows.Media.Brushes.Green;
+            else if (text.Contains("ПРОПУЩЕНО"))
+                run.Foreground = System.Windows.Media.Brushes.Gray;
+            else if (text.StartsWith("ИТОГО"))
+                run.Foreground = System.Windows.Media.Brushes.SteelBlue;
+
+            paragraph.Inlines.Add(run);
+
             LogBox.ScrollToEnd();
         }
-
+                
         private async void CheckNow_Click(object sender, RoutedEventArgs e)
         {
-            AppendLog("Ручная FAST-проверка");
-            await _server.RequestFastCheckAsync();
+            if (_isChecking)
+                return;
+
+            try
+            {
+                _isChecking = true;
+                CheckNowButton.IsEnabled = false;
+
+                AppendLog("Ручная FAST-проверка");
+                SetStatus("Идёт проверка почты...");
+
+                await _server.RequestFastCheckAsync();
+
+                SetStatus("Сервер работает");
+            }
+            finally
+            {
+                _isChecking = false;
+                CheckNowButton.IsEnabled = true;
+            }
+        }
+
+        private async void CheckAll_Click(object sender, RoutedEventArgs e)
+        {
+            if (_isChecking)
+                return;
+
+            try
+            {
+                _isChecking = true;
+                CheckNowButton.IsEnabled = false;
+                CheckAllButton.IsEnabled = false;
+
+                AppendLog("ПОЛНАЯ проверка всех писем");
+                SetStatus("Идёт полная проверка почты...");
+
+                await _server.RequestFullCheckAsync();
+
+                SetStatus("Сервер работает");
+            }
+            finally
+            {
+                _isChecking = false;
+                CheckNowButton.IsEnabled = true;
+                CheckAllButton.IsEnabled = true;
+            }
         }
 
         private void Close_Click(object sender, RoutedEventArgs e)

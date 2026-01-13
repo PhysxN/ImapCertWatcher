@@ -57,6 +57,10 @@ namespace ImapCertWatcher.Services
 
         public void ProcessNewCertificates(bool checkAllMessages = false)
         {
+            int total = 0;
+            int addedOrUpdated = 0;
+            int skipped = 0;
+
             Log("=== ImapNewCertificatesWatcher: старт ===");
             if (string.IsNullOrWhiteSpace(_settings.MailHost))
             {
@@ -81,7 +85,13 @@ namespace ImapCertWatcher.Services
                     client.Authenticate(_settings.MailLogin, _settings.MailPassword);
 
                     var root = client.GetFolder(_settings.ImapFolder);
-                    ProcessFolderRecursive(client, root, checkAllMessages);
+                    ProcessFolderRecursive(
+                            client,
+                            root,
+                            checkAllMessages,
+                            ref total,
+                            ref addedOrUpdated,
+                            ref skipped);
 
                     client.Disconnect(true);
                 }
@@ -90,7 +100,7 @@ namespace ImapCertWatcher.Services
             {
                 Log($"КРИТИЧЕСКАЯ ОШИБКА: {ex}");
             }
-
+            Log($"ИТОГО: обработано={total}, добавлено/обновлено={addedOrUpdated}, пропущено={skipped}");            
             Log("=== ImapNewCertificatesWatcher: завершено ===");
         }
 
@@ -99,9 +109,12 @@ namespace ImapCertWatcher.Services
         // =====================================================================
 
         private void ProcessFolderRecursive(
-            ImapClient client,
-            IMailFolder folder,
-            bool checkAllMessages)
+    ImapClient client,
+    IMailFolder folder,
+    bool checkAllMessages,
+    ref int total,
+    ref int addedOrUpdated,
+    ref int skipped)
         {
             if (folder == null) return;
 
@@ -125,18 +138,13 @@ namespace ImapCertWatcher.Services
                     ? 0
                     : _db.GetLastUid(folder.FullName);
 
-                Log($"Последний UID в БД: {lastUid}");
-
                 var allUids = folder.Search(SearchQuery.All);
 
                 uids = checkAllMessages
                     ? allUids
-                    : allUids
-                        .Where(u => u.Id > lastUid)
-                        .OrderBy(u => u.Id)
-                        .ToList();
-
-                Log($"Найдено писем для обработки: {uids.Count}");
+                    : allUids.Where(u => u.Id > lastUid)
+                             .OrderBy(u => u.Id)
+                             .ToList();
             }
             catch (Exception ex)
             {
@@ -146,39 +154,45 @@ namespace ImapCertWatcher.Services
 
             foreach (var uid in uids)
             {
-                string uidStr = uid.ToString();
-                string folderPath = folder.FullName;
-
-                Log($"UID={uidStr}: проверка письма");
-
-                if (_db.IsMailProcessed(folderPath, uidStr, "NEW"))
-                {
-                    Log($"UID={uidStr}: уже обработано, пропуск");
-                    continue;
-                }
-
                 try
                 {
                     var message = folder.GetMessage(uid);
-                    ProcessMessage(folder, message, uid, uidStr);
+                    ProcessMessage(
+                        folder,
+                        message,
+                        uid,
+                        uid.ToString(),
+                        ref total,
+                        ref addedOrUpdated,
+                        ref skipped);
                 }
                 catch (Exception ex)
                 {
-                    Log($"UID={uidStr}: ошибка обработки письма: {ex.Message}");
+                    Log($"UID={uid}: ошибка обработки письма: {ex.Message}");
                 }
             }
 
-            // ⬇⬇⬇ ВОТ ЗДЕСЬ ⬇⬇⬇
             if (!checkAllMessages && uids.Count > 0)
             {
                 long maxUid = uids.Max(u => u.Id);
                 _db.UpdateLastUid(folder.FullName, maxUid);
             }
 
+            // ✅ СВОДКА
+            Log(
+                $"ИТОГО [{folder.FullName}]: " +
+                $"писем={total}, добавлено/обновлено={addedOrUpdated}, пропущено={skipped}");
+
             try { folder.Close(); } catch { }
 
             foreach (var sub in folder.GetSubfolders(false))
-                ProcessFolderRecursive(client, sub, checkAllMessages);
+                ProcessFolderRecursive(
+                    client,
+                    sub,
+                    checkAllMessages,
+                    ref total,
+                    ref addedOrUpdated,
+                    ref skipped);
         }
 
 
@@ -186,16 +200,21 @@ namespace ImapCertWatcher.Services
     IMailFolder folder,
     MimeMessage message,
     UniqueId _,
-    string uidStr)
+    string uidStr,
+    ref int total,
+    ref int addedOrUpdated,
+    ref int skipped)
         {
+            total++;
+
             string folderPath = folder.FullName;
             string subject = string.IsNullOrWhiteSpace(message.Subject)
                 ? "(без темы)"
                 : message.Subject.Trim();
 
-            // Уже обработано
             if (_db.IsMailProcessed(folderPath, uidStr, "NEW"))
             {
+                skipped++;
                 Log($"UID={uidStr} | Тема=\"{subject}\" | ПРОПУЩЕНО (уже обработано)");
                 return;
             }
@@ -204,9 +223,9 @@ namespace ImapCertWatcher.Services
                 .Where(IsZipAttachment)
                 .ToList();
 
-            // Нет ZIP — просто фиксируем и идём дальше
             if (!zipAttachments.Any())
             {
+                skipped++;
                 Log($"UID={uidStr} | Тема=\"{subject}\" | ПРОПУЩЕНО (нет ZIP)");
                 _db.MarkMailProcessed(folderPath, uidStr, "NEW");
                 return;
@@ -234,9 +253,15 @@ namespace ImapCertWatcher.Services
             _db.MarkMailProcessed(folderPath, uidStr, "NEW");
 
             if (anySaved)
+            {
+                addedOrUpdated++;
                 Log($"UID={uidStr} | Тема=\"{subject}\" | ДОБАВЛЕНО / ОБНОВЛЕНО");
+            }
             else
+            {
+                skipped++;
                 Log($"UID={uidStr} | Тема=\"{subject}\" | ПРОПУЩЕНО (ZIP без CER)");
+            }
         }
 
         // =====================================================================

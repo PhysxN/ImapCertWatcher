@@ -123,6 +123,22 @@ namespace ImapCertWatcher.Server
             }
         }
 
+        public Task RequestFullCheckAsync()
+        {
+            return Task.Run(() =>
+            {
+                _log("ПОЛНАЯ проверка почты");
+
+                // ✅ новые сертификаты — ВСЕ письма
+                _newWatcher.ProcessNewCertificates(checkAllMessages: true);
+
+                // ✅ аннулирования — ВСЕ письма
+                _revokeWatcher.ProcessRevocations(checkAllMessages: true);
+
+                _log("ПОЛНАЯ проверка завершена");
+            });
+        }
+
         public void Dispose()
         {
             _pipeCts?.Cancel();
