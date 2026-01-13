@@ -4,6 +4,7 @@ using ImapCertWatcher.Utils;
 using System;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Linq;
 
 namespace ImapCertWatcher
 {
@@ -102,7 +103,7 @@ namespace ImapCertWatcher
 
             LogBox.ScrollToEnd();
         }
-                
+
         private async void CheckNow_Click(object sender, RoutedEventArgs e)
         {
             if (_isChecking)
@@ -113,6 +114,8 @@ namespace ImapCertWatcher
                 _isChecking = true;
                 CheckNowButton.IsEnabled = false;
 
+                StartProgress(); // ✅ ВКЛ
+
                 AppendLog("Ручная FAST-проверка");
                 SetStatus("Идёт проверка почты...");
 
@@ -122,6 +125,7 @@ namespace ImapCertWatcher
             }
             finally
             {
+                StopProgress(); // ✅ ВЫКЛ
                 _isChecking = false;
                 CheckNowButton.IsEnabled = true;
             }
@@ -137,7 +141,7 @@ namespace ImapCertWatcher
                 _isChecking = true;
                 CheckNowButton.IsEnabled = false;
                 CheckAllButton.IsEnabled = false;
-
+                StartProgress();
                 AppendLog("ПОЛНАЯ проверка всех писем");
                 SetStatus("Идёт полная проверка почты...");
 
@@ -147,11 +151,24 @@ namespace ImapCertWatcher
             }
             finally
             {
+                StopProgress();
                 _isChecking = false;
                 CheckNowButton.IsEnabled = true;
                 CheckAllButton.IsEnabled = true;
             }
         }
+
+        private void StartProgress()
+        {
+            Progress.Visibility = Visibility.Visible;
+        }
+
+        private void StopProgress()
+        {
+            Progress.Visibility = Visibility.Collapsed;
+        }
+
+
 
         private void Close_Click(object sender, RoutedEventArgs e)
         {
