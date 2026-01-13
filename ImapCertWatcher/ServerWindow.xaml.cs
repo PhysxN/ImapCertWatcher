@@ -10,12 +10,50 @@ namespace ImapCertWatcher
     {
         private readonly Server.ServerHost _server;
 
-        public ServerWindow()
+        public ServerWindow(AppSettings settings)
         {
             InitializeComponent();
-
-            var settings = new AppSettings();
+                        
             var db = new DbHelper(settings, AppendLog);
+
+            if (!db.TryOpenConnection(out var err))
+            {
+                var res = MessageBox.Show(
+                    "Не удалось подключиться к базе данных:\n\n" +
+                    err.Message + "\n\nСоздать базу?",
+                    "Ошибка подключения",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Warning);
+
+                if (res == MessageBoxResult.Yes)
+                {
+                    try
+                    {
+                        db.CreateDatabaseExplicit();
+                        db.EnsureDatabaseAndTable();
+                        MessageBox.Show("База данных создана.");
+                    }
+                    catch (Exception ex)
+                    {
+                        MessageBox.Show(
+                            ex.Message,
+                            "Ошибка создания БД",
+                            MessageBoxButton.OK,
+                            MessageBoxImage.Error);
+                        Close();
+                        return;
+                    }
+                }
+                else
+                {
+                    Close();
+                    return;
+                }
+            }
+            else
+            {
+                db.EnsureDatabaseAndTable();
+            }
 
             _server = new Server.ServerHost(
                 settings,
@@ -35,6 +73,12 @@ namespace ImapCertWatcher
 
         public void AppendLog(string text)
         {
+            if (!Dispatcher.CheckAccess())
+            {
+                Dispatcher.Invoke(() => AppendLog(text));
+                return;
+            }
+
             LogBox.AppendText($"{DateTime.Now:HH:mm:ss} {text}{Environment.NewLine}");
             LogBox.ScrollToEnd();
         }

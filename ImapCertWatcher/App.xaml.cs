@@ -1,11 +1,12 @@
-﻿using System;
+﻿using ImapCertWatcher.Utils;
+using System;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
-using System.Windows.Threading;
 using System.Windows.Media;
-using System.Linq;
+using System.Windows.Threading;
 
 namespace ImapCertWatcher
 {
@@ -141,17 +142,30 @@ namespace ImapCertWatcher
 
         private void RunServerModeWithWindow()
         {
-            var serverWindow = new ServerWindow();
+            AppSettings settings;
+
+            try
+            {
+                var settingsPath = Path.Combine(
+                    AppDomain.CurrentDomain.BaseDirectory,
+                    "settings.txt");
+
+                settings = SettingsLoader.Load(settingsPath);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    "Ошибка загрузки settings.txt:\n\n" + ex.Message,
+                    "ImapCertWatcher Server",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+
+                Shutdown();
+                return;
+            }
+
+            var serverWindow = new ServerWindow(settings);
             serverWindow.Show();
-
-            serverWindow.AppendLog("Сервер запущен");
-            serverWindow.SetStatus("Ожидание команд...");
-
-            // ПОКА без IMAP и IPC
-            // далее подключим:
-            // - таймер
-            // - watchers
-            // - pipes
         }
 
         /// <summary>

@@ -22,14 +22,16 @@ namespace ImapCertWatcher.Utils
         public string FilterRecipient { get; set; } = "";
         // Префикс темы, по которому определяется "новое" письмо (по умолчанию "Сертификат №" или "Сертификат")
         public string FilterSubjectPrefix { get; set; } = "Сертификат";
-
+        //Разработка
+        public bool IsDevelopment { get; set; } = true;
         // БД Firebird
-        public string FirebirdDbPath { get; set; } = "";
-        public string FbServer { get; set; } = "127.0.0.1";
+        public string FirebirdDbPath { get; set; }
+    = @"C:\DB_PHYSXN\CERTS.FDB";
+        public string FbServer { get; set; }
+    = "127.0.0.1";
         public string FbUser { get; set; } = "SYSDBA";
         public string FbPassword { get; set; } = "masterkey";
-        public int FbDialect { get; set; } = 3;
-
+        public int FbDialect { get; set; } = 3;        
         // Автозагрузка и трей
         public bool AutoStart { get; set; } = false;
         public bool MinimizeToTrayOnClose { get; set; } = true;

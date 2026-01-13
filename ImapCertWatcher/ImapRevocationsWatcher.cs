@@ -72,6 +72,7 @@ namespace ImapCertWatcher.Services
                         _settings.MailUseSsl
                             ? SecureSocketOptions.SslOnConnect
                             : SecureSocketOptions.StartTlsWhenAvailable);
+                    Log($"IMAP подключение: {_settings.MailHost}:{_settings.MailPort}, SSL={_settings.MailUseSsl}");
 
                     client.Authenticate(
                         _settings.MailLogin,
@@ -90,8 +91,13 @@ namespace ImapCertWatcher.Services
                     {
                         string uidStr = uid.ToString();
 
+                        //Log($"UID={uidStr}: проверка письма");
+
                         if (_db.IsMailProcessed(folder.FullName, uidStr, "REVOKE"))
+                        {
+                            Log($"UID={uidStr}: уже обработано, пропуск");
                             continue;
+                        }
 
                         processed++;
 

@@ -58,7 +58,11 @@ namespace ImapCertWatcher.Services
         public void ProcessNewCertificates(bool checkAllMessages = false)
         {
             Log("=== ImapNewCertificatesWatcher: старт ===");
-
+            if (string.IsNullOrWhiteSpace(_settings.MailHost))
+            {
+                Log("ОШИБКА: MailHost пустой");
+                return;
+            }
             try
             {
                 using (var client = new ImapClient())
@@ -72,6 +76,7 @@ namespace ImapCertWatcher.Services
                         _settings.MailUseSsl
                             ? SecureSocketOptions.SslOnConnect
                             : SecureSocketOptions.StartTlsWhenAvailable);
+                    _log($"IMAP подключение: {_settings.MailHost}:{_settings.MailPort}, SSL={_settings.MailUseSsl}");
 
                     client.Authenticate(_settings.MailLogin, _settings.MailPassword);
 
@@ -100,7 +105,7 @@ namespace ImapCertWatcher.Services
         {
             if (folder == null) return;
 
-            Log($"Обработка папки: {folder.FullName}");
+            Log($"Папка '{folder.FullName}' открыта. Всего писем: {folder.Count}");
 
             try
             {
@@ -120,6 +125,8 @@ namespace ImapCertWatcher.Services
                     ? 0
                     : _db.GetLastUid(folder.FullName);
 
+                Log($"Последний UID в БД: {lastUid}");
+
                 var allUids = folder.Search(SearchQuery.All);
 
                 uids = checkAllMessages
@@ -128,6 +135,8 @@ namespace ImapCertWatcher.Services
                         .Where(u => u.Id > lastUid)
                         .OrderBy(u => u.Id)
                         .ToList();
+
+                Log($"Найдено писем для обработки: {uids.Count}");
             }
             catch (Exception ex)
             {
@@ -140,8 +149,13 @@ namespace ImapCertWatcher.Services
                 string uidStr = uid.ToString();
                 string folderPath = folder.FullName;
 
+                Log($"UID={uidStr}: проверка письма");
+
                 if (_db.IsMailProcessed(folderPath, uidStr, "NEW"))
+                {
+                    Log($"UID={uidStr}: уже обработано, пропуск");
                     continue;
+                }
 
                 try
                 {
@@ -169,21 +183,36 @@ namespace ImapCertWatcher.Services
 
 
         private void ProcessMessage(
-            IMailFolder folder,
-            MimeMessage message,
-            UniqueId _,
-            string uidStr)
+    IMailFolder folder,
+    MimeMessage message,
+    UniqueId _,
+    string uidStr)
         {
             string folderPath = folder.FullName;
+            string subject = string.IsNullOrWhiteSpace(message.Subject)
+                ? "(без темы)"
+                : message.Subject.Trim();
+
+            // Уже обработано
+            if (_db.IsMailProcessed(folderPath, uidStr, "NEW"))
+            {
+                Log($"UID={uidStr} | Тема=\"{subject}\" | ПРОПУЩЕНО (уже обработано)");
+                return;
+            }
 
             var zipAttachments = message.Attachments
-                .Where(a => IsZipAttachment(a))
+                .Where(IsZipAttachment)
                 .ToList();
 
+            // Нет ZIP — просто фиксируем и идём дальше
             if (!zipAttachments.Any())
+            {
+                Log($"UID={uidStr} | Тема=\"{subject}\" | ПРОПУЩЕНО (нет ZIP)");
+                _db.MarkMailProcessed(folderPath, uidStr, "NEW");
                 return;
+            }
 
-            Log($"UID={uidStr}: найдено ZIP-вложений={zipAttachments.Count}");
+            bool anySaved = false;
 
             foreach (var attach in zipAttachments)
             {
@@ -193,7 +222,8 @@ namespace ImapCertWatcher.Services
 
                 try
                 {
-                    ProcessZip(zipPath, folderPath, uidStr);
+                    if (ProcessZip(zipPath, folderPath, uidStr))
+                        anySaved = true;
                 }
                 finally
                 {
@@ -202,21 +232,28 @@ namespace ImapCertWatcher.Services
             }
 
             _db.MarkMailProcessed(folderPath, uidStr, "NEW");
-            Log($"UID={uidStr}: письмо помечено как обработанное");
+
+            if (anySaved)
+                Log($"UID={uidStr} | Тема=\"{subject}\" | ДОБАВЛЕНО / ОБНОВЛЕНО");
+            else
+                Log($"UID={uidStr} | Тема=\"{subject}\" | ПРОПУЩЕНО (ZIP без CER)");
         }
 
         // =====================================================================
         // ZIP → CER → DB
         // =====================================================================
 
-        private void ProcessZip(string zipPath, string folderPath, string uidStr)
+        private bool ProcessZip(string zipPath, string folderPath, string uidStr)
         {
+            bool savedAny = false; // ⬅ КЛЮЧЕВОЕ
+
             var cerFiles = ZipCerExtractor.ExtractCerFiles(zipPath, Log);
 
             if (cerFiles.Count == 0)
             {
-                Log($"ZIP '{Path.GetFileName(zipPath)}': CER не найден");
-                return;
+                // ❌ УБИРАЕМ шумный лог
+                // Log($"ZIP '{Path.GetFileName(zipPath)}': CER не найден");
+                return false;
             }
 
             foreach (var cerPath in cerFiles)
@@ -237,7 +274,7 @@ namespace ImapCertWatcher.Services
                         MessageDate = DateTime.Now
                     };
 
-                    var (_, _, certId) = _db.InsertOrUpdateAndGetId(entry);
+                    var (wasUpdated, wasAdded, certId) = _db.InsertOrUpdateAndGetId(entry);
 
                     if (certId <= 0)
                         continue;
@@ -245,18 +282,27 @@ namespace ImapCertWatcher.Services
                     _db.DeleteArchiveFromDb(certId);
                     _db.SaveArchiveToDbTransactional(certId, cerPath);
 
-                    Log($"CertID={certId}: CER сохранён ({Path.GetFileName(cerPath)})");
+                    savedAny = true; // ⬅ ВОТ РАДИ ЭТОГО ВСЁ
+
+                    // ❗ УКОРОЧЕННЫЙ лог
+                    if (wasAdded)
+                        Log($"CertID={certId}: добавлен");
+                    else if (wasUpdated)
+                        Log($"CertID={certId}: обновлён");
                 }
                 catch (Exception ex)
                 {
-                    Log($"Ошибка обработки CER '{cerPath}': {ex.Message}");
+                    Log($"Ошибка обработки CER '{Path.GetFileName(cerPath)}': {ex.Message}");
                 }
                 finally
                 {
                     try { File.Delete(cerPath); } catch { }
                 }
             }
+
+            return savedAny; // ⬅ ОБЯЗАТЕЛЬНО
         }
+
 
         public Task CheckNewCertificatesFastAsync()
         {

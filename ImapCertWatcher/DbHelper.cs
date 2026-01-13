@@ -19,9 +19,9 @@ namespace ImapCertWatcher.Data
         {
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
             _addToMiniLog = addToMiniLog;
+            NormalizeFirebirdPath();
             _connectionString = BuildConnectionString();
-
-            EnsureDatabaseAndTable();
+            
             Log("DbHelper инициализирован");
         }
 
@@ -35,7 +35,7 @@ namespace ImapCertWatcher.Data
                 DataSource = string.IsNullOrEmpty(_settings.FbServer) ? "127.0.0.1" : _settings.FbServer,
                 Port = 3050,
                 // по умолчанию используем WIN1251 если не указано
-                Charset = string.IsNullOrEmpty(_settings.FbCharset) ? "WIN1251" : _settings.FbCharset,
+                Charset = string.IsNullOrEmpty(_settings.FbCharset) ? "UTF8" : _settings.FbCharset,
                 Dialect = _settings.FbDialect,
                 ServerType = FbServerType.Default,
                 Pooling = true,
@@ -49,33 +49,49 @@ namespace ImapCertWatcher.Data
 
         #region Initialization: tables, sequences, indices
 
+        private void NormalizeFirebirdPath()
+        {
+            if (string.IsNullOrWhiteSpace(_settings.FirebirdDbPath))
+                throw new InvalidOperationException("FirebirdDbPath не задан.");
+
+            // если относительный путь — делаем абсолютный
+            if (!Path.IsPathRooted(_settings.FirebirdDbPath))
+            {
+                _settings.FirebirdDbPath = Path.Combine(
+                    AppDomain.CurrentDomain.BaseDirectory,
+                    _settings.FirebirdDbPath);
+            }
+
+            var dir = Path.GetDirectoryName(_settings.FirebirdDbPath);
+
+            if (string.IsNullOrWhiteSpace(dir))
+                throw new InvalidOperationException("Некорректный путь FirebirdDbPath.");
+
+            if (!Directory.Exists(dir))
+            {
+                Directory.CreateDirectory(dir);
+            }
+        }
+
         public void EnsureDatabaseAndTable()
         {
             try
             {
-                // Если локальная БД не существует — попытка создать (только для локального сервера)
-                if ((string.IsNullOrEmpty(_settings.FbServer) || _settings.FbServer == "127.0.0.1" || _settings.FbServer == "localhost")
-                    && !File.Exists(_settings.FirebirdDbPath))
+                // ===== НОРМАЛИЗАЦИЯ ПУТИ К БД =====
+                if (string.IsNullOrWhiteSpace(_settings.FirebirdDbPath))
                 {
-                    var dir = Path.GetDirectoryName(_settings.FirebirdDbPath);
-                    if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
-
-                    var createCsb = new FbConnectionStringBuilder
-                    {
-                        Database = _settings.FirebirdDbPath,
-                        UserID = string.IsNullOrEmpty(_settings.FbUser) ? "SYSDBA" : _settings.FbUser,
-                        Password = string.IsNullOrEmpty(_settings.FbPassword) ? "masterkey" : _settings.FbPassword,
-                        DataSource = string.IsNullOrEmpty(_settings.FbServer) ? "127.0.0.1" : _settings.FbServer,
-                        Port = 3050,
-                        Charset = string.IsNullOrEmpty(_settings.FbCharset) ? "WIN1251" : _settings.FbCharset,
-                        Dialect = _settings.FbDialect,
-                        ServerType = FbServerType.Default
-                    };
-
-                    FbConnection.CreateDatabase(createCsb.ToString(), pageSize: 16384, forcedWrites: true, overwrite: false);
-                    Log("Локальная база Firebird создана.");
+                    throw new InvalidOperationException(
+                        "FirebirdDbPath не задан. Проверь AppSettings / конфиг.");
                 }
 
+                // если путь относительный — делаем абсолютный
+                if (!Path.IsPathRooted(_settings.FirebirdDbPath))
+                {
+                    _settings.FirebirdDbPath = Path.Combine(
+                        AppDomain.CurrentDomain.BaseDirectory,
+                        _settings.FirebirdDbPath);
+                }
+                
                 using (var conn = new FbConnection(_connectionString))
                 {
                     conn.Open();
@@ -145,6 +161,59 @@ namespace ImapCertWatcher.Data
                     Log("SEQ_PROCESSED_MAILS_ID создан");
                 }
             }
+        }
+
+        public bool TryOpenConnection(out Exception error)
+        {
+            error = null;
+
+            try
+            {
+                using (var conn = new FbConnection(_connectionString))
+                {
+                    conn.Open();
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                error = ex;
+                return false;
+            }
+        }
+
+        public void CreateDatabaseExplicit()
+        {
+            if (!_settings.IsDevelopment)
+                throw new InvalidOperationException(
+                    "Создание базы запрещено вне режима разработки");
+
+            if (_settings.FbServer != "127.0.0.1" &&
+                !_settings.FbServer.Equals("localhost", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    "Создание базы разрешено только на локальном сервере");
+            }
+
+            var csb = new FbConnectionStringBuilder
+            {
+                Database = _settings.FirebirdDbPath,
+                UserID = _settings.FbUser,
+                Password = _settings.FbPassword,
+                DataSource = _settings.FbServer,
+                Port = 3050,
+                Charset = _settings.FbCharset,
+                Dialect = _settings.FbDialect,
+                ServerType = FbServerType.Default
+            };
+
+            FbConnection.CreateDatabase(
+                csb.ToString(),
+                pageSize: 16384,
+                forcedWrites: true,
+                overwrite: false);
+
+            Log("База Firebird создана вручную");
         }
 
         private bool CheckTableExists(FbConnection conn, string tableName)
