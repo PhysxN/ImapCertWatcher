@@ -10,6 +10,7 @@ using System.IO;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Controls;
 
 namespace ImapCertWatcher
 {
@@ -29,12 +30,22 @@ namespace ImapCertWatcher
         public ServerSettingsWindow(AppSettings settings)
         {
             InitializeComponent();
+
             _settings = settings;
             DataContext = _settings;
 
             // пароли вручную
             MailPasswordBox.Password = _settings.MailPassword;
             DbPasswordBox.Password = _settings.FbPassword;
+
+            Loaded += ServerSettingsWindow_Loaded;
+        }
+
+        private void ServerSettingsWindow_Loaded(object sender, RoutedEventArgs e)
+        {
+            // Восстанавливаем значения из settings.txt
+            cmbNewCertsFolder.GetBindingExpression(ComboBox.TextProperty)?.UpdateTarget();
+            cmbRevocationsFolder.GetBindingExpression(ComboBox.TextProperty)?.UpdateTarget();
         }
 
         private void Save_Click(object sender, RoutedEventArgs e)
@@ -78,6 +89,15 @@ namespace ImapCertWatcher
                     var root = client.GetFolder(client.PersonalNamespaces[0]);
 
                     await LoadFoldersRecursive(root);
+
+                    Dispatcher.Invoke(() =>
+                    {
+                        if (ImapFolders.Contains(_settings.ImapNewCertificatesFolder))
+                            _settings.ImapNewCertificatesFolder = _settings.ImapNewCertificatesFolder;
+
+                        if (ImapFolders.Contains(_settings.ImapRevocationsFolder))
+                            _settings.ImapRevocationsFolder = _settings.ImapRevocationsFolder;
+                    });
 
                     await client.DisconnectAsync(true);
                 }

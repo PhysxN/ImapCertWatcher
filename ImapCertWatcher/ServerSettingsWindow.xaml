@@ -2,133 +2,213 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Настройки сервера"
-        Width="500"
+        Width="520"
         Height="550"
         WindowStartupLocation="CenterOwner">
 
-    <ScrollViewer Padding="10">
+    <ScrollViewer Padding="12">
         <StackPanel>
 
             <!-- ================= MAIL ================= -->
 
-            <TextBlock Text="Почта" FontWeight="Bold"/>
+            <TextBlock Text="Почта"
+                       FontWeight="Bold"
+                       Margin="0,0,0,6"/>
 
-            <TextBlock Text="IMAP сервер"/>
-            <TextBox Text="{Binding MailHost}"
-                     ToolTip="Адрес IMAP сервера. Например: imap.yandex.ru, imap.gmail.com"/>
+            <Grid Margin="0,0,0,8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="170"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition/>
+                    <RowDefinition/>
+                    <RowDefinition/>
+                    <RowDefinition/>
+                    <RowDefinition/>
+                </Grid.RowDefinitions>
 
-            <TextBlock Text="Порт"/>
-            <TextBox Text="{Binding MailPort}"
-                     ToolTip="Порт IMAP сервера. Обычно: 993 (SSL), 143 (без SSL)"/>
+                <TextBlock Grid.Row="0" Grid.Column="0" Text="IMAP сервер"/>
+                <TextBox Grid.Row="0" Grid.Column="1"
+                         Text="{Binding MailHost}"
+                         ToolTip="Адрес IMAP сервера. Например: imap.yandex.ru"/>
 
-            <CheckBox Content="SSL"
-                      IsChecked="{Binding MailUseSsl}"
-                      ToolTip="Использовать защищенное SSL соединение (рекомендуется)"/>
+                <TextBlock Grid.Row="1" Grid.Column="0" Text="Порт"/>
+                <TextBox Grid.Row="1" Grid.Column="1"
+                         Text="{Binding MailPort}"
+                         ToolTip="Обычно: 993 (SSL), 143 (без SSL)"/>
 
-            <TextBlock Text="Логин"/>
-            <TextBox Text="{Binding MailLogin}"
-                     ToolTip="Логин почтового ящика (обычно email полностью)"/>
+                <TextBlock Grid.Row="2" Grid.Column="0" Text="SSL"/>
+                <CheckBox Grid.Row="2" Grid.Column="1"
+                          IsChecked="{Binding MailUseSsl}"
+                          ToolTip="Использовать защищенное соединение"/>
 
-            <TextBlock Text="Пароль"/>
-            <PasswordBox x:Name="MailPasswordBox"
-                         ToolTip="Пароль от почтового ящика"/>
+                <TextBlock Grid.Row="3" Grid.Column="0" Text="Логин"/>
+                <TextBox Grid.Row="3" Grid.Column="1"
+                         Text="{Binding MailLogin}"
+                         ToolTip="Логин почтового ящика"/>
 
-            <Button Content="Обновить список папок"
-                    Margin="0,8,0,4"
-                    Click="RefreshFolders_Click"
-                    ToolTip="Получить список папок с IMAP сервера"/>
-            <Button Content="Проверить подключение к почте"
-        Margin="0,4,0,4"
-        Click="TestMail_Click"
-        ToolTip="Проверить подключение к IMAP серверу с текущими параметрами"/>
+                <TextBlock Grid.Row="4" Grid.Column="0" Text="Пароль"/>
+                <PasswordBox Grid.Row="4" Grid.Column="1"
+                             x:Name="MailPasswordBox"
+                             ToolTip="Пароль от почты"/>
+            </Grid>
 
-            <TextBlock Text="Папка новых сертификатов"/>
-            <ComboBox ItemsSource="{Binding ImapFolders, RelativeSource={RelativeSource AncestorType=Window}}"
-                      SelectedItem="{Binding ImapNewCertificatesFolder, Mode=TwoWay}"
-                      Text="{Binding ImapNewCertificatesFolder, Mode=TwoWay}"
-                      IsEditable="True"
-                      ToolTip="IMAP папка, в которую приходят письма с новыми сертификатами"/>
+            <StackPanel Orientation="Horizontal"
+                        HorizontalAlignment="Right"
+                        Margin="0,4">
 
-            <TextBlock Text="Папка аннулирований"/>
-            <ComboBox ItemsSource="{Binding ImapFolders, RelativeSource={RelativeSource AncestorType=Window}}"
-                      SelectedItem="{Binding ImapRevocationsFolder, Mode=TwoWay}"
-                      Text="{Binding ImapRevocationsFolder, Mode=TwoWay}"
-                      IsEditable="True"
-                      ToolTip="IMAP папка с письмами об аннулировании сертификатов"/>
+                <Button Content="Обновить папки"
+                        Margin="0,0,6,0"
+                        Click="RefreshFolders_Click"
+                        ToolTip="Загрузить список папок с IMAP"/>
 
-            <Separator Margin="0,10"/>
+                <Button Content="Проверить почту"
+                        Click="TestMail_Click"
+                        ToolTip="Проверить подключение к почте"/>
+            </StackPanel>
 
-            <!-- ================= DATABASE ================= -->
+            <Grid Margin="0,6">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="170"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition/>
+                    <RowDefinition/>
+                </Grid.RowDefinitions>
 
-            <TextBlock Text="База данных Firebird" FontWeight="Bold"/>
+                <TextBlock Grid.Row="0" Grid.Column="0" Text="Новые сертификаты"/>
 
-            <TextBlock Text="Сервер Firebird"/>
-            <TextBox Text="{Binding FbServer}"
-         ToolTip="IP адрес или имя сервера Firebird. Обычно: 127.0.0.1"/>
+                <ComboBox x:Name="cmbNewCertsFolder"
+          Grid.Row="0" Grid.Column="1"
+          ItemsSource="{Binding ImapFolders, RelativeSource={RelativeSource AncestorType=Window}}"
+          SelectedItem="{Binding ImapNewCertificatesFolder, Mode=TwoWay}"
+          Text="{Binding ImapNewCertificatesFolder, Mode=TwoWay}"
+          IsEditable="True"
+          ToolTip="Папка с новыми сертификатами"/>
 
-            <TextBlock Text="Путь к базе данных"/>
-            <TextBox Text="{Binding FirebirdDbPath}"
-         ToolTip="Полный путь к файлу базы Firebird (.fdb)"/>
 
-            <TextBlock Text="Логин Firebird"/>
-            <TextBox Text="{Binding FbUser}"
-         ToolTip="Имя пользователя Firebird. Обычно: SYSDBA"/>
+                <TextBlock Grid.Row="1" Grid.Column="0" Text="Аннулирования"/>
 
-            <TextBlock Text="Пароль Firebird"/>
-            <PasswordBox x:Name="DbPasswordBox"
-             ToolTip="Пароль пользователя Firebird"/>
+                <ComboBox x:Name="cmbRevocationsFolder"
+          Grid.Row="1" Grid.Column="1"
+          ItemsSource="{Binding ImapFolders, RelativeSource={RelativeSource AncestorType=Window}}"
+          SelectedItem="{Binding ImapRevocationsFolder, Mode=TwoWay}"
+          Text="{Binding ImapRevocationsFolder, Mode=TwoWay}"
+          IsEditable="True"
+          ToolTip="Папка аннулирований"/>
+            </Grid>
 
-            <TextBlock Text="Диалект Firebird"/>
-            <TextBox Text="{Binding FbDialect}"
-         ToolTip="Версия SQL диалекта. Рекомендуется: 3"/>
-            <Button Content="Проверить подключение Firebird"
-        Margin="0,6,0,0"
-        Click="TestDb_Click"
-        ToolTip="Проверить подключение к базе Firebird"/>
+            <Separator Margin="0,12"/>
+
+            <!-- ================= FIREBIRD ================= -->
+
+            <TextBlock Text="Firebird"
+                       FontWeight="Bold"
+                       Margin="0,0,0,6"/>
+
+            <Grid Margin="0,0,0,6">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="170"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition/>
+                    <RowDefinition/>
+                    <RowDefinition/>
+                    <RowDefinition/>
+                    <RowDefinition/>
+                </Grid.RowDefinitions>
+
+                <TextBlock Grid.Row="0" Grid.Column="0" Text="Сервер"/>
+                <TextBox Grid.Row="0" Grid.Column="1"
+                         Text="{Binding FbServer}"
+                         ToolTip="IP или имя сервера Firebird"/>
+
+                <TextBlock Grid.Row="1" Grid.Column="0" Text="Путь к БД"/>
+                <TextBox Grid.Row="1" Grid.Column="1"
+                         Text="{Binding FirebirdDbPath}"
+                         ToolTip="Полный путь к .fdb"/>
+
+                <TextBlock Grid.Row="2" Grid.Column="0" Text="Логин"/>
+                <TextBox Grid.Row="2" Grid.Column="1"
+                         Text="{Binding FbUser}"/>
+
+                <TextBlock Grid.Row="3" Grid.Column="0" Text="Пароль"/>
+                <PasswordBox Grid.Row="3" Grid.Column="1"
+                             x:Name="DbPasswordBox"/>
+
+                <TextBlock Grid.Row="4" Grid.Column="0" Text="Диалект"/>
+                <TextBox Grid.Row="4" Grid.Column="1"
+                         Text="{Binding FbDialect}"
+                         ToolTip="Обычно 3"/>
+            </Grid>
+
+            <Button Content="Проверить Firebird"
+                    HorizontalAlignment="Right"
+                    Click="TestDb_Click"
+                    ToolTip="Проверить подключение к базе"/>
+
+            <Separator Margin="0,12"/>
 
             <!-- ================= SERVER ================= -->
 
-            <TextBlock Text="Интервал проверки" FontWeight="Bold"/>
+            <TextBlock Text="Сервер"
+                       FontWeight="Bold"
+                       Margin="0,0,0,6"/>
 
-            <TextBox Text="{Binding CheckIntervalMinutes}"
-                     ToolTip="Интервал автоматической проверки почты в минутах"/>
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="170"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition/>
+                    <RowDefinition/>
+                </Grid.RowDefinitions>
 
-            <TextBlock Text="Дней до окончания сертификата"/>
-            <TextBox Text="{Binding NotifyDaysThreshold}"
-                     ToolTip="За сколько дней до окончания сертификата отправлять уведомления"/>
+                <TextBlock Grid.Row="0" Grid.Column="0" Text="Интервал (мин)"/>
+                <TextBox Grid.Row="0" Grid.Column="1"
+                         Text="{Binding CheckIntervalMinutes}"/>
 
-            <CheckBox Content="Проверять и уведомлять только в рабочее время"
+                <TextBlock Grid.Row="1" Grid.Column="0" Text="Уведомлять за (дней)"/>
+                <TextBox Grid.Row="1" Grid.Column="1"
+                         Text="{Binding NotifyDaysThreshold}"/>
+            </Grid>
+
+            <CheckBox Content="Рабочее время"
                       IsChecked="{Binding NotifyOnlyInWorkHours}"
                       Margin="0,6,0,0"
-                      ToolTip="Если включено — проверки и уведомления выполняются только в рабочее время"/>
+                      ToolTip="Проверять только в рабочие часы"/>
 
-            <Separator Margin="0,10"/>
+            <Separator Margin="0,12"/>
 
             <!-- ================= BIMOID ================= -->
 
-            <TextBlock Text="Bimoid" FontWeight="Bold"/>
+            <TextBlock Text="Bimoid"
+                       FontWeight="Bold"
+                       Margin="0,0,0,6"/>
 
-            <TextBlock Text="Аккаунты Краснофлотская"/>
+            <TextBlock Text="Краснофлотская"/>
             <TextBox Text="{Binding BimoidAccountsKrasnoflotskaya}"
                      AcceptsReturn="True"
-                     Height="60"
-                     ToolTip="Список аккаунтов Bimoid для Краснофлотской. Один аккаунт на строку"/>
+                     Height="60"/>
 
-            <TextBlock Text="Аккаунты Пионерская" Margin="0,6,0,0"/>
+            <TextBlock Text="Пионерская" Margin="0,6,0,0"/>
             <TextBox Text="{Binding BimoidAccountsPionerskaya}"
                      AcceptsReturn="True"
-                     Height="60"
-                     ToolTip="Список аккаунтов Bimoid для Пионерской. Один аккаунт на строку"/>
+                     Height="60"/>
 
-            <Separator Margin="0,10"/>
+            <Separator Margin="0,12"/>
 
             <!-- ================= SAVE ================= -->
 
             <Button Content="Сохранить"
-                    Width="120"
+                    Width="140"
                     HorizontalAlignment="Right"
-                    Click="Save_Click"
-                    ToolTip="Сохранить настройки сервера"/>
+                    Click="Save_Click"/>
+
         </StackPanel>
     </ScrollViewer>
 </Window>
