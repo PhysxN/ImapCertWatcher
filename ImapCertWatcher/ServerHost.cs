@@ -13,30 +13,35 @@ namespace ImapCertWatcher.Server
 {
     public class ServerHost : IDisposable
     {
+        private const string PipeName = "ImapCertWatcherPipe";
+        private readonly AppSettings _settings;
+        private readonly DbHelper _db;
+        private readonly Action<string> _log;
+
         private readonly SafeAsyncTimer _timer;
         private readonly ImapNewCertificatesWatcher _newWatcher;
         private readonly ImapRevocationsWatcher _revokeWatcher;
         private readonly NotificationManager _notifications;
-        private readonly DbHelper _db;
-        private readonly Action<string> _log;
+
         private CancellationTokenSource _pipeCts;
         private Task _pipeTask;
 
-        private const string PipeName = "ImapCertWatcherPipe";
+        public AppSettings Settings => _settings;
+
         public ServerHost(AppSettings settings, DbHelper db, Action<string> log)
         {
+            _settings = settings ?? throw new ArgumentNullException(nameof(settings));
             _db = db ?? throw new ArgumentNullException(nameof(db));
-            _log = log ?? (_ => { });   // ← 🔥 ВОТ ЭТО ОБЯЗАТЕЛЬНО
+            _log = log ?? (_ => { });
 
-            _newWatcher = new ImapNewCertificatesWatcher(settings, _db, _log);
-            _revokeWatcher = new ImapRevocationsWatcher(settings, _db, _log);
-            _notifications = new NotificationManager(settings, _log);
-
+            _newWatcher = new ImapNewCertificatesWatcher(_settings, _db, _log);
+            _revokeWatcher = new ImapRevocationsWatcher(_settings, _db, _log);
+            _notifications = new NotificationManager(_settings, _log);
 
             _timer = new SafeAsyncTimer(
                 async ct =>
                 {
-                    log("ServerHost: проверка почты (FAST)");
+                    _log("ServerHost: проверка почты (FAST)");
 
                     var checkStartedAt = DateTime.Now;
 
@@ -45,22 +50,32 @@ namespace ImapCertWatcher.Server
 
                     var newCerts = _db.GetCertificatesAddedAfter(checkStartedAt);
                     if (newCerts.Count > 0)
-                    {
                         _notifications.NotifyNewUsers(newCerts);
-                    }
                 },
-                ex => log("ServerHost error: " + ex.Message)
+                ex => _log("ServerHost error: " + ex.Message)
             );
         }
 
+
         public void Start()
         {
-            _timer.Start(
-                initialDelay: TimeSpan.FromSeconds(10),
-                period: TimeSpan.FromMinutes(10)
-            );
+            if (_settings.CheckIntervalMinutes > 0)
+            {
+                var interval = TimeSpan.FromMinutes(_settings.CheckIntervalMinutes);
 
-            StartPipeServer(); // ← ВОТ ЭТО
+                _timer.Start(
+                    initialDelay: interval,
+                    period: interval
+                );
+
+                _log($"ServerHost: таймер запущен, интервал {_settings.CheckIntervalMinutes} мин.");
+            }
+            else
+            {
+                _log("ServerHost: авто-проверка отключена (CheckIntervalMinutes <= 0)");
+            }
+
+            StartPipeServer();
         }
 
         private void StartPipeServer()
@@ -142,6 +157,7 @@ namespace ImapCertWatcher.Server
         public void Dispose()
         {
             _pipeCts?.Cancel();
+            _pipeTask?.Wait(1000);
             _timer.Dispose();
         }
     }

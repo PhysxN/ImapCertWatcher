@@ -142,29 +142,7 @@ namespace ImapCertWatcher
 
         private void RunServerModeWithWindow()
         {
-            AppSettings settings;
-
-            try
-            {
-                var settingsPath = Path.Combine(
-                    AppDomain.CurrentDomain.BaseDirectory,
-                    "settings.txt");
-
-                settings = SettingsLoader.Load(settingsPath);
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show(
-                    "Ошибка загрузки settings.txt:\n\n" + ex.Message,
-                    "ImapCertWatcher Server",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Error);
-
-                Shutdown();
-                return;
-            }
-
-            var serverWindow = new ServerWindow(settings);
+            var serverWindow = new ServerWindow();
             serverWindow.Show();
         }
 

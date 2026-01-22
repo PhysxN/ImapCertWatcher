@@ -1,76 +1,317 @@
-﻿using System;
+﻿using System.ComponentModel;
 
 namespace ImapCertWatcher.Utils
 {
-    public class AppSettings
+    public class AppSettings : INotifyPropertyChanged
     {
-        // Почта
-        public string MailHost { get; set; } = "";
-        public int MailPort { get; set; } = 993;
-        public bool MailUseSsl { get; set; } = true;
-        public string MailLogin { get; set; } = "";
+        // =========================================================
+        // INotifyPropertyChanged
+        // =========================================================
+
+        public event PropertyChangedEventHandler PropertyChanged;
+
+        protected void OnPropertyChanged(string propertyName)
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+        }
+
+        // =========================================================
+        // MAIL
+        // =========================================================
+
+        private string _mailHost = "";
+        public string MailHost
+        {
+            get => _mailHost;
+            set
+            {
+                if (_mailHost != value)
+                {
+                    _mailHost = value;
+                    OnPropertyChanged(nameof(MailHost));
+                }
+            }
+        }
+
+        private int _mailPort = 993;
+        public int MailPort
+        {
+            get => _mailPort;
+            set
+            {
+                if (_mailPort != value)
+                {
+                    _mailPort = value;
+                    OnPropertyChanged(nameof(MailPort));
+                }
+            }
+        }
+
+        private bool _mailUseSsl = true;
+        public bool MailUseSsl
+        {
+            get => _mailUseSsl;
+            set
+            {
+                if (_mailUseSsl != value)
+                {
+                    _mailUseSsl = value;
+                    OnPropertyChanged(nameof(MailUseSsl));
+                }
+            }
+        }
+
+        private string _mailLogin = "";
+        public string MailLogin
+        {
+            get => _mailLogin;
+            set
+            {
+                if (_mailLogin != value)
+                {
+                    _mailLogin = value;
+                    OnPropertyChanged(nameof(MailLogin));
+                }
+            }
+        }
+
+        // ⚠ Пароль не биндим напрямую (PasswordBox)
         public string MailPassword { get; set; } = "";
-        public string ImapFolder { get; set; } = "INBOX";
-        // Папка с письмами, содержащими ZIP/CER с новыми сертификатами
-        public string ImapNewCertificatesFolder { get; set; }
-            = "INBOX";
-        public int NotifyDaysThreshold { get; set; } = 10;          // сколько дней до окончания, чтобы слать
-        public string BimoidAccountsKrasnoflotskaya { get; set; }   // аккаунты для Краснофлотской (по одному в строке)
-        public string BimoidAccountsPionerskaya { get; set; }       // аккаунты для Пионерской (по одному в строке)
 
-        // Фильтры для поиска писем
-        public string FilterRecipient { get; set; } = "";
-        // Префикс темы, по которому определяется "новое" письмо (по умолчанию "Сертификат №" или "Сертификат")
-        public string FilterSubjectPrefix { get; set; } = "Сертификат";
-        //Разработка
-        public bool IsDevelopment { get; set; } = true;
-        // БД Firebird
-        public string FirebirdDbPath { get; set; }
-    = @"C:\DB_PHYSXN\CERTS.FDB";
-        public string FbServer { get; set; }
-    = "127.0.0.1";
-        public string FbUser { get; set; } = "SYSDBA";
+        // =========================================================
+        // IMAP FOLDERS
+        // =========================================================
+
+        private string _imapNewCertificatesFolder = "INBOX";
+        public string ImapNewCertificatesFolder
+        {
+            get => _imapNewCertificatesFolder;
+            set
+            {
+                if (_imapNewCertificatesFolder != value)
+                {
+                    _imapNewCertificatesFolder = value;
+                    OnPropertyChanged(nameof(ImapNewCertificatesFolder));
+                }
+            }
+        }
+
+        private string _imapRevocationsFolder = "INBOX";
+        public string ImapRevocationsFolder
+        {
+            get => _imapRevocationsFolder;
+            set
+            {
+                if (_imapRevocationsFolder != value)
+                {
+                    _imapRevocationsFolder = value;
+                    OnPropertyChanged(nameof(ImapRevocationsFolder));
+                }
+            }
+        }
+
+        // =========================================================
+        // FIREBIRD
+        // =========================================================
+
+        private string _firebirdDbPath = @"C:\DB_PHYSXN\CERTS.FDB";
+        public string FirebirdDbPath
+        {
+            get => _firebirdDbPath;
+            set
+            {
+                if (_firebirdDbPath != value)
+                {
+                    _firebirdDbPath = value;
+                    OnPropertyChanged(nameof(FirebirdDbPath));
+                }
+            }
+        }
+
+        private string _fbServer = "127.0.0.1";
+        public string FbServer
+        {
+            get => _fbServer;
+            set
+            {
+                if (_fbServer != value)
+                {
+                    _fbServer = value;
+                    OnPropertyChanged(nameof(FbServer));
+                }
+            }
+        }
+
+        private string _fbUser = "SYSDBA";
+        public string FbUser
+        {
+            get => _fbUser;
+            set
+            {
+                if (_fbUser != value)
+                {
+                    _fbUser = value;
+                    OnPropertyChanged(nameof(FbUser));
+                }
+            }
+        }
+
+        // ⚠ Пароль тоже вручную
         public string FbPassword { get; set; } = "masterkey";
-        public int FbDialect { get; set; } = 3;        
-        // Автозагрузка и трей
-        public bool AutoStart { get; set; } = false;
-        public bool MinimizeToTrayOnClose { get; set; } = true;
 
-        // Отправлять уведомления / запускать авто-проверку только в рабочие часы
-        public bool NotifyOnlyInWorkHours { get; set; } = true;
+        private int _fbDialect = 3;
+        public int FbDialect
+        {
+            get => _fbDialect;
+            set
+            {
+                if (_fbDialect != value)
+                {
+                    _fbDialect = value;
+                    OnPropertyChanged(nameof(FbDialect));
+                }
+            }
+        }
 
-        // Кодировка (если DbHelper ожидает поле FbCharset)
         public string FbCharset { get; set; } = "UTF8";
 
-        // Интервал проверки почты (в часах)
-        public int CheckIntervalMinutes { get; set; } = 60; // по умолчанию 60 минут
+        // =========================================================
+        // SERVER
+        // =========================================================
 
-        // Любые дополнительные настройки, которые захотите
-        public bool SomeFeatureToggle { get; set; } = false;
-
-        public string ImapServer
+        private int _checkIntervalMinutes = 60;
+        public int CheckIntervalMinutes
         {
-            get => MailHost;
-            set => MailHost = value;
+            get => _checkIntervalMinutes;
+            set
+            {
+                if (_checkIntervalMinutes != value)
+                {
+                    _checkIntervalMinutes = value;
+                    OnPropertyChanged(nameof(CheckIntervalMinutes));
+                }
+            }
         }
 
-        public int ImapPort
+        private int _notifyDaysThreshold = 10;
+        public int NotifyDaysThreshold
         {
-            get => MailPort;
-            set => MailPort = value;
+            get => _notifyDaysThreshold;
+            set
+            {
+                if (_notifyDaysThreshold != value)
+                {
+                    _notifyDaysThreshold = value;
+                    OnPropertyChanged(nameof(NotifyDaysThreshold));
+                }
+            }
         }
 
-        public string MailUser
+        private bool _notifyOnlyInWorkHours = true;
+        public bool NotifyOnlyInWorkHours
         {
-            get => MailLogin;
-            set => MailLogin = value;
+            get => _notifyOnlyInWorkHours;
+            set
+            {
+                if (_notifyOnlyInWorkHours != value)
+                {
+                    _notifyOnlyInWorkHours = value;
+                    OnPropertyChanged(nameof(NotifyOnlyInWorkHours));
+                }
+            }
         }
 
-        // Папка с письмами об аннулировании (если хотите отличную от общего ImapFolder)
-        public string ImapRevocationsFolder { get; set; } = "INBOX";
+        // =========================================================
+        // BIMOID
+        // =========================================================
 
-        // Регекс для строгой проверки темы аннулирований (можно поменять)
+        private string _bimoidAccountsKrasnoflotskaya;
+        public string BimoidAccountsKrasnoflotskaya
+        {
+            get => _bimoidAccountsKrasnoflotskaya;
+            set
+            {
+                if (_bimoidAccountsKrasnoflotskaya != value)
+                {
+                    _bimoidAccountsKrasnoflotskaya = value;
+                    OnPropertyChanged(nameof(BimoidAccountsKrasnoflotskaya));
+                }
+            }
+        }
+
+        private string _bimoidAccountsPionerskaya;
+        public string BimoidAccountsPionerskaya
+        {
+            get => _bimoidAccountsPionerskaya;
+            set
+            {
+                if (_bimoidAccountsPionerskaya != value)
+                {
+                    _bimoidAccountsPionerskaya = value;
+                    OnPropertyChanged(nameof(BimoidAccountsPionerskaya));
+                }
+            }
+        }
+
+        // =========================================================
+        // MISC / LEGACY
+        // =========================================================
+
+        public bool AutoStart { get; set; } = false;
+        public bool MinimizeToTrayOnClose { get; set; } = true;
+        public bool IsDevelopment { get; set; } = true;
+
         public string RevocationSubjectRegex { get; set; } =
             @"Сертификат\s+№\s*[A-F0-9]+.*(аннулирован|прекратил действие)";
+
+        // =========================================================
+        // LEGACY / BACKWARD COMPATIBILITY
+        // =========================================================
+
+        // ⚠ Используется в старом коде (MainWindow, Watchers)
+        // Оставляем для совместимости
+        private string _imapFolder = "INBOX";
+        public string ImapFolder
+        {
+            get => _imapFolder;
+            set
+            {
+                if (_imapFolder != value)
+                {
+                    _imapFolder = value;
+                    OnPropertyChanged(nameof(ImapFolder));
+                }
+            }
+        }
+
+        // Фильтр получателя (старый функционал)
+        private string _filterRecipient = "";
+        public string FilterRecipient
+        {
+            get => _filterRecipient;
+            set
+            {
+                if (_filterRecipient != value)
+                {
+                    _filterRecipient = value;
+                    OnPropertyChanged(nameof(FilterRecipient));
+                }
+            }
+        }
+
+        // Префикс темы письма (старый функционал)
+        private string _filterSubjectPrefix = "Сертификат";
+        public string FilterSubjectPrefix
+        {
+            get => _filterSubjectPrefix;
+            set
+            {
+                if (_filterSubjectPrefix != value)
+                {
+                    _filterSubjectPrefix = value;
+                    OnPropertyChanged(nameof(FilterSubjectPrefix));
+                }
+            }
+        }
     }
 }

@@ -31,6 +31,13 @@ namespace ImapCertWatcher.Utils
                     case "MailLogin": s.MailLogin = val; break;
                     case "MailPassword": s.MailPassword = val; break;
                     case "ImapFolder": s.ImapFolder = val; break;
+                    case "ImapNewCertificatesFolder":
+                        s.ImapNewCertificatesFolder = val;
+                        break;
+
+                    case "ImapRevocationsFolder":
+                        s.ImapRevocationsFolder = val;
+                        break;
                     case "FilterRecipient": s.FilterRecipient = val; break;
                     case "FilterSubjectPrefix": s.FilterSubjectPrefix = val; break;
 

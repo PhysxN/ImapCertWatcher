@@ -12,10 +12,28 @@ namespace ImapCertWatcher
     {
         private readonly Server.ServerHost _server;
         private bool _isChecking;
-        public ServerWindow(AppSettings settings)
+        public ServerWindow()
+
         {
             InitializeComponent();
-                        
+
+            AppSettings settings;
+            try
+            {
+                settings = SettingsLoader.Load("settings.txt");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    "Ошибка загрузки settings.txt:\n\n" + ex.Message,
+                    "Ошибка",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+
+                Close();
+                return;
+            }
+
             var db = new DbHelper(settings, AppendLog);
 
             if (!db.TryOpenConnection(out var err))
@@ -168,7 +186,15 @@ namespace ImapCertWatcher
             Progress.Visibility = Visibility.Collapsed;
         }
 
-
+        private void Settings_Click(object sender, RoutedEventArgs e)
+        {
+            var wnd = new ServerSettingsWindow(_server.Settings)
+            {
+                Owner = this
+            };
+            wnd.ShowDialog();
+            AppendLog("Настройки изменены. Перезапустите сервер.");
+        }
 
         private void Close_Click(object sender, RoutedEventArgs e)
         {
