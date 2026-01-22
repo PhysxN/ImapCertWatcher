@@ -1,4 +1,6 @@
 ﻿using ImapCertWatcher.Data;
+using ImapCertWatcher.Models;
+using ImapCertWatcher.Services;
 using ImapCertWatcher.Utils;
 using MailKit;
 using MailKit.Net.Imap;
@@ -17,6 +19,7 @@ namespace ImapCertWatcher
     public partial class ServerSettingsWindow : Window
     {
         private readonly AppSettings _settings;
+        private readonly NotificationManager _notificationManager;
         public ObservableCollection<string> ImapFolders { get; } =
     new ObservableCollection<string>();
 
@@ -33,6 +36,7 @@ namespace ImapCertWatcher
 
             _settings = settings;
             DataContext = _settings;
+            _notificationManager = new NotificationManager(_settings, s => { });
 
             // пароли вручную
             MailPasswordBox.Password = _settings.MailPassword;
@@ -202,6 +206,59 @@ namespace ImapCertWatcher
             finally
             {
                 Cursor = System.Windows.Input.Cursors.Arrow;
+            }
+        }
+
+        private void BtnTestBimoid_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                _notificationManager.SendTestMessage();
+
+                MessageBox.Show(
+                    "Тестовое сообщение отправлено.",
+                    "Bimoid",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    $"Ошибка отправки:\n{ex.Message}",
+                    "Ошибка",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+            }
+        }
+
+        private void BtnTestNewUserNotify_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                var fake = new CertRecord
+                {
+                    Fio = "Тестовый пользователь",
+                    CertNumber = "TEST-123456",
+                    DateStart = DateTime.Today,
+                    DateEnd = DateTime.Today.AddYears(1),
+                    Building = "Тест"
+                };
+
+                _notificationManager.SendTestNewUserNotification(fake);
+
+                MessageBox.Show(
+                    "Тестовое уведомление о новом пользователе отправлено.",
+                    "Тест",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    $"Ошибка теста:\n{ex.Message}",
+                    "Ошибка",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
             }
         }
 
