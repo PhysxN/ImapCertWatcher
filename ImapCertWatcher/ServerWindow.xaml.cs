@@ -2,9 +2,13 @@
 using ImapCertWatcher.Services;
 using ImapCertWatcher.Utils;
 using System;
+using System.Diagnostics;
+using System.Linq;
+using System.Reflection;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
-using System.Linq;
+using static System.Windows.Forms.VisualStyles.VisualStyleElement.Window;
 
 namespace ImapCertWatcher
 {
@@ -12,6 +16,7 @@ namespace ImapCertWatcher
     {
         private readonly Server.ServerHost _server;
         private bool _isChecking;
+        private CancellationTokenSource _checkCts;
         public ServerWindow()
 
         {
@@ -91,6 +96,28 @@ namespace ImapCertWatcher
             StatusText.Text = text;
         }
 
+        private void SetCheckingState(bool checking)
+        {
+            _isChecking = checking;
+
+            CheckNowButton.IsEnabled = !checking;
+            CheckAllButton.IsEnabled = !checking;
+            RestartButton.IsEnabled = !checking;
+            SettingsButton.IsEnabled = !checking;
+
+            CheckNowButton.Visibility = checking ? Visibility.Collapsed : Visibility.Visible;
+            CancelButton.Visibility = checking ? Visibility.Visible : Visibility.Collapsed;
+
+            Progress.Visibility = checking ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        private void Cancel_Click(object sender, RoutedEventArgs e)
+        {
+            AppendLog("Отмена операции...");
+
+            _checkCts?.Cancel();
+        }
+
         public void AppendLog(string text)
         {
             if (!Dispatcher.CheckAccess())
@@ -129,10 +156,9 @@ namespace ImapCertWatcher
 
             try
             {
-                _isChecking = true;
-                CheckNowButton.IsEnabled = false;
+                _checkCts = new CancellationTokenSource();
 
-                StartProgress(); // ✅ ВКЛ
+                SetCheckingState(true);
 
                 AppendLog("Ручная FAST-проверка");
                 SetStatus("Идёт проверка почты...");
@@ -141,11 +167,11 @@ namespace ImapCertWatcher
 
                 SetStatus("Сервер работает");
             }
+            
             finally
             {
-                StopProgress(); // ✅ ВЫКЛ
-                _isChecking = false;
-                CheckNowButton.IsEnabled = true;
+                SetCheckingState(false);
+                _checkCts = null;
             }
         }
 
@@ -156,8 +182,8 @@ namespace ImapCertWatcher
 
             try
             {
-                _isChecking = true;
-                CheckNowButton.IsEnabled = false;
+                _checkCts = new CancellationTokenSource();
+                SetCheckingState(true);
                 CheckAllButton.IsEnabled = false;
                 StartProgress();
                 AppendLog("ПОЛНАЯ проверка всех писем");
@@ -169,9 +195,8 @@ namespace ImapCertWatcher
             }
             finally
             {
-                StopProgress();
-                _isChecking = false;
-                CheckNowButton.IsEnabled = true;
+                SetCheckingState(false);
+                _checkCts = null;
                 CheckAllButton.IsEnabled = true;
             }
         }
@@ -194,6 +219,36 @@ namespace ImapCertWatcher
             };
             wnd.ShowDialog();
             AppendLog("Настройки изменены. Перезапустите сервер.");
+        }
+
+        private void Restart_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                AppendLog("Перезапуск сервера...");
+
+                string exePath = Assembly.GetExecutingAssembly().Location;
+
+                // Получаем аргументы текущего запуска
+                string args = string.Join(" ", Environment.GetCommandLineArgs().Skip(1));
+
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = exePath,
+                    Arguments = args,
+                    UseShellExecute = true
+                });
+
+                Application.Current.Shutdown();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    "Ошибка перезапуска:\n\n" + ex.Message,
+                    "Ошибка",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+            }
         }
 
         private void Close_Click(object sender, RoutedEventArgs e)

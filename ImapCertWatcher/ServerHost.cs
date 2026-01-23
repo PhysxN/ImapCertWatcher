@@ -128,7 +128,7 @@ namespace ImapCertWatcher.Server
         {
             var checkStartedAt = DateTime.Now;
 
-            await _newWatcher.CheckNewCertificatesFastAsync();
+            await _newWatcher.CheckNewCertificatesFastAsync();            
             await _revokeWatcher.CheckRevocationsFastAsync();
 
             var newCerts = _db.GetCertificatesAddedAfter(checkStartedAt);
