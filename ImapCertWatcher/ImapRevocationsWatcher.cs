@@ -10,6 +10,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace ImapCertWatcher.Services
@@ -22,7 +23,7 @@ namespace ImapCertWatcher.Services
 
         // Универсальный regex для номера сертификата
         private static readonly Regex CertNumberRegex = new Regex(
-            @"Сертификат\s*№\s*([0-9A-Fa-f]{20,})",
+            @"сертификат\s*№?\s*([0-9A-Fa-f]{20,})",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
         public ImapRevocationsWatcher(
@@ -52,8 +53,14 @@ namespace ImapCertWatcher.Services
         /// <summary>
         /// Основной метод. Счётчики ведутся внутри watcher’а.
         /// </summary>
-        public void ProcessRevocations(bool checkAllMessages)
+        public void ProcessRevocations(bool checkAllMessages, CancellationToken token)
         {
+            if (token.IsCancellationRequested)
+            {
+                Log("Обработка аннулирований прервана пользователем.");
+                return;
+            }
+
             int processed = 0;
             int applied = 0;
 
@@ -74,12 +81,12 @@ namespace ImapCertWatcher.Services
                             : SecureSocketOptions.StartTlsWhenAvailable);
                     Log($"IMAP подключение: {_settings.MailHost}:{_settings.MailPort}, SSL={_settings.MailUseSsl}");
 
-                    client.Authenticate(
-                        _settings.MailLogin,
-                        _settings.MailPassword);
+                    client.Authenticate(_settings.MailLogin, _settings.MailPassword);
 
-                    var folder = client.GetFolder(_settings.ImapFolder);
-                    folder.Open(FolderAccess.ReadOnly);
+                    string folderName = string.IsNullOrWhiteSpace(_settings.ImapRevocationsFolder) ? "INBOX" : _settings.ImapRevocationsFolder;
+                    IMailFolder folder = client.GetFolder(folderName) ?? client.Inbox;
+
+                    folder.Open(FolderAccess.ReadWrite);
 
                     var uids = checkAllMessages
                         ? folder.Search(SearchQuery.All)
@@ -89,9 +96,13 @@ namespace ImapCertWatcher.Services
 
                     foreach (var uid in uids)
                     {
-                        string uidStr = uid.ToString();
+                        if (token.IsCancellationRequested)
+                        {
+                            Log("Обработка аннулирований отменена");
+                            break;
+                        }
 
-                        //Log($"UID={uidStr}: проверка письма");
+                        string uidStr = uid.ToString();
 
                         if (_db.IsMailProcessed(folder.FullName, uidStr, "REVOKE"))
                         {
@@ -127,20 +138,12 @@ namespace ImapCertWatcher.Services
 
                         string certNumber = match.Groups[1].Value.Trim();
 
-                        bool ok = _db.FindAndMarkAsRevokedByCertNumber(
-                            certNumber,
-                            null,
-                            folder.FullName,
-                            null);
+                        bool ok = _db.FindAndMarkAsRevokedByCertNumber(certNumber, null, folder.FullName, null);
 
                         if (ok)
                         {
                             applied++;
                             Log($"Аннулирован сертификат: {certNumber}");
-                        }
-                        else
-                        {
-                            //Log($"Сертификат не найден в БД: {certNumber}");
                         }
 
                         MarkProcessed(folder, uidStr);
@@ -153,6 +156,10 @@ namespace ImapCertWatcher.Services
                     client.Disconnect(true);
                 }
             }
+            catch (OperationCanceledException)
+            {
+                Log("Обработка аннулирований отменена");
+            }
             catch (Exception ex)
             {
                 Log("Ошибка: " + ex.Message);
@@ -161,13 +168,7 @@ namespace ImapCertWatcher.Services
             Log($"Завершено. Обработано писем={processed}, аннулировано={applied}");
         }
 
-        public Task CheckRevocationsFastAsync()
-        {
-            return Task.Run(() =>
-            {
-                ProcessRevocations(checkAllMessages: false);
-            });
-        }
+
         private void MarkProcessed(IMailFolder folder, string uid)
         {
             try
@@ -178,6 +179,14 @@ namespace ImapCertWatcher.Services
             {
                 Log($"Ошибка MarkMailProcessed: {ex.Message}");
             }
+        }
+
+        public Task CheckRevocationsFastAsync(CancellationToken token)
+        {
+            return Task.Run(() =>
+            {
+                ProcessRevocations(false, token);
+            }, token);
         }
 
         private static string GetBodyText(MimeMessage msg)

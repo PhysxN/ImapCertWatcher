@@ -39,21 +39,28 @@ namespace ImapCertWatcher.Server
             _notifications = new NotificationManager(_settings, _log);
 
             _timer = new SafeAsyncTimer(
-                async ct =>
+            async ct =>
+            {
+                try
                 {
                     _log("ServerHost: проверка почты (FAST)");
 
                     var checkStartedAt = DateTime.Now;
 
-                    await _newWatcher.CheckNewCertificatesFastAsync();
-                    await _revokeWatcher.CheckRevocationsFastAsync();
+                    await _newWatcher.CheckNewCertificatesFastAsync(ct);
+                    await _revokeWatcher.CheckRevocationsFastAsync(ct);
 
                     var newCerts = _db.GetCertificatesAddedAfter(checkStartedAt);
                     if (newCerts.Count > 0)
                         _notifications.NotifyNewUsers(newCerts);
-                },
-                ex => _log("ServerHost error: " + ex.Message)
-            );
+                }
+                catch (OperationCanceledException)
+                {
+                    _log("Таймерная проверка отменена");
+                }
+            },
+            ex => _log("ServerHost error: " + ex.Message)
+        );
         }
 
 
@@ -105,7 +112,7 @@ namespace ImapCertWatcher.Server
 
                                 if (command == "FAST_CHECK")
                                 {
-                                    await RequestFastCheckAsync();
+                                    await RequestFastCheckAsync(CancellationToken.None);
                                 }
                             }
                         }
@@ -124,17 +131,26 @@ namespace ImapCertWatcher.Server
             });
         }
 
-        public async Task RequestFastCheckAsync()
+        public async Task RequestFastCheckAsync(CancellationToken token)
         {
-            var checkStartedAt = DateTime.Now;
-
-            await _newWatcher.CheckNewCertificatesFastAsync();            
-            await _revokeWatcher.CheckRevocationsFastAsync();
-
-            var newCerts = _db.GetCertificatesAddedAfter(checkStartedAt);
-            if (newCerts.Count > 0)
+            try
             {
-                _notifications.NotifyNewUsers(newCerts);
+                var checkStartedAt = DateTime.Now;
+
+                await Task.WhenAll(
+                    _newWatcher.CheckNewCertificatesFastAsync(token),
+                    _revokeWatcher.CheckRevocationsFastAsync(token)
+                );
+
+                var newCerts = _db.GetCertificatesAddedAfter(checkStartedAt);
+                if (newCerts.Count > 0)
+                {
+                    _notifications.NotifyNewUsers(newCerts);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                _log("FAST проверка отменена");
             }
         }
 
@@ -145,10 +161,10 @@ namespace ImapCertWatcher.Server
                 _log("ПОЛНАЯ проверка почты");
 
                 // ✅ новые сертификаты — ВСЕ письма
-                _newWatcher.ProcessNewCertificates(checkAllMessages: true);
+                _newWatcher.ProcessNewCertificates(true, CancellationToken.None);
 
                 // ✅ аннулирования — ВСЕ письма
-                _revokeWatcher.ProcessRevocations(checkAllMessages: true);
+                _revokeWatcher.ProcessRevocations(true, CancellationToken.None);
 
                 _log("ПОЛНАЯ проверка завершена");
             });

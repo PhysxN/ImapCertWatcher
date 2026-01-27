@@ -315,7 +315,13 @@ namespace ImapCertWatcher
 
                     // Первый запуск — через intervalMs (чтобы при сохранении настроек не запускать проверку немедленно)
                     _timer = new Timer(
-                        async _ => await DoCheckAsync(false, true), // isFromTimer = true
+                        async _ =>
+                        {
+                            using (var cts = new CancellationTokenSource(TimeSpan.FromMinutes(10)))
+                            {
+                                await DoCheckAsync(false, cts.Token, true);
+                            }
+                        },
                         null,
                         TimeSpan.FromMilliseconds(intervalMs),       // отложенный первый запуск
                         TimeSpan.FromMilliseconds(intervalMs));      // и потом по интервалу
@@ -1041,8 +1047,12 @@ namespace ImapCertWatcher
                 progressMailCheckLogs.Visibility = visibility;
             });
         }
-
-        private async Task DoCheckAsync(bool checkAllMessages, bool isFromTimer = false)
+        private Task DoCheckAsync(bool checkAllMessages, bool isFromTimer = false)
+        {
+            var cts = new CancellationTokenSource(TimeSpan.FromMinutes(10));
+            return DoCheckAsync(checkAllMessages, cts.Token, isFromTimer);
+        }
+        private async Task DoCheckAsync(    bool checkAllMessages,    CancellationToken token,    bool isFromTimer = false)
         {
             // если вызов по таймеру и включено ограничение — выходим вне рабочего времени
             if (isFromTimer && _settings.NotifyOnlyInWorkHours && !IsWorkingTime())
@@ -1070,11 +1080,15 @@ namespace ImapCertWatcher
             try
             {
                 // Используем Task.Run с timeout для более безопасного выполнения
-                using (var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromMinutes(10)))
+                await Task.Run(() =>
                 {
-                    await Task.Run(() => _newWatcher.ProcessNewCertificates(checkAllMessages), cts.Token);
-                    await Task.Run(() => _revWatcher.ProcessRevocations(checkAllMessages), cts.Token);
-                }
+                    _newWatcher.ProcessNewCertificates(checkAllMessages, token);
+                }, token);
+
+                await Task.Run(() =>
+                {
+                    _revWatcher.ProcessRevocations(checkAllMessages, token);
+                }, token);
 
                 // Всегда обновляем данные из БД, даже если не было новых писем
                 var newList = _db?.LoadAll(_showDeleted, _currentBuildingFilter);
@@ -1193,13 +1207,19 @@ namespace ImapCertWatcher
         private async void BtnManualCheck_Click(object sender, RoutedEventArgs e)
         {
             Log("Ручная проверка почты запущена");
-            await DoCheckAsync(false, false); // ручной запуск, игнорируем рабочее время
+            using (var cts = new CancellationTokenSource(TimeSpan.FromMinutes(10)))
+            {
+                await DoCheckAsync(false, cts.Token, false);
+            }
         }
 
         private async void BtnProcessAll_Click(object sender, RoutedEventArgs e)
         {
             Log("Обработка всех писем запущена");
-            await DoCheckAsync(true, false);
+            using (var cts = new CancellationTokenSource(TimeSpan.FromMinutes(10)))
+            {
+                await DoCheckAsync(false, cts.Token, false);
+            }
         }
 
 
@@ -2067,7 +2087,13 @@ namespace ImapCertWatcher
                     var period = TimeSpan.FromMilliseconds(intervalMs);
 
                     _timer = new Timer(
-                        async _ => await DoCheckAsync(false, true), // isFromTimer = true
+                        async _ =>
+                        {
+                            using (var cts = new CancellationTokenSource(TimeSpan.FromMinutes(10)))
+                            {
+                                await DoCheckAsync(false, cts.Token, false);
+                            }
+                        },
                         null,
                         due,    // первый запуск через due (не сразу)
                         period  // последующие запуски с периодом

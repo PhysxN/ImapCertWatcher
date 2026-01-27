@@ -5,6 +5,9 @@
         Width="520"
         Height="550"
         WindowStartupLocation="CenterOwner">
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter"/>
+    </Window.Resources>
 
     <ScrollViewer Padding="12">
         <StackPanel>
@@ -30,22 +33,22 @@
 
                 <TextBlock Grid.Row="0" Grid.Column="0" Text="IMAP сервер"/>
                 <TextBox Grid.Row="0" Grid.Column="1"
-                         Text="{Binding MailHost}"
+                         Text="{Binding MailHost, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                          ToolTip="Адрес IMAP сервера. Например: imap.yandex.ru"/>
 
                 <TextBlock Grid.Row="1" Grid.Column="0" Text="Порт"/>
                 <TextBox Grid.Row="1" Grid.Column="1"
-                         Text="{Binding MailPort}"
+                         Text="{Binding MailPort, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                          ToolTip="Обычно: 993 (SSL), 143 (без SSL)"/>
 
                 <TextBlock Grid.Row="2" Grid.Column="0" Text="SSL"/>
                 <CheckBox Grid.Row="2" Grid.Column="1"
-                          IsChecked="{Binding MailUseSsl}"
+                          IsChecked="{Binding MailUseSsl, Mode=TwoWay}"
                           ToolTip="Использовать защищенное соединение"/>
 
                 <TextBlock Grid.Row="3" Grid.Column="0" Text="Логин"/>
                 <TextBox Grid.Row="3" Grid.Column="1"
-                         Text="{Binding MailLogin}"
+                         Text="{Binding MailLogin, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                          ToolTip="Логин почтового ящика"/>
 
                 <TextBlock Grid.Row="4" Grid.Column="0" Text="Пароль"/>
@@ -58,10 +61,7 @@
                         HorizontalAlignment="Right"
                         Margin="0,4">
 
-                <Button Content="Обновить папки"
-                        Margin="0,0,6,0"
-                        Click="RefreshFolders_Click"
-                        ToolTip="Загрузить список папок с IMAP"/>
+                
 
                 <Button Content="Проверить почту"
                         Click="TestMail_Click"
@@ -73,31 +73,53 @@
                     <ColumnDefinition Width="170"/>
                     <ColumnDefinition Width="*"/>
                 </Grid.ColumnDefinitions>
+
                 <Grid.RowDefinitions>
-                    <RowDefinition/>
-                    <RowDefinition/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="6"/>
+                    <!-- под ProgressBar -->
                 </Grid.RowDefinitions>
+
+                <!-- Новые сертификаты -->
 
                 <TextBlock Grid.Row="0" Grid.Column="0" Text="Новые сертификаты"/>
 
-                <ComboBox x:Name="cmbNewCertsFolder"
-          Grid.Row="0" Grid.Column="1"
-          ItemsSource="{Binding ImapFolders, RelativeSource={RelativeSource AncestorType=Window}}"
-          SelectedItem="{Binding ImapNewCertificatesFolder, Mode=TwoWay}"
-          Text="{Binding ImapNewCertificatesFolder, Mode=TwoWay}"
-          IsEditable="True"
-          ToolTip="Папка с новыми сертификатами"/>
+                <ComboBox
+        Grid.Row="0"
+        Grid.Column="1"
+        x:Name="cmbNewCertsFolder"
+        ItemsSource="{Binding RelativeSource={RelativeSource AncestorType=Window}, Path=ImapFolders}"
+        SelectedItem="{Binding ImapNewCertificatesFolder, Mode=TwoWay}"
+        IsEditable="True"
+        IsEnabled="{Binding RelativeSource={RelativeSource AncestorType=Window}, Path=IsFoldersLoaded}"
+        Margin="0,4,0,8"/>
 
+                <!-- Аннулирования -->
 
                 <TextBlock Grid.Row="1" Grid.Column="0" Text="Аннулирования"/>
 
-                <ComboBox x:Name="cmbRevocationsFolder"
-          Grid.Row="1" Grid.Column="1"
-          ItemsSource="{Binding ImapFolders, RelativeSource={RelativeSource AncestorType=Window}}"
-          SelectedItem="{Binding ImapRevocationsFolder, Mode=TwoWay}"
-          Text="{Binding ImapRevocationsFolder, Mode=TwoWay}"
-          IsEditable="True"
-          ToolTip="Папка аннулирований"/>
+                <ComboBox
+        Grid.Row="1"
+        Grid.Column="1"
+        x:Name="cmbRevocationsFolder"
+        ItemsSource="{Binding RelativeSource={RelativeSource AncestorType=Window}, Path=ImapFolders}"
+        SelectedItem="{Binding ImapRevocationsFolder, Mode=TwoWay}"
+        IsEditable="True"
+        IsEnabled="{Binding RelativeSource={RelativeSource AncestorType=Window}, Path=IsFoldersLoaded}"
+        Margin="0,4,0,8"/>
+
+                <!-- Progress -->
+
+                <ProgressBar
+        Grid.Row="2"
+        Grid.ColumnSpan="2"
+        Height="4"
+        Margin="0,4,0,0"
+        IsIndeterminate="True"
+        Visibility="{Binding RelativeSource={RelativeSource AncestorType=Window},
+        Path=IsFoldersLoading,
+        Converter={StaticResource BooleanToVisibilityConverter}}"/>
             </Grid>
 
             <Separator Margin="0,12"/>
@@ -123,17 +145,17 @@
 
                 <TextBlock Grid.Row="0" Grid.Column="0" Text="Сервер"/>
                 <TextBox Grid.Row="0" Grid.Column="1"
-                         Text="{Binding FbServer}"
+                         Text="{Binding FbServer, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                          ToolTip="IP или имя сервера Firebird"/>
 
                 <TextBlock Grid.Row="1" Grid.Column="0" Text="Путь к БД"/>
                 <TextBox Grid.Row="1" Grid.Column="1"
-                         Text="{Binding FirebirdDbPath}"
+                         Text="{Binding FirebirdDbPath, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                          ToolTip="Полный путь к .fdb"/>
 
                 <TextBlock Grid.Row="2" Grid.Column="0" Text="Логин"/>
                 <TextBox Grid.Row="2" Grid.Column="1"
-                         Text="{Binding FbUser}"/>
+                         Text="{Binding FbUser, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
 
                 <TextBlock Grid.Row="3" Grid.Column="0" Text="Пароль"/>
                 <PasswordBox Grid.Row="3" Grid.Column="1"
@@ -141,7 +163,7 @@
 
                 <TextBlock Grid.Row="4" Grid.Column="0" Text="Диалект"/>
                 <TextBox Grid.Row="4" Grid.Column="1"
-                         Text="{Binding FbDialect}"
+                         Text="{Binding FbDialect, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                          ToolTip="Обычно 3"/>
             </Grid>
 
@@ -170,15 +192,15 @@
 
                 <TextBlock Grid.Row="0" Grid.Column="0" Text="Интервал (мин)"/>
                 <TextBox Grid.Row="0" Grid.Column="1"
-                         Text="{Binding CheckIntervalMinutes}"/>
+                         Text="{Binding CheckIntervalMinutes, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
 
                 <TextBlock Grid.Row="1" Grid.Column="0" Text="Уведомлять за (дней)"/>
                 <TextBox Grid.Row="1" Grid.Column="1"
-                         Text="{Binding NotifyDaysThreshold}"/>
+                         Text="{Binding NotifyDaysThreshold, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
             </Grid>
 
             <CheckBox Content="Рабочее время"
-                      IsChecked="{Binding NotifyOnlyInWorkHours}"
+                      IsChecked="{Binding NotifyOnlyInWorkHours, Mode=TwoWay}"
                       Margin="0,6,0,0"
                       ToolTip="Проверять только в рабочие часы"/>
 
@@ -191,12 +213,12 @@
                        Margin="0,0,0,6"/>
 
             <TextBlock Text="Краснофлотская"/>
-            <TextBox Text="{Binding BimoidAccountsKrasnoflotskaya}"
+            <TextBox Text="{Binding BimoidAccountsKrasnoflotskaya, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                      AcceptsReturn="True"
                      Height="60"/>
 
             <TextBlock Text="Пионерская" Margin="0,6,0,0"/>
-            <TextBox Text="{Binding BimoidAccountsPionerskaya}"
+            <TextBox Text="{Binding BimoidAccountsPionerskaya, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                      AcceptsReturn="True"
                      Height="60"/>
 

@@ -163,11 +163,15 @@ namespace ImapCertWatcher
                 AppendLog("Ручная FAST-проверка");
                 SetStatus("Идёт проверка почты...");
 
-                await _server.RequestFastCheckAsync();
+                await _server.RequestFastCheckAsync(_checkCts.Token);
 
                 SetStatus("Сервер работает");
             }
-            
+            catch (OperationCanceledException)
+            {
+                AppendLog("Проверка отменена");
+                SetStatus("Отменено");
+            }
             finally
             {
                 SetCheckingState(false);

@@ -9,55 +9,174 @@ using System;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
+using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows;
-using System.Windows.Controls;
 
 namespace ImapCertWatcher
 {
-    public partial class ServerSettingsWindow : Window
+    public partial class ServerSettingsWindow : Window, INotifyPropertyChanged
     {
         private readonly AppSettings _settings;
         private readonly NotificationManager _notificationManager;
-        public ObservableCollection<string> ImapFolders { get; } =
-    new ObservableCollection<string>();
 
-        public event PropertyChangedEventHandler PropertyChanged;
+        // ============================
+        // IMAP folders binding
+        // ============================
 
-        protected void OnPropertyChanged(string propertyName)
+        public ObservableCollection<string> ImapFolders { get; }
+            = new ObservableCollection<string>();
+
+        private bool _isFoldersLoading;
+        public bool IsFoldersLoading
         {
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+            get => _isFoldersLoading;
+            set
+            {
+                _isFoldersLoading = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(IsFoldersLoaded));
+            }
         }
+
+        public bool IsFoldersLoaded => !IsFoldersLoading;
+
+        // кеш папок (общий на всё приложение)
+        private static string[] _cachedImapFolders;
+
+        // ============================
+        // Constructor
+        // ============================
 
         public ServerSettingsWindow(AppSettings settings)
         {
             InitializeComponent();
 
             _settings = settings;
+
             DataContext = _settings;
+
             _notificationManager = new NotificationManager(_settings, s => { });
 
-            // пароли вручную
             MailPasswordBox.Password = _settings.MailPassword;
             DbPasswordBox.Password = _settings.FbPassword;
 
-            Loaded += ServerSettingsWindow_Loaded;
+            Loaded += async (_, __) => await AutoLoadFoldersAsync();
         }
 
-        private void ServerSettingsWindow_Loaded(object sender, RoutedEventArgs e)
+        // ============================
+        // Auto IMAP folder loading
+        // ============================
+
+        private async Task AutoLoadFoldersAsync()
         {
-            // Восстанавливаем значения из settings.txt
-            cmbNewCertsFolder.GetBindingExpression(ComboBox.TextProperty)?.UpdateTarget();
-            cmbRevocationsFolder.GetBindingExpression(ComboBox.TextProperty)?.UpdateTarget();
+            if (_cachedImapFolders != null)
+            {
+                ApplyFolders(_cachedImapFolders);
+                return;
+            }
+
+            IsFoldersLoading = true;
+
+            try
+            {
+                var folders = await LoadFoldersFromServer();
+                _cachedImapFolders = folders;
+                ApplyFolders(folders);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    "Ошибка загрузки папок IMAP:\n\n" + ex.Message,
+                    "IMAP",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+            }
+            finally
+            {
+                IsFoldersLoading = false;
+            }
         }
+
+        private async Task<string[]> LoadFoldersFromServer()
+        {
+            var result = new ObservableCollection<string>();
+
+            using (var client = new ImapClient())
+            {
+                client.ServerCertificateValidationCallback = (s, c, h, e) => true;
+
+                await client.ConnectAsync(
+                    _settings.MailHost,
+                    _settings.MailPort,
+                    _settings.MailUseSsl
+                        ? SecureSocketOptions.SslOnConnect
+                        : SecureSocketOptions.StartTlsWhenAvailable);
+
+                await client.AuthenticateAsync(
+                    _settings.MailLogin,
+                    MailPasswordBox.Password);
+
+                var root = client.GetFolder(client.PersonalNamespaces[0]);
+
+                var folders = await root.GetSubfoldersAsync(false);
+
+                foreach (var folder in folders)
+                {
+                    await LoadFoldersRecursive(folder, result);
+                }
+
+                await client.DisconnectAsync(true);
+            }
+
+            return result.ToArray();
+        }
+
+        private async Task LoadFoldersRecursive(
+    IMailFolder folder,
+    ObservableCollection<string> acc)
+        {
+            acc.Add(folder.FullName);
+
+            var subs = await folder.GetSubfoldersAsync(false);
+
+            foreach (var sub in subs)
+            {
+                await LoadFoldersRecursive(sub, acc);
+            }
+        }
+
+        private void ApplyFolders(string[] folders)
+        {
+            ImapFolders.Clear();
+
+            foreach (var f in folders)
+                ImapFolders.Add(f);
+
+            // восстанавливаем сохранённые значения
+            cmbNewCertsFolder.SelectedItem = _settings.ImapNewCertificatesFolder;
+            cmbRevocationsFolder.SelectedItem = _settings.ImapRevocationsFolder;
+        }
+
+        // ============================
+        // SAVE SETTINGS
+        // ============================
 
         private void Save_Click(object sender, RoutedEventArgs e)
         {
             _settings.MailPassword = MailPasswordBox.Password;
             _settings.FbPassword = DbPasswordBox.Password;
 
+            _settings.ImapNewCertificatesFolder = cmbNewCertsFolder.Text;
+            _settings.ImapRevocationsFolder = cmbRevocationsFolder.Text;
+
             SaveSettings("settings.txt", _settings);
+
+            MessageBox.Show(
+                $"NEW: {_settings.ImapNewCertificatesFolder}\nREVOKE: {_settings.ImapRevocationsFolder}",
+                "Сохранено");
 
             MessageBox.Show(
                 "Настройки сохранены.\nПерезапустите сервер.",
@@ -68,53 +187,9 @@ namespace ImapCertWatcher
             Close();
         }
 
-        private async void RefreshFolders_Click(object sender, RoutedEventArgs e)
-        {
-            ImapFolders.Clear();
-
-            try
-            {
-                using (var client = new ImapClient())
-                {
-                    client.ServerCertificateValidationCallback =
-                        (clientSender, certificate, chain, errors) => true;
-
-                    await client.ConnectAsync(
-                        _settings.MailHost,
-                        _settings.MailPort,
-                        _settings.MailUseSsl
-                            ? SecureSocketOptions.SslOnConnect
-                            : SecureSocketOptions.StartTlsWhenAvailable);
-
-                    await client.AuthenticateAsync(
-                        _settings.MailLogin,
-                        MailPasswordBox.Password);
-
-                    var root = client.GetFolder(client.PersonalNamespaces[0]);
-
-                    await LoadFoldersRecursive(root);
-
-                    Dispatcher.Invoke(() =>
-                    {
-                        if (ImapFolders.Contains(_settings.ImapNewCertificatesFolder))
-                            _settings.ImapNewCertificatesFolder = _settings.ImapNewCertificatesFolder;
-
-                        if (ImapFolders.Contains(_settings.ImapRevocationsFolder))
-                            _settings.ImapRevocationsFolder = _settings.ImapRevocationsFolder;
-                    });
-
-                    await client.DisconnectAsync(true);
-                }
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show(
-                    ex.Message,
-                    "Ошибка IMAP",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Error);
-            }
-        }
+        // ============================
+        // TEST MAIL
+        // ============================
 
         private async void TestMail_Click(object sender, RoutedEventArgs e)
         {
@@ -122,7 +197,7 @@ namespace ImapCertWatcher
             {
                 Cursor = System.Windows.Input.Cursors.Wait;
 
-                using (var client = new MailKit.Net.Imap.ImapClient())
+                using (var client = new ImapClient())
                 {
                     client.ServerCertificateValidationCallback =
                         (s, c, h, er) => true;
@@ -131,8 +206,8 @@ namespace ImapCertWatcher
                         _settings.MailHost,
                         _settings.MailPort,
                         _settings.MailUseSsl
-                            ? MailKit.Security.SecureSocketOptions.SslOnConnect
-                            : MailKit.Security.SecureSocketOptions.StartTlsWhenAvailable);
+                            ? SecureSocketOptions.SslOnConnect
+                            : SecureSocketOptions.StartTlsWhenAvailable);
 
                     await client.AuthenticateAsync(
                         _settings.MailLogin,
@@ -160,6 +235,10 @@ namespace ImapCertWatcher
                 Cursor = System.Windows.Input.Cursors.Arrow;
             }
         }
+
+        // ============================
+        // TEST FIREBIRD
+        // ============================
 
         private void TestDb_Click(object sender, RoutedEventArgs e)
         {
@@ -208,6 +287,10 @@ namespace ImapCertWatcher
                 Cursor = System.Windows.Input.Cursors.Arrow;
             }
         }
+
+        // ============================
+        // BIMOID TEST
+        // ============================
 
         private void BtnTestBimoid_Click(object sender, RoutedEventArgs e)
         {
@@ -262,49 +345,51 @@ namespace ImapCertWatcher
             }
         }
 
-        private async Task LoadFoldersRecursive(IMailFolder folder)
-        {
-            ImapFolders.Add(folder.FullName);
-
-            var subs = await folder.GetSubfoldersAsync(false);
-            foreach (var sub in subs)
-            {
-                await LoadFoldersRecursive(sub);
-            }
-        }
+        // ============================
+        // SETTINGS SAVE FILE
+        // ============================
 
         private static void SaveSettings(string path, AppSettings s)
         {
             var lines = new[]
             {
-        // ===== MAIL =====
-        $"MailHost={s.MailHost}",
-        $"MailPort={s.MailPort}",
-        $"MailUseSsl={s.MailUseSsl}",
-        $"MailLogin={s.MailLogin}",
-        $"MailPassword={s.MailPassword}",
-        $"ImapNewCertificatesFolder={s.ImapNewCertificatesFolder}",
-        $"ImapRevocationsFolder={s.ImapRevocationsFolder}",
+                // ===== MAIL =====
+                $"MailHost={s.MailHost}",
+                $"MailPort={s.MailPort}",
+                $"MailUseSsl={s.MailUseSsl}",
+                $"MailLogin={s.MailLogin}",
+                $"MailPassword={s.MailPassword}",
+                $"ImapNewCertificatesFolder={s.ImapNewCertificatesFolder}",
+                $"ImapRevocationsFolder={s.ImapRevocationsFolder}",
 
-        // ===== FIREBIRD =====
-        $"FirebirdDbPath={s.FirebirdDbPath}",
-        $"FbServer={s.FbServer}",
-        $"FbUser={s.FbUser}",
-        $"FbPassword={s.FbPassword}",
-        $"FbDialect={s.FbDialect}",
-        $"FbCharset={s.FbCharset}",
+                // ===== FIREBIRD =====
+                $"FirebirdDbPath={s.FirebirdDbPath}",
+                $"FbServer={s.FbServer}",
+                $"FbUser={s.FbUser}",
+                $"FbPassword={s.FbPassword}",
+                $"FbDialect={s.FbDialect}",
+                $"FbCharset={s.FbCharset}",
 
-        // ===== SERVER =====
-        $"CheckIntervalMinutes={s.CheckIntervalMinutes}",
-        $"NotifyDaysThreshold={s.NotifyDaysThreshold}",
-        $"NotifyOnlyInWorkHours={s.NotifyOnlyInWorkHours}",
+                // ===== SERVER =====
+                $"CheckIntervalMinutes={s.CheckIntervalMinutes}",
+                $"NotifyDaysThreshold={s.NotifyDaysThreshold}",
+                $"NotifyOnlyInWorkHours={s.NotifyOnlyInWorkHours}",
 
-        // ===== BIMOID =====
-        $"BimoidAccountsKrasnoflotskaya={s.BimoidAccountsKrasnoflotskaya?.Replace(Environment.NewLine, "\\n")}",
-        $"BimoidAccountsPionerskaya={s.BimoidAccountsPionerskaya?.Replace(Environment.NewLine, "\\n")}",
-    };
+                // ===== BIMOID =====
+                $"BimoidAccountsKrasnoflotskaya={s.BimoidAccountsKrasnoflotskaya?.Replace(Environment.NewLine, "\\n")}",
+                $"BimoidAccountsPionerskaya={s.BimoidAccountsPionerskaya?.Replace(Environment.NewLine, "\\n")}",
+            };
 
             File.WriteAllLines(path, lines, Encoding.UTF8);
         }
+
+        // ============================
+        // INotifyPropertyChanged
+        // ============================
+
+        public event PropertyChangedEventHandler PropertyChanged;
+
+        private void OnPropertyChanged([CallerMemberName] string name = null)
+            => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
     }
 }

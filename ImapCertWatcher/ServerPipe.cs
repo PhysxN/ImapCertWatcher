@@ -1,6 +1,7 @@
 ﻿using System.IO;
 using System.IO.Pipes;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace ImapCertWatcher.Server
@@ -34,7 +35,7 @@ namespace ImapCertWatcher.Server
 
                         if (cmd == "FAST_CHECK")
                         {
-                            await _server.RequestFastCheckAsync();
+                            await _server.RequestFastCheckAsync(CancellationToken.None);
                             await writer.WriteLineAsync("OK");
                         }
                         else
