@@ -51,7 +51,22 @@ namespace ImapCertWatcher
         private bool _isDarkTheme = false;
         private const string AUTOSTART_REG_PATH = @"Software\Microsoft\Windows\CurrentVersion\Run";
         private const string AUTOSTART_VALUE_NAME = "ImapCertWatcher";
-
+        private DispatcherTimer _serverStatusTimer;
+        private DispatcherTimer _serverMonitorTimer;
+        private DispatcherTimer _connectingAnimationTimer;
+        private int _connectingDots = 0;
+        private bool _reconnectInProgress = false;
+        private bool _wasOffline = true;
+        enum ServerConnectionState
+        {
+            Connecting,
+            Online,
+            Busy,
+            Offline
+        }
+        private int _reconnectDelaySeconds = 2;
+        private const int MAX_RECONNECT_DELAY = 30;
+        private ServerConnectionState _serverState = ServerConnectionState.Offline;
         private void ApplyAutoStartSetting()
         {
             try
@@ -199,6 +214,174 @@ namespace ImapCertWatcher
             catch { }
         }
 
+
+        private void SetServerState(ServerConnectionState state)
+        {
+            _serverState = state;
+
+            Dispatcher.Invoke(() =>
+            {
+                if (state == ServerConnectionState.Connecting)
+                    StartConnectingAnimation();
+                else
+                    StopConnectingAnimation();
+
+                switch (state)
+                {
+
+                    case ServerConnectionState.Connecting:
+                        txtServerStatus.Text = "🟡 Подключение к серверу...";
+                        txtServerStatus.Foreground = Brushes.Gold;
+                        break;
+
+                    case ServerConnectionState.Online:
+                        txtServerStatus.Text = "🟢 Сервер готов";
+                        txtServerStatus.Foreground = Brushes.LimeGreen;
+                        break;
+
+                    case ServerConnectionState.Busy:
+                        txtServerStatus.Text = "🟠 Сервер работает";
+                        txtServerStatus.Foreground = Brushes.Orange;
+                        break;
+
+                    case ServerConnectionState.Offline:
+                        txtServerStatus.Text = "🔴 Сервер OFFLINE";
+                        txtServerStatus.Foreground = Brushes.Red;
+                        break;
+                }
+            });
+        }
+
+
+        private void StartServerMonitor()
+        {
+            _serverMonitorTimer = new DispatcherTimer();
+            _serverMonitorTimer.Interval = TimeSpan.FromSeconds(2);
+            _serverMonitorTimer.Tick += async (s, e) =>
+            {
+                await UpdateServerMonitor();
+            };
+
+            _serverMonitorTimer.Start();
+        }
+
+        private async Task UpdateServerMonitor()
+        {
+            try
+            {
+                if (_serverState == ServerConnectionState.Offline && _wasOffline)
+                {
+                    _wasOffline = false;
+                    SetServerState(ServerConnectionState.Connecting);
+                }
+
+                var status = await TcpCommandClient.SendAsync(
+                    _settings.ServerIp,
+                    _settings.ServerPort,
+                    "STATUS");
+                AddToMiniLog("SERVER STATUS RAW: " + status);
+
+                var progress = await TcpCommandClient.SendAsync(
+                    _settings.ServerIp,
+                    _settings.ServerPort,
+                    "GET_PROGRESS");
+
+                var timer = await TcpCommandClient.SendAsync(
+                    _settings.ServerIp,
+                    _settings.ServerPort,
+                    "GET_TIMER");
+
+                var log = await TcpCommandClient.SendAsync(
+                    _settings.ServerIp,
+                    _settings.ServerPort,
+                    "GET_LOG");
+
+                
+                    UpdateStatusUI(status);
+                    UpdateProgressUI(progress);
+                    UpdateTimerUI(timer);
+                    UpdateServerLog(log);
+                
+
+                _reconnectDelaySeconds = 2; // reset backoff on success
+                _wasOffline = false;
+            }
+            catch
+            {
+                _wasOffline = true;
+                SetServerState(ServerConnectionState.Offline);
+
+                Dispatcher.Invoke(() =>
+                {
+                    pbServerProgress.Visibility = Visibility.Collapsed;
+                });
+
+                StartReconnectBackoff();
+            }
+        }
+
+        private void UpdateServerLog(string log)
+        {
+            if (!log.StartsWith("LOG"))
+                return;
+
+            var content = log.Replace("LOG ", "");
+
+            txtMiniLog.Text = content;
+        }
+
+        private void UpdateStatusUI(string status)
+        {
+            if (string.IsNullOrWhiteSpace(status))
+                return;
+
+            status = status.Trim().ToUpperInvariant();
+
+            // убираем префикс
+            if (status.StartsWith("STATUS"))
+                status = status.Replace("STATUS", "").Trim();
+
+            if (status == "BUSY")
+            {
+                SetServerState(ServerConnectionState.Busy);
+            }
+            else if (status == "IDLE")
+            {
+                SetServerState(ServerConnectionState.Online);
+            }
+            else
+            {
+                SetServerState(ServerConnectionState.Offline);
+            }
+        }
+
+        private void UpdateProgressUI(string progress)
+        {
+            if (!progress.StartsWith("PROGRESS"))
+                return;
+
+            var data = progress.Replace("PROGRESS ", "").Split('|');
+
+            var percent = int.Parse(data[0]);
+            var stage = data[1];
+
+            pbServerProgress.Visibility = Visibility.Visible;
+            pbServerProgress.Value = percent;
+        }
+
+        private void UpdateTimerUI(string timer)
+        {
+            if (timer.Contains("READY"))
+                txtNextCheck.Text = "Следующая проверка: сейчас";
+            else
+            {
+                var min = timer.Replace("TIMER ", "");
+                txtNextCheck.Text = $"Следующая проверка через {min} мин";
+            }
+        }
+
+        
+
         private void ExitFromTray()
         {
             try
@@ -213,6 +396,40 @@ namespace ImapCertWatcher
                 this.Close();
             }
             catch { }
+        }
+
+        private void StartConnectingAnimation()
+        {
+            if (_connectingAnimationTimer == null)
+                _connectingAnimationTimer = new DispatcherTimer();
+
+            _connectingAnimationTimer.Interval = TimeSpan.FromMilliseconds(400);
+
+            _connectingAnimationTimer.Tick -= ConnectingAnimationTick;
+            _connectingAnimationTimer.Tick += ConnectingAnimationTick;
+
+            if (!_connectingAnimationTimer.IsEnabled)
+                _connectingAnimationTimer.Start();
+        }
+
+        private void ConnectingAnimationTick(object sender, EventArgs e)
+        {
+            if (_serverState != ServerConnectionState.Connecting)
+                return;
+
+            _connectingDots = (_connectingDots + 1) % 4;
+
+            txtServerStatus.Text =
+                "🟡 Подключение к серверу" + new string('.', _connectingDots);
+        }
+
+        private void StopConnectingAnimation()
+        {
+            if (_connectingAnimationTimer != null)
+            {
+                _connectingAnimationTimer.Stop();
+                _connectingDots = 0;
+            }
         }
 
         protected override void OnStateChanged(EventArgs e)
@@ -230,6 +447,45 @@ namespace ImapCertWatcher
                     "ImapCertWatcher",
                     "Приложение свернуто в трей и продолжит работать.",
                     Forms.ToolTipIcon.Info);
+            }
+        }
+
+        
+        private async Task UpdateServerStatus()
+        {
+            try
+            {
+                var response = await TcpCommandClient.SendAsync(
+                    _settings.ServerIp,
+                    _settings.ServerPort,
+                    "STATUS");
+
+                Dispatcher.Invoke(() =>
+                {
+                    if (response.Contains("BUSY"))
+                    {
+                        txtServerStatus.Text = "🟡 Сервер занят";
+                        txtServerStatus.Foreground = Brushes.Orange;
+                    }
+                    else if (response.Contains("IDLE"))
+                    {
+                        txtServerStatus.Text = "🟢 Сервер готов";
+                        txtServerStatus.Foreground = Brushes.Green;
+                    }
+                    else
+                    {
+                        txtServerStatus.Text = "⚪ Неизвестный статус";
+                        txtServerStatus.Foreground = Brushes.Gray;
+                    }
+                });
+            }
+            catch
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    txtServerStatus.Text = "🔴 Сервер недоступен";
+                    txtServerStatus.Foreground = Brushes.Red;
+                });
             }
         }
 
@@ -299,7 +555,8 @@ namespace ImapCertWatcher
                 System.Diagnostics.Debug.WriteLine("Вызываю DataLoaded...");
 
                 // ★ УБИРАЕМ ЗАДЕРЖКУ - ЗАКРЫВАЕМ СРАЗУ ★
-                DataLoaded?.Invoke();
+                DataLoaded?.Invoke();                
+                StartServerMonitor();
                 // Инициализируем менеджер уведомлений после получения настроек
                 statusText.Text = "Готово";
                 AddToMiniLog($"Инициализация завершена. Загружено записей: {_allItems.Count}");
@@ -318,6 +575,7 @@ namespace ImapCertWatcher
 
                 // Даже при ошибке уведомляем о завершении
                 DataLoaded?.Invoke();
+                StartServerMonitor();
             }
         }
 
@@ -1454,6 +1712,28 @@ namespace ImapCertWatcher
             }
         }
 
+        private async void StartReconnectBackoff()
+        {
+            if (_reconnectInProgress)
+                return;
+
+            _reconnectInProgress = true;
+
+            Dispatcher.Invoke(() =>
+            {
+                txtServerStatus.Text =
+                    $"🔴 Сервер OFFLINE — повтор через {_reconnectDelaySeconds} сек";
+                txtServerStatus.Foreground = Brushes.Red;
+            });
+
+            await Task.Delay(_reconnectDelaySeconds * 1000);
+
+            _reconnectDelaySeconds =
+                Math.Min(_reconnectDelaySeconds * 2, MAX_RECONNECT_DELAY);
+
+            _reconnectInProgress = false;
+            SetServerState(ServerConnectionState.Connecting);
+        }
         private void DgCerts_ContextMenuOpening(object sender, ContextMenuEventArgs e)
         {
             if (dgCerts.SelectedItem is CertRecord record)
@@ -2151,6 +2431,8 @@ namespace ImapCertWatcher
 
         protected override void OnClosed(EventArgs e)
         {
+            _serverStatusTimer?.Stop();
+            _serverMonitorTimer?.Stop();
             base.OnClosed(e);
 
             

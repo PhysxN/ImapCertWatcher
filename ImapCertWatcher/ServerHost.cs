@@ -1,13 +1,14 @@
 ﻿using ImapCertWatcher.Data;
+using ImapCertWatcher.Server;
 using ImapCertWatcher.Services;
 using ImapCertWatcher.Utils;
 using System;
 using System.IO;
 using System.IO.Pipes;
+using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using ImapCertWatcher.Server;
 
 
 namespace ImapCertWatcher.Server
@@ -37,6 +38,11 @@ namespace ImapCertWatcher.Server
         private DateTime _lastCheckTime = DateTime.MinValue;
 
         private readonly TimeSpan _minCheckInterval = TimeSpan.FromMinutes(10);
+        private volatile int _progressPercent = 0;
+        private volatile string _currentStage = "IDLE";
+        private readonly object _logLock = new object();
+
+        private DateTime _nextTimerRun = DateTime.MinValue;
 
         public ServerHost(AppSettings settings, DbHelper db, Action<string> log)
         {
@@ -51,7 +57,7 @@ namespace ImapCertWatcher.Server
             _timer = new SafeAsyncTimer(
                         async ct =>
                         {
-                            await RequestFastCheckAsync(ct);
+                            _nextTimerRun = DateTime.Now.AddMinutes(_settings.CheckIntervalMinutes);
                         },
                         ex => _log("ServerHost timer error: " + ex.Message)
                         );
@@ -63,6 +69,8 @@ namespace ImapCertWatcher.Server
             if (_settings.CheckIntervalMinutes > 0)
             {
                 var interval = TimeSpan.FromMinutes(_settings.CheckIntervalMinutes);
+
+                _nextTimerRun = DateTime.Now.Add(interval);
 
                 _timer.Start(
                     initialDelay: interval,
@@ -100,6 +108,19 @@ namespace ImapCertWatcher.Server
                     return _checkLock.CurrentCount == 0
                         ? "STATUS BUSY"
                         : "STATUS IDLE";
+
+                case "GET_PROGRESS":
+                    return $"PROGRESS {_progressPercent}|{_currentStage}";
+
+                case "GET_TIMER":
+                    var remain = (_nextTimerRun - DateTime.Now);
+                    if (remain.TotalSeconds < 0)
+                        return "TIMER READY";
+
+                    return $"TIMER {(int)remain.TotalMinutes + 1}";
+
+                case "GET_LOG":
+                    return "LOG " + GetLastServerLogLines();
 
                 default:
                     return "UNKNOWN COMMAND";
@@ -174,9 +195,13 @@ namespace ImapCertWatcher.Server
                 _lastCheckTime = DateTime.Now;
 
                 _log("FAST CHECK started");
+                _progressPercent = 5;
+                _currentStage = "Connecting";
 
                 var startedAt = DateTime.Now;
 
+                _progressPercent = 30;
+                _currentStage = "Checking mail";
                 await Task.WhenAll(
                     _newWatcher.CheckNewCertificatesFastAsync(token),
                     _revokeWatcher.CheckRevocationsFastAsync(token)
@@ -184,10 +209,14 @@ namespace ImapCertWatcher.Server
 
                 var newCerts = _db.GetCertificatesAddedAfter(startedAt);
 
+                _progressPercent = 80;
+                _currentStage = "Saving data";
                 if (newCerts.Count > 0)
                     _notifications.NotifyNewUsers(newCerts);
 
                 _log("FAST CHECK finished");
+                _progressPercent = 100;
+                _currentStage = "IDLE";
 
                 return "OK FAST DONE";
             }
@@ -213,7 +242,25 @@ namespace ImapCertWatcher.Server
             });
         }
 
-        
+        private string GetLastServerLogLines(int count = 20)
+        {
+            try
+            {
+                var logFile = LogSession.SessionLogFile;
+
+                if (!File.Exists(logFile))
+                    return "";
+
+                var lines = File.ReadAllLines(logFile);
+
+                return string.Join("\n",
+                    lines.Skip(Math.Max(0, lines.Length - count)));
+            }
+            catch
+            {
+                return "";
+            }
+        }
         public void Dispose()
         {
             _pipeCts?.Cancel();

@@ -16,15 +16,21 @@
                 <Grid Margin="8">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
+                        <!-- кнопки -->
                         <RowDefinition Height="Auto"/>
+                        <!-- сервер статус -->
                         <RowDefinition Height="Auto"/>
+                        <!-- поиск -->
+                        <RowDefinition Height="Auto"/>
+                        <!-- фильтры -->
                         <RowDefinition Height="*"/>
-                        <!-- Мини-лог -->
+                        <!-- таблица -->
                         <RowDefinition Height="Auto"/>
-                        <!-- Статус -->
+                        <!-- статус -->
                         <RowDefinition Height="Auto"/>
-                        <!-- Прогресс-бар -->
+                        <!-- минилог -->
                         <RowDefinition Height="Auto"/>
+                        <!-- прогресс -->
                     </Grid.RowDefinitions>
 
                     <!-- Панель управления -->
@@ -57,10 +63,51 @@
                                 Style="{StaticResource ModernButtonStyle}"
                                 Click="BtnLoadCer_Click"
                                 ToolTip="Загрузить файл сертификата (*.cer)"/>
+                        <TextBlock x:Name="txtServerStatus"
+           Text="⚪ Сервер: неизвестно"
+           FontWeight="Bold"
+           Margin="5"/>
                     </StackPanel>
+                    <!-- Server monitor panel -->
+                    <Border Grid.Row="1"
+        Margin="0,0,0,6"
+        Padding="6"
+        CornerRadius="6"
+        BorderBrush="{DynamicResource BorderColorBrush}"
+        BorderThickness="1"
+        Background="{DynamicResource ControlBackgroundBrush}">
+
+                        <DockPanel>
+
+                            <!-- Server status -->
+                            <TextBlock x:Name="txtServerState"
+                   Text="⚪ Сервер: подключение..."
+                   FontWeight="SemiBold"
+                   DockPanel.Dock="Left"
+                   Foreground="{DynamicResource TextColorBrush}"/>
+
+                            <!-- Next check timer -->
+                            <TextBlock x:Name="txtNextCheck"
+                   Text="Следующая проверка: --:--"
+                   Margin="16,0,0,0"
+                   DockPanel.Dock="Left"
+                   Foreground="{DynamicResource TextColorBrush}"/>
+
+                            <!-- Progress -->
+                            <ProgressBar x:Name="pbServerProgress"
+                     Width="160"
+                     Height="14"
+                     Margin="12,0,0,0"
+                     DockPanel.Dock="Right"
+                     Visibility="Collapsed"
+                     IsIndeterminate="True"/>
+
+                        </DockPanel>
+
+                    </Border>
 
                     <!-- Поиск по ФИО -->
-                    <StackPanel Orientation="Horizontal" Grid.Row="1" Margin="0,0,0,8">
+                    <StackPanel Orientation="Horizontal" Grid.Row="2" Margin="0,0,0,8">
                         <TextBlock Text="Поиск по ФИО:" VerticalAlignment="Center" Margin="0,0,8,0"
                                    Foreground="{DynamicResource TextColorBrush}"/>
                         <TextBox x:Name="txtSearchFio" Width="300" 
@@ -75,7 +122,7 @@
                     </StackPanel>
 
                     <!-- Фильтры -->
-                    <StackPanel Orientation="Horizontal" Grid.Row="2" Margin="0,0,0,8">
+                    <StackPanel Orientation="Horizontal" Grid.Row="3" Margin="0,0,0,8">
                         <TextBlock Text="Фильтр по зданию:" VerticalAlignment="Center" Margin="0,0,8,0"
                                    Foreground="{DynamicResource TextColorBrush}"/>
                         <RadioButton x:Name="rbAllBuildings" Content="Все" GroupName="BuildingFilter" 
@@ -94,7 +141,7 @@
                     </StackPanel>
 
                     <!-- Таблица сертификатов -->
-                    <DataGrid x:Name="dgCerts" Grid.Row="3" 
+                    <DataGrid x:Name="dgCerts" Grid.Row="4" 
                               EnableRowVirtualization="True"
                               EnableColumnVirtualization="True"
                               VirtualizingPanel.IsVirtualizing="True"
@@ -174,7 +221,7 @@
                     </DataGrid>
 
                     <!-- Статус бар -->
-                    <StatusBar Grid.Row="4" Margin="0,8,0,4" Background="{DynamicResource ControlBackgroundBrush}">
+                    <StatusBar Grid.Row="5" Margin="0,8,0,4" Background="{DynamicResource ControlBackgroundBrush}">
                         <StatusBarItem>
                             <TextBlock x:Name="statusText" Foreground="{DynamicResource TextColorBrush}">Готов</TextBlock>
                         </StatusBarItem>
@@ -189,7 +236,7 @@
                     </StatusBar>
 
                     <!-- Мини-лог -->
-                    <Border Grid.Row="5" Margin="0,4,0,4" BorderBrush="{DynamicResource BorderColorBrush}" BorderThickness="1"
+                    <Border Grid.Row="6" Margin="0,4,0,4" BorderBrush="{DynamicResource BorderColorBrush}" BorderThickness="1"
                             Background="{DynamicResource ControlBackgroundBrush}" CornerRadius="4">
                         <TextBlock x:Name="txtMiniLog" 
                                    Margin="4,2"
@@ -202,7 +249,7 @@
                     </Border>
 
                     <!-- Прогресс-бар проверки почты -->
-                    <ProgressBar x:Name="progressMailCheck" Grid.Row="6" 
+                    <ProgressBar x:Name="progressMailCheck" Grid.Row="7" 
                                  Height="6" Margin="0,4,0,2"
                                  Visibility="Collapsed"
                                  IsIndeterminate="True"
