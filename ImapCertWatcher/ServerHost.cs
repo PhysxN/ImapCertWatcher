@@ -7,6 +7,7 @@ using System.IO.Pipes;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using ImapCertWatcher.Server;
 
 
 namespace ImapCertWatcher.Server
@@ -25,8 +26,17 @@ namespace ImapCertWatcher.Server
 
         private CancellationTokenSource _pipeCts;
         private Task _pipeTask;
+        private TcpCommandServer _tcpServer;
 
         public AppSettings Settings => _settings;
+
+        
+        
+        private readonly SemaphoreSlim _checkLock = new SemaphoreSlim(1, 1);
+
+        private DateTime _lastCheckTime = DateTime.MinValue;
+
+        private readonly TimeSpan _minCheckInterval = TimeSpan.FromMinutes(10);
 
         public ServerHost(AppSettings settings, DbHelper db, Action<string> log)
         {
@@ -39,28 +49,12 @@ namespace ImapCertWatcher.Server
             _notifications = new NotificationManager(_settings, _log);
 
             _timer = new SafeAsyncTimer(
-            async ct =>
-            {
-                try
-                {
-                    _log("ServerHost: проверка почты (FAST)");
-
-                    var checkStartedAt = DateTime.Now;
-
-                    await _newWatcher.CheckNewCertificatesFastAsync(ct);
-                    await _revokeWatcher.CheckRevocationsFastAsync(ct);
-
-                    var newCerts = _db.GetCertificatesAddedAfter(checkStartedAt);
-                    if (newCerts.Count > 0)
-                        _notifications.NotifyNewUsers(newCerts);
-                }
-                catch (OperationCanceledException)
-                {
-                    _log("Таймерная проверка отменена");
-                }
-            },
-            ex => _log("ServerHost error: " + ex.Message)
-        );
+                        async ct =>
+                        {
+                            await RequestFastCheckAsync(ct);
+                        },
+                        ex => _log("ServerHost timer error: " + ex.Message)
+                        );
         }
 
 
@@ -83,6 +77,33 @@ namespace ImapCertWatcher.Server
             }
 
             StartPipeServer();
+            _tcpServer = new TcpCommandServer(5050, HandleRemoteCommand);
+            _tcpServer.Start();
+            _log("TCP Server started. Listening on port 5050");
+        }
+
+        private string HandleRemoteCommand(string cmd)
+        {
+            cmd = cmd.Trim().ToUpperInvariant();
+
+            switch (cmd)
+            {
+                case "FAST_CHECK":
+                    _ = Task.Run(() => RequestFastCheckAsync(CancellationToken.None));
+                    return "OK FAST STARTED";
+
+                case "FULL_CHECK":
+                    _ = Task.Run(() => RequestFullCheckAsync());
+                    return "OK FULL STARTED";
+
+                case "STATUS":
+                    return _checkLock.CurrentCount == 0
+                        ? "STATUS BUSY"
+                        : "STATUS IDLE";
+
+                default:
+                    return "UNKNOWN COMMAND";
+            }
         }
 
         private void StartPipeServer()
@@ -131,26 +152,48 @@ namespace ImapCertWatcher.Server
             });
         }
 
-        public async Task RequestFastCheckAsync(CancellationToken token)
+        public async Task<string> RequestFastCheckAsync(CancellationToken token)
         {
+            // защита частоты
+            var sinceLast = DateTime.Now - _lastCheckTime;
+
+            if (sinceLast < _minCheckInterval)
+            {
+                var wait = _minCheckInterval - sinceLast;
+                return $"BUSY WAIT {(int)wait.TotalMinutes + 1} MIN";
+            }
+
+            // защита параллельности
+            if (!await _checkLock.WaitAsync(0))
+            {
+                return "BUSY RUNNING";
+            }
+
             try
             {
-                var checkStartedAt = DateTime.Now;
+                _lastCheckTime = DateTime.Now;
+
+                _log("FAST CHECK started");
+
+                var startedAt = DateTime.Now;
 
                 await Task.WhenAll(
                     _newWatcher.CheckNewCertificatesFastAsync(token),
                     _revokeWatcher.CheckRevocationsFastAsync(token)
                 );
 
-                var newCerts = _db.GetCertificatesAddedAfter(checkStartedAt);
+                var newCerts = _db.GetCertificatesAddedAfter(startedAt);
+
                 if (newCerts.Count > 0)
-                {
                     _notifications.NotifyNewUsers(newCerts);
-                }
+
+                _log("FAST CHECK finished");
+
+                return "OK FAST DONE";
             }
-            catch (OperationCanceledException)
+            finally
             {
-                _log("FAST проверка отменена");
+                _checkLock.Release();
             }
         }
 
@@ -170,6 +213,7 @@ namespace ImapCertWatcher.Server
             });
         }
 
+        
         public void Dispose()
         {
             _pipeCts?.Cancel();

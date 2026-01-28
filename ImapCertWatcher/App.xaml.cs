@@ -12,12 +12,16 @@ namespace ImapCertWatcher
 {
     public partial class App : Application
     {
+        public static bool IsServerMode { get; private set; }
         private SplashScreen _splashScreen;
 
         private async void Application_Startup(object sender, StartupEventArgs e)
         {
             // ===== SERVER MODE =====
-            if (e.Args != null && e.Args.Any(a => a.Equals("-server", StringComparison.OrdinalIgnoreCase)))
+            IsServerMode = e.Args != null &&
+               e.Args.Any(a => a.Equals("-server", StringComparison.OrdinalIgnoreCase));
+
+            if (IsServerMode)
             {
                 RunServerModeWithWindow();
                 return;

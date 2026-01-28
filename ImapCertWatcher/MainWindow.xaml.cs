@@ -1,12 +1,10 @@
 ﻿using ImapCertWatcher;
+using ImapCertWatcher.Client;
 using ImapCertWatcher.Data;
 using ImapCertWatcher.Models;
 using ImapCertWatcher.Services;
 using ImapCertWatcher.UI;
 using ImapCertWatcher.Utils;
-using MailKit;
-using MailKit.Net.Imap;
-using MailKit.Security;
 using Microsoft.Win32;
 using System;
 using System.Collections.Generic;
@@ -38,14 +36,10 @@ namespace ImapCertWatcher
         private AppSettings _settings;
         private NotificationManager _notificationManager;
         private HashSet<int> _knownCertIds = new HashSet<int>();
-        private DbHelper _db;
-        private ImapNewCertificatesWatcher _newWatcher;
-        private ImapRevocationsWatcher _revWatcher;
+        private DbHelper _db;  
         private ObservableCollection<CertRecord> _items = new ObservableCollection<CertRecord>();
         private ObservableCollection<CertRecord> _allItems = new ObservableCollection<CertRecord>();
-        private Timer _timer;
         private DispatcherTimer _refreshTimer;
-        private ObservableCollection<string> _availableFolders = new ObservableCollection<string>();
         private ObservableCollection<string> _miniLogMessages = new ObservableCollection<string>();
         private const int MAX_MINI_LOG_LINES = 3;
 
@@ -109,8 +103,7 @@ namespace ImapCertWatcher
             {
                 InitializeComponent();
 
-
-                // Инициализация мини-лога
+                                // Инициализация мини-лога
                 _miniLogMessages = new ObservableCollection<string>();
                 AddToMiniLog("Приложение запущено");
 
@@ -124,15 +117,8 @@ namespace ImapCertWatcher
 
                 this.DataContext = _settings;
                 _notificationManager = new NotificationManager(_settings, Log);
-                pwdMailPassword.Password = _settings.MailPassword;
-                pwdFbPassword.Password = _settings.FbPassword;
 
-                cmbImapFolder.ItemsSource = _availableFolders;
-                cmbNewCertsFolder.ItemsSource = _availableFolders;
-                cmbRevocationsFolder.ItemsSource = _availableFolders;
-                txtInterval.Text = _settings.CheckIntervalMinutes.ToString();
-
-
+                
 
                 // Загрузка темы
                 LoadThemeSettings();
@@ -188,7 +174,7 @@ namespace ImapCertWatcher
                 menu.Items.Add("Открыть", null, (s, e) => ShowFromTray());
                 menu.Items.Add("Проверить почту сейчас", null, async (s, e) =>
                 {
-                    await Dispatcher.InvokeAsync(async () => await DoCheckAsync(false));
+                    await Dispatcher.InvokeAsync(async () => await SendServerCommand("FAST_CHECK"));
                 });
                 menu.Items.Add(new Forms.ToolStripSeparator());
                 menu.Items.Add("Выход", null, (s, e) => ExitFromTray());
@@ -272,21 +258,15 @@ namespace ImapCertWatcher
 
                     OnProgressUpdated("Загрузка данных из БД...", 40);
                     var list = db.LoadAll(_showDeleted, _currentBuildingFilter);
-
-                    OnProgressUpdated("Инициализация почтовых модулей...", 60);
-                    var newWatcher = new ImapNewCertificatesWatcher(_settings, db, AddToMiniLog);
-                    var revWatcher = new ImapRevocationsWatcher(_settings, db, AddToMiniLog);
-
+                                        
                     OnProgressUpdated("Завершение инициализации...", 80);
-                    return (db, list, newWatcher, revWatcher);
+                    return (db, list);
                 });
 
                 System.Diagnostics.Debug.WriteLine("Фоновая инициализация завершена");
 
                 // ЛЁГКАЯ ЧАСТЬ – уже в UI-потоке
-                _db = initResult.db;
-                _newWatcher = initResult.newWatcher;
-                _revWatcher = initResult.revWatcher;
+                _db = initResult.db;                
 
                 // Заполняем коллекции для грида
                 _allItems.Clear();
@@ -306,27 +286,7 @@ namespace ImapCertWatcher
                 OnProgressUpdated("Настройка интерфейса...", 90);
                 AutoFitDataGridColumns();
 
-                // Инициализация таймера проверки почты
-                _timer?.Dispose();
-                if (_settings.CheckIntervalMinutes > 0)
-                {
-                    // CheckIntervalMinutes specified in minutes -> convert to milliseconds
-                    var intervalMs = (long)_settings.CheckIntervalMinutes * 60 * 1000;
-
-                    // Первый запуск — через intervalMs (чтобы при сохранении настроек не запускать проверку немедленно)
-                    _timer = new Timer(
-                        async _ =>
-                        {
-                            using (var cts = new CancellationTokenSource(TimeSpan.FromMinutes(10)))
-                            {
-                                await DoCheckAsync(false, cts.Token, true);
-                            }
-                        },
-                        null,
-                        TimeSpan.FromMilliseconds(intervalMs),       // отложенный первый запуск
-                        TimeSpan.FromMilliseconds(intervalMs));      // и потом по интервалу
-                }
-
+                
                 // Таймер для обновления дней
                 InitializeRefreshTimer();
 
@@ -1047,120 +1007,7 @@ namespace ImapCertWatcher
                 progressMailCheckLogs.Visibility = visibility;
             });
         }
-        private Task DoCheckAsync(bool checkAllMessages, bool isFromTimer = false)
-        {
-            var cts = new CancellationTokenSource(TimeSpan.FromMinutes(10));
-            return DoCheckAsync(checkAllMessages, cts.Token, isFromTimer);
-        }
-        private async Task DoCheckAsync(    bool checkAllMessages,    CancellationToken token,    bool isFromTimer = false)
-        {
-            // если вызов по таймеру и включено ограничение — выходим вне рабочего времени
-            if (isFromTimer && _settings.NotifyOnlyInWorkHours && !IsWorkingTime())
-            {
-                Log("Проверка по таймеру пропущена: вне рабочего времени.");
-                return;
-            }
-
-            if (_newWatcher == null || _revWatcher == null)
-            {
-                Dispatcher.Invoke(() => statusText.Text = "Ошибка: компоненты не инициализированы");
-                return;
-            }
-
-            // Показываем прогресс-бар на всех вкладках
-            ShowProgressBar(true);
-
-            Dispatcher.Invoke(() =>
-            {
-                statusText.Text = checkAllMessages ? "Обработка всех писем..." : "Проверка почты...";
-                AddToMiniLog(checkAllMessages ? "Начата обработка всех писем" : "Начата проверка почты");
-            });
-
-            
-            try
-            {
-                // Используем Task.Run с timeout для более безопасного выполнения
-                await Task.Run(() =>
-                {
-                    _newWatcher.ProcessNewCertificates(checkAllMessages, token);
-                }, token);
-
-                await Task.Run(() =>
-                {
-                    _revWatcher.ProcessRevocations(checkAllMessages, token);
-                }, token);
-
-                // Всегда обновляем данные из БД, даже если не было новых писем
-                var newList = _db?.LoadAll(_showDeleted, _currentBuildingFilter);
-                if (newList != null)
-                {
-                    // 1) Находим "новых" владельцев сертификатов (по Id)
-                    List<CertRecord> newOwners = new List<CertRecord>();
-
-                    if (_knownCertIds != null && _knownCertIds.Count > 0)
-                    {
-                        newOwners = newList
-                            .Where(r => !_knownCertIds.Contains(r.Id) && !r.IsDeleted)
-                            .ToList();
-                    }
-
-                    // 2) Обновляем UI
-                    Dispatcher.Invoke(() =>
-                    {
-                        _allItems.Clear();
-                        foreach (var e in newList) _allItems.Add(e);
-                        ApplySearchFilter();
-
-                        // Автоподбор столбцов
-                        AutoFitDataGridColumns();
-
-                        statusText.Text = checkAllMessages
-                        ? $"Обработка писем завершена ({DateTime.Now})"
-                        : $"Проверка почты завершена ({DateTime.Now})";
-
-                        AddToMiniLog(statusText.Text);
-
-                    });
-
-                    // 3) Обновляем набор известных сертификатов
-                    _knownCertIds = new HashSet<int>(newList.Select(r => r.Id));
-
-                    // 4) Уведомления:
-                    // 4.1. Новые владельцы сертификатов (всем контактам)
-                    if (newOwners.Count > 0)
-                    {
-                        _notificationManager?.NotifyNewUsers(newOwners);
-                    }
-
-                    // 4.2. Истекающие сертификаты (по зданию, с порогом дней)
-                    _notificationManager?.NotifyExpiringCerts(newList);
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                Dispatcher.Invoke(() =>
-                {
-                    statusText.Text = "Проверка почты: timeout (более 10 минут)";
-                    AddToMiniLog($"⚠️ Проверка почты превысила максимальное время (10 минут)");
-                    Log($"DoCheckAsync: OperationCanceledException - timeout");
-                });
-            }
-            catch (Exception ex)
-            {
-                Dispatcher.Invoke(() =>
-                {
-                    statusText.Text = "Ошибка при проверке почты";
-                    AddToMiniLog($"Ошибка проверки: {ex.Message}");
-                    Log($"Ошибка при проверке почты: {ex.Message}");
-                });
-            }
-            finally
-            {
-                // Скрываем прогресс-бар на всех вкладках
-                ShowProgressBar(false);
-            }
-        }
-
+        
         private void BtnTestBimoid_Click(object sender, RoutedEventArgs e)
         {
             try
@@ -1206,22 +1053,45 @@ namespace ImapCertWatcher
 
         private async void BtnManualCheck_Click(object sender, RoutedEventArgs e)
         {
-            Log("Ручная проверка почты запущена");
-            using (var cts = new CancellationTokenSource(TimeSpan.FromMinutes(10)))
-            {
-                await DoCheckAsync(false, cts.Token, false);
-            }
+            await SendServerCommand("FAST_CHECK");
         }
 
         private async void BtnProcessAll_Click(object sender, RoutedEventArgs e)
         {
-            Log("Обработка всех писем запущена");
-            using (var cts = new CancellationTokenSource(TimeSpan.FromMinutes(10)))
-            {
-                await DoCheckAsync(false, cts.Token, false);
-            }
+            await SendServerCommand("FULL_CHECK");
         }
 
+        private async Task SendServerCommand(string cmd)
+        {
+            try
+            {
+                statusText.Text = "Связь с сервером...";
+                Cursor = Cursors.Wait;
+
+                var response = await TcpCommandClient.SendAsync(
+                    _settings.ServerIp,
+                    _settings.ServerPort,
+                    cmd);
+
+                statusText.Text = "Ответ сервера: " + response;
+                AddToMiniLog("SERVER: " + response);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    $"Ошибка подключения к серверу:\n{ex.Message}",
+                    "TCP ошибка",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+
+                statusText.Text = "Сервер недоступен";
+                AddToMiniLog("SERVER ERROR: " + ex.Message);
+            }
+            finally
+            {
+                Cursor = Cursors.Arrow;
+            }
+        }
 
         private void BuildingFilter_Checked(object sender, RoutedEventArgs e)
         {
@@ -1684,259 +1554,31 @@ namespace ImapCertWatcher
                             MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
-        private void BtnRefreshFolders_Click(object sender, RoutedEventArgs e)
+        private async void BtnTestServer_Click(object sender, RoutedEventArgs e)
         {
             try
             {
-                if (string.IsNullOrEmpty(_settings.MailHost) || string.IsNullOrEmpty(_settings.MailLogin))
-                {
-                    MessageBox.Show("Заполните хост и логин перед загрузкой папок", "Предупреждение",
-                                  MessageBoxButton.OK, MessageBoxImage.Warning);
-                    return;
-                }
-
-                Cursor = Cursors.Wait;
-                btnRefreshFolders.IsEnabled = false;
-                txtFoldersStatus.Text = "Загрузка списка папок...";
-
-                Task.Run(() => LoadMailFolders());
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Ошибка при загрузке папок: {ex.Message}", "Ошибка",
-                              MessageBoxButton.OK, MessageBoxImage.Error);
-                ResetUIState();
-            }
-        }
-
-        private void LoadMailFolders()
-        {
-            try
-            {
-                var tempSettings = new AppSettings
-                {
-                    MailHost = _settings.MailHost,
-                    MailPort = _settings.MailPort,
-                    MailUseSsl = _settings.MailUseSsl,
-                    MailLogin = _settings.MailLogin,
-                    MailPassword = pwdMailPassword.Password
-                };
-
-                var folders = GetMailFolders(tempSettings);
-
-                Dispatcher.Invoke(() =>
-                {
-                    _availableFolders.Clear();
-                    foreach (var folder in folders)
-                    {
-                        _availableFolders.Add(folder);
-                    }
-
-                    if (!string.IsNullOrEmpty(_settings.ImapFolder) &&
-                        _availableFolders.Contains(_settings.ImapFolder))
-                    {
-                        cmbImapFolder.SelectedItem = _settings.ImapFolder;
-                    }
-
-                    if (!string.IsNullOrEmpty(_settings.ImapNewCertificatesFolder) &&
-                    _availableFolders.Contains(_settings.ImapNewCertificatesFolder))
-                    {
-                        cmbNewCertsFolder.SelectedItem = _settings.ImapNewCertificatesFolder;
-                    }
-
-                    if (!string.IsNullOrEmpty(_settings.ImapRevocationsFolder) &&
-                        _availableFolders.Contains(_settings.ImapRevocationsFolder))
-                    {
-                        cmbRevocationsFolder.SelectedItem = _settings.ImapRevocationsFolder;
-                    }
-                    else if (_availableFolders.Count > 0)
-                    {
-                        cmbImapFolder.SelectedIndex = 0;
-                    }
-
-                    txtFoldersStatus.Text = $"Загружено папок: {folders.Count}";
-                });
-            }
-            catch (Exception ex)
-            {
-                Dispatcher.Invoke(() =>
-                {
-                    MessageBox.Show($"Ошибка загрузки папок: {ex.Message}", "Ошибка",
-                                  MessageBoxButton.OK, MessageBoxImage.Error);
-                    txtFoldersStatus.Text = "Ошибка загрузки папок";
-                });
-            }
-            finally
-            {
-                Dispatcher.Invoke(ResetUIState);
-            }
-        }
-
-        // Получить список папок с сервера (локально в UI)
-        private List<string> GetMailFolders(AppSettings tempSettings)
-        {
-            var result = new List<string>();
-            try
-            {
-                using (var client = new ImapClient())
-                {
-                    client.Timeout = 60000;
-                    client.ServerCertificateValidationCallback = (s, c, h, e) => true;
-
-                    if (tempSettings.MailUseSsl)
-                        client.Connect(tempSettings.MailHost, tempSettings.MailPort, SecureSocketOptions.SslOnConnect);
-                    else
-                        client.Connect(tempSettings.MailHost, tempSettings.MailPort, SecureSocketOptions.StartTlsWhenAvailable);
-
-                    client.Authenticate(tempSettings.MailLogin, tempSettings.MailPassword);
-
-                    // Получаем корневые папки пользователя
-                    foreach (var ns in client.PersonalNamespaces)
-                    {
-                        try
-                        {
-                            var root = client.GetFolder(ns);
-                            if (root != null)
-                            {
-                                result.Add(root.FullName);
-
-                                try
-                                {
-                                    foreach (var f in root.GetSubfolders(false))
-                                    {
-                                        result.Add(f.FullName);
-                                    }
-                                }
-                                catch { }
-                            }
-                        }
-                        catch
-                        {
-                            // игнорируем ошибку конкретного namespace
-                        }
-                    }
-
-                    // в качестве fallback: список top-level (если есть первый namespace)
-                    try
-                    {
-                        var firstNs = client.PersonalNamespaces.FirstOrDefault();
-                        if (firstNs != null)
-                        {
-                            foreach (var f in client.GetFolders(firstNs))
-                            {
-                                result.Add(f.FullName);
-                            }
-                        }
-                    }
-                    catch { }
-
-                    client.Disconnect(true);
-                }
-            }
-            catch (Exception ex)
-            {
-                AddToMiniLog($"Ошибка получения списка папок: {ex.Message}");
-            }
-
-            return result.Distinct().ToList();
-        }
-
-        private void ResetUIState()
-        {
-            Cursor = Cursors.Arrow;
-            btnRefreshFolders.IsEnabled = true;
-        }
-
-        private void BtnTestMailConnection_Click(object sender, RoutedEventArgs e)
-        {
-            try
-            {
-                Cursor = Cursors.Wait;
-
-                var tempSettings = new AppSettings
-                {
-                    MailHost = _settings.MailHost,
-                    MailPort = _settings.MailPort,
-                    MailUseSsl = _settings.MailUseSsl,
-                    MailLogin = _settings.MailLogin,
-                    MailPassword = pwdMailPassword.Password
-                };
-
-                var folders = GetMailFolders(tempSettings);
-
-                var checks = new List<(string Name, string Folder)>
-        {
-            ("Общая папка", cmbImapFolder.Text),
-            ("Новые сертификаты", cmbNewCertsFolder.Text),
-            ("Аннулирования", cmbRevocationsFolder.Text)
-        };
-
-                var sb = new StringBuilder();
-                bool hasErrors = false;
-
-                foreach (var (name, folder) in checks)
-                {
-                    if (string.IsNullOrWhiteSpace(folder))
-                    {
-                        sb.AppendLine($"❌ {name}: не указана");
-                        hasErrors = true;
-                    }
-                    else if (!folders.Contains(folder))
-                    {
-                        sb.AppendLine($"⚠️ {name}: папка '{folder}' не найдена");
-                    }
-                    else
-                    {
-                        sb.AppendLine($"✅ {name}: OK ({folder})");
-                    }
-                }
-
-                sb.AppendLine();
-                sb.AppendLine($"Всего папок на сервере: {folders.Count}");
+                var result = await TcpCommandClient.SendAsync(
+                    _settings.ServerIp,
+                    _settings.ServerPort,
+                    "STATUS");
 
                 MessageBox.Show(
-                    sb.ToString(),
-                    hasErrors ? "Тест с ошибками" : "Тест подключения успешен",
+                    "Сервер ответил:\n" + result,
+                    "Соединение OK",
                     MessageBoxButton.OK,
-                    hasErrors ? MessageBoxImage.Warning : MessageBoxImage.Information
-                );
+                    MessageBoxImage.Information);
             }
             catch (Exception ex)
             {
                 MessageBox.Show(
-                    $"Ошибка подключения к почтовому серверу:\n{ex.Message}",
+                    "Ошибка соединения:\n" + ex.Message,
                     "Ошибка",
                     MessageBoxButton.OK,
-                    MessageBoxImage.Error
-                );
-            }
-            finally
-            {
-                Cursor = Cursors.Arrow;
+                    MessageBoxImage.Error);
             }
         }
 
-        private void BtnSaveMailSettings_Click(object sender, RoutedEventArgs e)
-        {
-            try
-            {
-                _settings.MailPassword = pwdMailPassword.Password;
-                _settings.ImapFolder = cmbImapFolder.Text;
-                _settings.ImapNewCertificatesFolder = cmbNewCertsFolder.Text;
-                _settings.ImapRevocationsFolder = cmbRevocationsFolder.Text;
-
-                SaveSettings();
-                MessageBox.Show("Настройки почты сохранены!", "Успех",
-                              MessageBoxButton.OK, MessageBoxImage.Information);
-                AddToMiniLog("Сохранены настройки почты");
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Ошибка сохранения настроек почты: {ex.Message}", "Ошибка",
-                              MessageBoxButton.OK, MessageBoxImage.Error);
-                AddToMiniLog($"Ошибка настроек почты: {ex.Message}");
-            }
-        }
 
         private void BtnSaveDbSettings_Click(object sender, RoutedEventArgs e)
         {
@@ -1948,10 +1590,7 @@ namespace ImapCertWatcher
 
                 try
                 {
-                    _db = new DbHelper(_settings);
-                    // пересоздаём watcher'ы с новой ссылкой на БД
-                    _newWatcher = new ImapNewCertificatesWatcher(_settings, _db, AddToMiniLog);
-                    _revWatcher = new ImapRevocationsWatcher(_settings, _db, AddToMiniLog);
+                    _db = new DbHelper(_settings);                    
                     LoadFromDb();
                 }
                 catch (Exception dbEx)
@@ -2029,8 +1668,7 @@ namespace ImapCertWatcher
             {
                 var settingsPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "settings.txt");
 
-                // Обновляем пароли/значения из UI перед сохранением
-                _settings.MailPassword = pwdMailPassword.Password;
+                // Обновляем пароли/значения из UI перед сохранением                
                 _settings.FbPassword = pwdFbPassword.Password;
                 // NotifyDaysThreshold и аккаунты уже привязаны через Binding к TextBox'ам
 
@@ -2075,36 +1713,7 @@ namespace ImapCertWatcher
                 // Перезапускаем/перенастраиваем таймер проверки почты.
                 // ВАЖНО: первый запуск теперь происходит через указанный интервал,
                 // чтобы при сохранении настроек не вызывать проверку немедленно.
-                _timer?.Dispose();
-                _timer = null;
-
-                if (_settings.CheckIntervalMinutes > 0)
-                {
-                    var intervalMs = (long)_settings.CheckIntervalMinutes * 60 * 1000;
-
-                    // Используем TimeSpan для задания задержки первого срабатывания
-                    var due = TimeSpan.FromMilliseconds(intervalMs);
-                    var period = TimeSpan.FromMilliseconds(intervalMs);
-
-                    _timer = new Timer(
-                        async _ =>
-                        {
-                            using (var cts = new CancellationTokenSource(TimeSpan.FromMinutes(10)))
-                            {
-                                await DoCheckAsync(false, cts.Token, false);
-                            }
-                        },
-                        null,
-                        due,    // первый запуск через due (не сразу)
-                        period  // последующие запуски с периодом
-                    );
-
-                    AddToMiniLog($"Таймер проверки почты запущен (интервал: {_settings.CheckIntervalMinutes} мин).");
-                }
-                else
-                {
-                    AddToMiniLog("Таймер проверки почты отключён (интервал = 0 мин).");
-                }
+                                
 
                 // Обновляем текстовое поле на UI (если оно есть)
                 try
@@ -2498,6 +2107,8 @@ namespace ImapCertWatcher
             }
         }
 
+        
+
         private void Log(string message)
         {
             try
@@ -2537,11 +2148,12 @@ namespace ImapCertWatcher
             base.OnClosing(e);
         }
 
+
         protected override void OnClosed(EventArgs e)
         {
             base.OnClosed(e);
 
-            _timer?.Dispose();
+            
             _refreshTimer?.Stop();
             if (_refreshTimer != null)
                 _refreshTimer.Tick -= RefreshDaysLeft;

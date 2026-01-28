@@ -151,6 +151,8 @@
     <Compile Include="SplashScreen.xaml.cs">
       <DependentUpon>SplashScreen.xaml</DependentUpon>
     </Compile>
+    <Compile Include="TcpCommandClient.cs" />
+    <Compile Include="TcpCommandServer.cs" />
     <Compile Include="Utils\AsyncHelper.cs" />
     <Compile Include="Utils\SafeAsyncTimer.cs" />
     <Compile Include="ZipCerExtractor.cs" />

@@ -234,105 +234,34 @@
 
                             <!-- Левая колонка - Настройки почты -->
                             <StackPanel Grid.Column="0">
-                                <!-- Почтовый сервер -->
-                                <GroupBox Header="Почтовый сервер" Style="{StaticResource ModernGroupBoxStyle}">
+                                <GroupBox Header="Подключение к серверу" Style="{StaticResource ModernGroupBoxStyle}" Margin="0,12,0,0">
                                     <StackPanel Margin="6">
-                                        <TextBlock Text="Хост IMAP:" Margin="0,2" Foreground="{DynamicResource TextColorBrush}"/>
-                                        <TextBox x:Name="txtMailHost" Text="{Binding MailHost}" Style="{StaticResource ModernTextBoxStyle}" Height="26"/>
+
+                                        <TextBlock Text="IP сервера:" Foreground="{DynamicResource TextColorBrush}"/>
+
+                                        <TextBox Text="{Binding ServerIp}"
+                 Style="{StaticResource ModernTextBoxStyle}"
+                 Height="26"
+                 ToolTip="IP компьютера где запущен сервер"/>
 
                                         <TextBlock Text="Порт:" Margin="0,8,0,2" Foreground="{DynamicResource TextColorBrush}"/>
-                                        <TextBox x:Name="txtMailPort" Text="{Binding MailPort}" Style="{StaticResource ModernTextBoxStyle}" Height="26"/>
 
-                                        <CheckBox x:Name="chkMailUseSsl" Content="Использовать SSL" 
-                                                  Style="{StaticResource ModernCheckBoxStyle}" 
-                                                  IsChecked="{Binding MailUseSsl}"
-                                                  Margin="0,8,0,0"/>
+                                        <TextBox Text="{Binding ServerPort}"
+                 Style="{StaticResource ModernTextBoxStyle}"
+                 Height="26"/>
+
+                                        <Button Content="Проверить соединение"
+                Margin="0,10,0,0"
+                Width="180"
+                Height="28"
+                Click="BtnTestServer_Click"/>
+
                                     </StackPanel>
                                 </GroupBox>
 
-                                <!-- Учетные данные почты -->
-                                <GroupBox Header="Учетные данные почты" Style="{StaticResource ModernGroupBoxStyle}" Margin="0,12,0,0">
-                                    <StackPanel Margin="6">
-                                        <TextBlock Text="Логин:" Margin="0,2" Foreground="{DynamicResource TextColorBrush}"/>
-                                        <TextBox x:Name="txtMailLogin" Text="{Binding MailLogin}" Style="{StaticResource ModernTextBoxStyle}" Height="26"/>
 
-                                        <TextBlock Text="Пароль:" Margin="0,8,0,2" Foreground="{DynamicResource TextColorBrush}"/>
-                                        <PasswordBox x:Name="pwdMailPassword" 
-                                                     Height="26"
-                                                     Margin="0,2,0,8" 
-                                                     Padding="6,4" 
-                                                     Style="{StaticResource ModernPasswordBoxStyle}"/>
 
-                                        <TextBlock Text="Папки IMAP:" Margin="0,8,0,4"
-           Foreground="{DynamicResource TextColorBrush}"/>
-
-                                        <!-- Основная (устаревшая) -->
-                                        <TextBlock Text="Основная папка (не используется напрямую)"
-           FontSize="10"
-           Foreground="Gray"/>
-
-                                        <ComboBox x:Name="cmbImapFolder"
-          Text="{Binding ImapFolder}"
-          IsEditable="True"
-          Margin="0,2,0,6"
-          Height="26"
-          ToolTip="Общая папка IMAP (устаревшая)"
-          Style="{StaticResource EditableImapComboBoxStyle}"/>
-
-                                        <!-- Новые сертификаты -->
-                                        <TextBlock Text="Папка с новыми сертификатами (ZIP / CER)"
-           Margin="0,6,0,2"
-           Foreground="{DynamicResource TextColorBrush}"/>
-
-                                        <ComboBox x:Name="cmbNewCertsFolder"
-          Text="{Binding ImapNewCertificatesFolder}"
-          IsEditable="True"
-          Margin="0,2,0,6"
-          Height="26"
-          ToolTip="Папка с письмами, содержащими ZIP или CER"
-          Style="{StaticResource EditableImapComboBoxStyle}"/>
-
-                                        <!-- Аннулирования -->
-                                        <TextBlock Text="Папка с аннулированными сертификатами"
-           Margin="0,6,0,2"
-           Foreground="{DynamicResource TextColorBrush}"/>
-
-                                        <ComboBox x:Name="cmbRevocationsFolder"
-          Text="{Binding ImapRevocationsFolder}"
-          IsEditable="True"
-          Margin="0,2,0,8"
-          Height="26"
-          ToolTip="Папка с письмами об аннулировании сертификатов"
-          Style="{StaticResource EditableImapComboBoxStyle}"/>
-
-                                        <!-- Кнопка обновления папок -->
-                                        <Button x:Name="btnRefreshFolders"
-        Content="Обновить список папок"
-        Style="{StaticResource ModernButtonStyle}"
-        Click="BtnRefreshFolders_Click"
-        Width="200"
-        Height="26"
-        Margin="0,4,0,8"
-        FontSize="11"
-        ToolTip="Получить список папок с сервера IMAP"/>
-                                        <TextBlock x:Name="txtFoldersStatus" 
-                                                   FontStyle="Italic" FontSize="10" 
-                                                   Foreground="{DynamicResource TextColorBrush}"
-                                                   Margin="0,0,0,4"/>
-                                    </StackPanel>
-                                </GroupBox>
-
-                                <!-- Кнопки управления почтой -->
-                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
-                                    <Button x:Name="btnSaveMailSettings" Content="Сохранить почту" 
-                                            Style="{StaticResource ModernButtonStyle}" 
-                                            Click="BtnSaveMailSettings_Click"
-                                            Width="120" Height="30"/>
-                                    <Button x:Name="btnTestMailConnection" Content="Тест почты" 
-                                            Style="{StaticResource ModernButtonStyle}" 
-                                            Click="BtnTestMailConnection_Click"
-                                            Width="100" Height="30" Margin="8,0,0,0"/>
-                                </StackPanel>
+                                
                             </StackPanel>
 
                             <!-- Разделитель -->

@@ -86,6 +86,14 @@ namespace ImapCertWatcher.Utils
                         if (bool.TryParse(val, out bool nw))
                             s.NotifyOnlyInWorkHours = nw;
                         break;
+                    case "ServerIp":
+                        s.ServerIp = val;
+                        break;
+
+                    case "ServerPort":
+                        if (int.TryParse(val, out int sp))
+                            s.ServerPort = sp;
+                        break;
                 }
             }
 

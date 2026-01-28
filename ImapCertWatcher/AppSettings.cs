@@ -264,6 +264,13 @@ namespace ImapCertWatcher.Utils
         public string RevocationSubjectRegex { get; set; } =
             @"Сертификат\s+№\s*[A-F0-9]+.*(аннулирован|прекратил действие)";
 
+        //===============
+        //Клиент - сервер
+        //===============
+
+        public string ServerIp { get; set; } = "127.0.0.1";
+        public int ServerPort { get; set; } = 5050;
+
         // =========================================================
         // LEGACY / BACKWARD COMPATIBILITY
         // =========================================================
