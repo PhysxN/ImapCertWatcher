@@ -324,52 +324,7 @@
                             <!-- Правая колонка - Настройки БД и приложения -->
                             <StackPanel Grid.Column="2">
                                 <!-- База данных -->
-                                <GroupBox Header="База данных Firebird" Style="{StaticResource ModernGroupBoxStyle}">
-                                    <StackPanel Margin="6">
-                                        <TextBlock Text="Путь к файлу БД:" Margin="0,2" Foreground="{DynamicResource TextColorBrush}"/>
-                                        <StackPanel Orientation="Horizontal">
-                                            <TextBox x:Name="txtFirebirdDbPath" Text="{Binding FirebirdDbPath}" 
-                                                     Style="{StaticResource ModernTextBoxStyle}" Width="280" Height="26"/>
-                                            <Button x:Name="btnBrowseDbPath" Content="..." 
-                                                    Style="{StaticResource ModernButtonStyle}" 
-                                                    Click="BtnBrowseDbPath_Click" 
-                                                    Width="40" Height="26" Margin="6,0,0,0" ToolTip="Выбрать файл БД"/>
-                                        </StackPanel>
-
-                                        <TextBlock Text="Сервер:" Margin="0,8,0,2" Foreground="{DynamicResource TextColorBrush}"/>
-                                        <TextBox x:Name="txtFbServer" Text="{Binding FbServer}" Style="{StaticResource ModernTextBoxStyle}" Height="26"/>
-
-                                        <TextBlock Text="Пользователь:" Margin="0,8,0,2" Foreground="{DynamicResource TextColorBrush}"/>
-                                        <TextBox x:Name="txtFbUser" Text="{Binding FbUser}" Style="{StaticResource ModernTextBoxStyle}" Height="26"/>
-
-                                        <TextBlock Text="Пароль:" Margin="0,8,0,2" Foreground="{DynamicResource TextColorBrush}"/>
-                                        <PasswordBox x:Name="pwdFbPassword" 
-                                                     Height="26"
-                                                     Margin="0,2,0,8" 
-                                                     Padding="6,4" 
-                                                     Style="{StaticResource ModernPasswordBoxStyle}"/>
-
-                                        <!-- Диалект с подсказкой -->
-                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                            <TextBlock Text="Диалект:" Margin="0,2" Foreground="{DynamicResource TextColorBrush}" VerticalAlignment="Center"/>
-                                            <Button x:Name="btnDialectHelp" 
-                                                    Content="?" 
-                                                    Style="{StaticResource ModernButtonStyle}" 
-                                                    Width="20" Height="20" 
-                                                    Margin="6,0,0,0"
-                                                    Padding="0"
-                                                    FontWeight="Bold"
-                                                    ToolTip="Нажмите для справки о диалектах"
-                                                    Click="BtnDialectHelp_Click"/>
-                                        </StackPanel>
-                                        <TextBox x:Name="txtFbDialect" Text="{Binding FbDialect}" Style="{StaticResource ModernTextBoxStyle}" Height="26"
-                                                 ToolTip="3 - современный SQL (рекомендуется)&#10;1 - устаревший синтаксис"/>
-                                        <TextBlock Text="Рекомендуется: 3 (современный SQL)" 
-                                                   FontStyle="Italic" FontSize="10" 
-                                                   Foreground="{DynamicResource TextColorBrush}"
-                                                   Margin="0,4,0,0"/>
-                                    </StackPanel>
-                                </GroupBox>
+                                
 
                                 <!-- Поведение приложения -->
                                 <GroupBox Header="Поведение приложения" Style="{StaticResource ModernGroupBoxStyle}" Margin="0,12,0,0">
@@ -388,58 +343,7 @@
                                 </GroupBox>
 
 
-                                <!-- Bimoid / ObimpCMD уведомления -->
-                                <GroupBox Header="Уведомления через Bimoid" Style="{StaticResource ModernGroupBoxStyle}" Margin="0,12,0,0">
-                                    <StackPanel Margin="6">
-                                        <TextBlock Text="Аккаунты для Краснофлотской (по одному в строке):"
-                                                    Margin="0,2" Foreground="{DynamicResource TextColorBrush}"/>
-                                        <TextBox x:Name="txtBimoidKrasnoflotskaya"
-                                                 Text="{Binding BimoidAccountsKrasnoflotskaya}"
-                                                 Style="{StaticResource ModernTextBoxStyle}"
-                                                 AcceptsReturn="True"
-                                                 Height="60"
-                                                 VerticalScrollBarVisibility="Auto"/>
-
-                                        <TextBlock Text="Аккаунты для Пионерской (по одному в строке):"
-                                                    Margin="0,8,0,2" Foreground="{DynamicResource TextColorBrush}"/>
-                                        <TextBox x:Name="txtBimoidPionerskaya"
-                                                 Text="{Binding BimoidAccountsPionerskaya}"
-                                                 Style="{StaticResource ModernTextBoxStyle}"
-                                                 AcceptsReturn="True"
-                                                 Height="60"
-                                                 VerticalScrollBarVisibility="Auto"/>
-
-                                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0" HorizontalAlignment="Right">
-                                            <Button x:Name="btnTestBimoid"
-                                                    Content="Тестовое сообщение"
-                                                    Style="{StaticResource ModernButtonStyle}"
-                                                    Width="190" Height="28"
-                                                    Margin="0,0,8,0"
-                                                    Click="BtnTestBimoid_Click"
-                                                    ToolTip="Отправить тестовое сообщение на указанные аккаунты"/>              
-
-                                            <Button x:Name="btnTestNewUserNotify"
-                                                    Content="Тест нового пользователя"
-                                                    Style="{StaticResource ModernButtonStyle}"
-                                                    Width="190" Height="28"
-                                                    Click="BtnTestNewUserNotify_Click"
-                                                    ToolTip="Отправить тестовое сообщение о новых пользователях на указанные аккаунты"/>
-                                        </StackPanel>
-
-                                    </StackPanel>
-                                </GroupBox>
-
-                                <!-- Кнопки управления БД -->
-                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
-                                    <Button x:Name="btnSaveDbSettings" Content="Сохранить БД" 
-                                            Style="{StaticResource ModernButtonStyle}" 
-                                            Click="BtnSaveDbSettings_Click"
-                                            Width="120" Height="30"/>
-                                    <Button x:Name="btnTestDbConnection" Content="Тест БД" 
-                                            Style="{StaticResource ModernButtonStyle}" 
-                                            Click="BtnTestDbConnection_Click"
-                                            Width="100" Height="30" Margin="8,0,0,0"/>
-                                </StackPanel>
+                                
                             </StackPanel>
                         </Grid>
                     </ScrollViewer>

@@ -21,7 +21,7 @@ namespace ImapCertWatcher
     {
         private readonly ServerSettings _settings;
         private readonly NotificationManager _notificationManager;
-
+        
         // ============================
         // IMAP folders binding
         // ============================
@@ -236,6 +236,8 @@ namespace ImapCertWatcher
             }
         }
 
+
+
         // ============================
         // TEST FIREBIRD
         // ============================
@@ -391,5 +393,7 @@ namespace ImapCertWatcher
 
         private void OnPropertyChanged([CallerMemberName] string name = null)
             => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+
+
     }
 }

@@ -31,6 +31,8 @@
         public int CheckIntervalMinutes { get; set; } = 60;
         public int NotifyDaysThreshold { get; set; } = 10;
         public bool NotifyOnlyInWorkHours { get; set; } = true;
+        public bool AutoStartServer { get; set; }
+        public bool MinimizeToTrayOnClose { get; set; }
 
         // ===== BIMOID =====
 

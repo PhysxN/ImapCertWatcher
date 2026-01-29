@@ -1779,71 +1779,71 @@ namespace ImapCertWatcher
         }
 
 
-        private void BtnSaveDbSettings_Click(object sender, RoutedEventArgs e)
-        {
-            try
-            {
-                _serverSettings.FbPassword = pwdFbPassword.Password;
+        //private void BtnSaveDbSettings_Click(object sender, RoutedEventArgs e)
+        //{
+        //    try
+        //    {
+        //        //_serverSettings.FbPassword = pwdFbPassword.Password;
 
-                SaveSettings();
+        //        SaveSettings();
 
-                try
-                {
-                    _db = new DbHelper(_serverSettings);                    
-                    LoadFromDb();
-                }
-                catch (Exception dbEx)
-                {
-                    MessageBox.Show($"Настройки сохранены, но ошибка переподключения к БД: {dbEx.Message}",
-                                  "Предупреждение", MessageBoxButton.OK, MessageBoxImage.Warning);
-                    AddToMiniLog($"Ошибка переподключения БД: {dbEx.Message}");
-                }
+        //        try
+        //        {
+        //            _db = new DbHelper(_serverSettings);                    
+        //            LoadFromDb();
+        //        }
+        //        catch (Exception dbEx)
+        //        {
+        //            MessageBox.Show($"Настройки сохранены, но ошибка переподключения к БД: {dbEx.Message}",
+        //                          "Предупреждение", MessageBoxButton.OK, MessageBoxImage.Warning);
+        //            AddToMiniLog($"Ошибка переподключения БД: {dbEx.Message}");
+        //        }
 
-                MessageBox.Show("Настройки базы данных сохранены!", "Успех",
-                              MessageBoxButton.OK, MessageBoxImage.Information);
-                AddToMiniLog("Сохранены настройки БД");
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Ошибка сохранения настроек БД: {ex.Message}", "Ошибка",
-                              MessageBoxButton.OK, MessageBoxImage.Error);
-                AddToMiniLog($"Ошибка настроек БД: {ex.Message}");
-            }
-        }
+        //        MessageBox.Show("Настройки базы данных сохранены!", "Успех",
+        //                      MessageBoxButton.OK, MessageBoxImage.Information);
+        //        AddToMiniLog("Сохранены настройки БД");
+        //    }
+        //    catch (Exception ex)
+        //    {
+        //        MessageBox.Show($"Ошибка сохранения настроек БД: {ex.Message}", "Ошибка",
+        //                      MessageBoxButton.OK, MessageBoxImage.Error);
+        //        AddToMiniLog($"Ошибка настроек БД: {ex.Message}");
+        //    }
+        //}
 
-        private void BtnTestDbConnection_Click(object sender, RoutedEventArgs e)
-        {
-            try
-            {
-                var tempSettings = new ServerSettings
-                {
-                    FirebirdDbPath = _serverSettings.FirebirdDbPath,
-                    FbServer = _serverSettings.FbServer,
-                    FbUser = _serverSettings.FbUser,
-                    FbPassword = pwdFbPassword.Password,
-                    FbDialect = _serverSettings.FbDialect
-                };
+        //private void BtnTestDbConnection_Click(object sender, RoutedEventArgs e)
+        //{
+        //    try
+        //    {
+        //        var tempSettings = new ServerSettings
+        //        {
+        //            FirebirdDbPath = _serverSettings.FirebirdDbPath,
+        //            FbServer = _serverSettings.FbServer,
+        //            FbUser = _serverSettings.FbUser,
+        //            FbPassword = pwdFbPassword.Password,
+        //            FbDialect = _serverSettings.FbDialect
+        //        };
 
-                var tempDb = new DbHelper(tempSettings);
-                using (var conn = tempDb.GetConnection())
-                {
-                    conn.Open();
-                    using (var cmd = conn.CreateCommand())
-                    {
-                        cmd.CommandText = "SELECT COUNT(*) FROM RDB$RELATIONS WHERE RDB$RELATION_NAME = 'CERTS'";
-                        var result = cmd.ExecuteScalar();
-                    }
-                }
+        //        var tempDb = new DbHelper(tempSettings);
+        //        using (var conn = tempDb.GetConnection())
+        //        {
+        //            conn.Open();
+        //            using (var cmd = conn.CreateCommand())
+        //            {
+        //                cmd.CommandText = "SELECT COUNT(*) FROM RDB$RELATIONS WHERE RDB$RELATION_NAME = 'CERTS'";
+        //                var result = cmd.ExecuteScalar();
+        //            }
+        //        }
 
-                MessageBox.Show("Подключение к базе данных успешно!", "Тест подключения",
-                              MessageBoxButton.OK, MessageBoxImage.Information);
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Ошибка подключения к базе данных: {ex.Message}", "Ошибка",
-                              MessageBoxButton.OK, MessageBoxImage.Error);
-            }
-        }
+        //        MessageBox.Show("Подключение к базе данных успешно!", "Тест подключения",
+        //                      MessageBoxButton.OK, MessageBoxImage.Information);
+        //    }
+        //    catch (Exception ex)
+        //    {
+        //        MessageBox.Show($"Ошибка подключения к базе данных: {ex.Message}", "Ошибка",
+        //                      MessageBoxButton.OK, MessageBoxImage.Error);
+        //    }
+        //}
 
         private void BtnBrowseDbPath_Click(object sender, RoutedEventArgs e)
         {
@@ -1857,65 +1857,11 @@ namespace ImapCertWatcher
             if (saveFileDialog.ShowDialog() == true)
             {
                 _serverSettings.FirebirdDbPath = saveFileDialog.FileName;
-                txtFirebirdDbPath.GetBindingExpression(TextBox.TextProperty).UpdateTarget();
+                //txtFirebirdDbPath.GetBindingExpression(TextBox.TextProperty).UpdateTarget();
             }
         }
 
-        private void SaveSettings()
-        {
-            try
-            {
-                var settingsPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "settings.txt");
-
-                var s = _serverSettings;
-
-                s.FbPassword = pwdFbPassword.Password;
-
-                var lines = new[]
-                {
-            "# Mail settings",
-            $"MailHost={s.MailHost}",
-            $"MailPort={s.MailPort}",
-            $"MailUseSsl={s.MailUseSsl}",
-            $"MailLogin={s.MailLogin}",
-            $"MailPassword={s.MailPassword}",
-
-            $"ImapNewCertificatesFolder={s.ImapNewCertificatesFolder}",
-            $"ImapRevocationsFolder={s.ImapRevocationsFolder}",
-            "",
-
-            "# Firebird settings",
-            $"FirebirdDbPath={s.FirebirdDbPath}",
-            $"FbServer={s.FbServer}",
-            $"FbUser={s.FbUser}",
-            $"FbPassword={s.FbPassword}",
-            $"FbDialect={s.FbDialect}",
-            "",
-
-            "# Server behavior",
-            $"CheckIntervalMinutes={s.CheckIntervalMinutes}",
-            $"NotifyOnlyInWorkHours={s.NotifyOnlyInWorkHours}",
-            "",
-
-            "# Notifications",
-            $"NotifyDaysThreshold={s.NotifyDaysThreshold}",
-            "BimoidAccountsKrasnoflotskaya=" +
-                (s.BimoidAccountsKrasnoflotskaya ?? "").Replace(Environment.NewLine, "\\n"),
-            "BimoidAccountsPionerskaya=" +
-                (s.BimoidAccountsPionerskaya ?? "").Replace(Environment.NewLine, "\\n"),
-        };
-
-                File.WriteAllLines(settingsPath, lines, Encoding.UTF8);
-
-                txtInterval.Text = s.CheckIntervalMinutes.ToString();
-            }
-            catch (Exception ex)
-            {
-                throw new Exception($"Не удалось сохранить настройки: {ex.Message}", ex);
-            }
-
-            ApplyAutoStartSetting(); // берет из _clientSettings
-        }
+        
 
         private void ProcessSigFile(string sigPath)
         {

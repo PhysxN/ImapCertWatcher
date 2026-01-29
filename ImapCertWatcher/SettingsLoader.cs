@@ -41,6 +41,8 @@ namespace ImapCertWatcher.Utils
             s.NotifyDaysThreshold = GetInt(all, "NotifyDaysThreshold", 10);
             s.NotifyOnlyInWorkHours = GetBool(all, "NotifyOnlyInWorkHours", true);
             s.IsDevelopment = GetBool(all, "IsDevelopment", false);
+            s.AutoStartServer = GetBool(all, "AutoStartServer", false);
+            s.MinimizeToTrayOnClose = GetBool(all, "MinimizeToTrayOnClose", true);
 
             // ===== BIMOID =====
             s.BimoidAccountsKrasnoflotskaya =

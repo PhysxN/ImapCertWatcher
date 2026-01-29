@@ -1,7 +1,9 @@
 ﻿using ImapCertWatcher.Data;
 using ImapCertWatcher.Services;
 using ImapCertWatcher.Utils;
+using Microsoft.Win32;
 using System;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Linq;
 using System.Reflection;
@@ -17,12 +19,20 @@ namespace ImapCertWatcher
         private readonly Server.ServerHost _server;
         private bool _isChecking;
         private CancellationTokenSource _checkCts;
+        private const string AUTOSTART_REG_PATH =
+            @"Software\Microsoft\Windows\CurrentVersion\Run";
+
+        private const string AUTOSTART_VALUE_NAME =
+            "ImapCertWatcherServer";
+        private System.Windows.Forms.NotifyIcon _trayIcon;
         public ServerWindow()
 
         {
             InitializeComponent();
+            InitTray();
 
             ServerSettings settings;
+            ApplyServerAutoStart();
             try
             {
                 settings = SettingsLoader.LoadServer("settings.txt");
@@ -91,6 +101,43 @@ namespace ImapCertWatcher
             AppendLog("ServerHost запущен");
         }
 
+        private void InitTray()
+        {
+            _trayIcon = new System.Windows.Forms.NotifyIcon();
+
+            _trayIcon.Icon = System.Drawing.SystemIcons.Application;
+            _trayIcon.Text = "ImapCertWatcher Server";
+            _trayIcon.Visible = true;
+
+            _trayIcon.DoubleClick += (s, e) =>
+            {
+                Show();
+                WindowState = WindowState.Normal;
+                Activate();
+            };
+
+            var menu = new System.Windows.Forms.ContextMenuStrip();
+
+            menu.Items.Add("Открыть", null, (_, __) =>
+            {
+                Show();
+                WindowState = WindowState.Normal;
+                Activate();
+            });
+
+            menu.Items.Add("Перезапустить сервер", null, (_, __) =>
+            {
+                Restart_Click(null, null);
+            });
+
+            menu.Items.Add("Выход", null, (_, __) =>
+            {
+                _trayIcon.Visible = false;
+                Application.Current.Shutdown();
+            });
+
+            _trayIcon.ContextMenuStrip = menu;
+        }
         public void SetStatus(string text)
         {
             StatusText.Text = text;
@@ -118,6 +165,36 @@ namespace ImapCertWatcher
             _checkCts?.Cancel();
         }
 
+
+        private void ApplyServerAutoStart()
+        {
+            try
+            {
+                using (var key =
+                    Registry.CurrentUser.OpenSubKey(AUTOSTART_REG_PATH, true))
+                {
+                    if (key == null) return;
+
+                    string exePath = Assembly.GetExecutingAssembly().Location;
+                    exePath = $"\"{exePath}\"";
+
+                    if (_server.Settings.AutoStartServer)
+                    {
+                        key.SetValue(AUTOSTART_VALUE_NAME, exePath);
+                        AppendLog("Автозапуск сервера включен");
+                    }
+                    else
+                    {
+                        key.DeleteValue(AUTOSTART_VALUE_NAME, false);
+                        AppendLog("Автозапуск сервера выключен");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                AppendLog("Ошибка автозапуска: " + ex.Message);
+            }
+        }
         public void AppendLog(string text)
         {
             if (!Dispatcher.CheckAccess())
@@ -258,6 +335,21 @@ namespace ImapCertWatcher
         private void Close_Click(object sender, RoutedEventArgs e)
         {
             Close();
+        }
+
+        protected override void OnClosing(CancelEventArgs e)
+        {
+            if (_server.Settings.MinimizeToTrayOnClose)
+            {
+                e.Cancel = true;
+                Hide();
+                AppendLog("Сервер свернут в трей");
+                return;
+            }
+
+            _trayIcon.Visible = false;
+
+            base.OnClosing(e);
         }
     }
 }
