@@ -79,12 +79,7 @@
 
                         <DockPanel>
 
-                            <!-- Server status -->
-                            <TextBlock x:Name="txtServerState"
-                   Text="⚪ Сервер: подключение..."
-                   FontWeight="SemiBold"
-                   DockPanel.Dock="Left"
-                   Foreground="{DynamicResource TextColorBrush}"/>
+                            
 
                             <!-- Next check timer -->
                             <TextBlock x:Name="txtNextCheck"
@@ -236,16 +231,28 @@
                     </StatusBar>
 
                     <!-- Мини-лог -->
-                    <Border Grid.Row="6" Margin="0,4,0,4" BorderBrush="{DynamicResource BorderColorBrush}" BorderThickness="1"
-                            Background="{DynamicResource ControlBackgroundBrush}" CornerRadius="4">
-                        <TextBlock x:Name="txtMiniLog" 
-                                   Margin="4,2"
-                                   FontSize="10" 
-                                   FontFamily="Consolas"
-                                   Foreground="{DynamicResource TextColorBrush}"
-                                   TextWrapping="NoWrap"
-                                   ToolTip="Последние действия"
-                                   Text="Мини-лог готов"/>
+                    <Border Grid.Row="6"
+        Margin="0,4,0,4"
+        BorderBrush="{DynamicResource BorderColorBrush}"
+        BorderThickness="1"
+        Background="{DynamicResource ControlBackgroundBrush}"
+        CornerRadius="4">
+
+                        <TextBox x:Name="txtMiniLog"
+             MaxHeight="60"
+             Margin="4,2"
+             FontSize="10"
+             FontFamily="Consolas"
+             Foreground="{DynamicResource TextColorBrush}"
+             TextWrapping="Wrap"
+             VerticalScrollBarVisibility="Hidden"
+             AcceptsReturn="True"
+             IsReadOnly="True"
+             IsHitTestVisible="False"
+             BorderThickness="0"
+             Background="Transparent"
+             ToolTip="Последние действия"
+             Text="Мини-лог готов"/>
                     </Border>
 
                     <!-- Прогресс-бар проверки почты -->
@@ -366,57 +373,16 @@
 
                                 <!-- Поведение приложения -->
                                 <GroupBox Header="Поведение приложения" Style="{StaticResource ModernGroupBoxStyle}" Margin="0,12,0,0">
-                                    <StackPanel Margin="6">
+                                    <StackPanel Margin="6">                                                                             
 
-                                        <!-- Интервал проверки (минуты) -->
-                                        <TextBlock Text="Интервал проверки (минуты):"
-                   Margin="0,2"
-                   Foreground="{DynamicResource TextColorBrush}"/>
-
-                                        <TextBox x:Name="txtCheckInterval"
-                 Text="{Binding CheckIntervalMinutes}" 
-                 Style="{StaticResource ModernTextBoxStyle}"
-                 Height="26"
-                 ToolTip="Укажите интервал проверки почты в минутах"/>
-
-                                        <TextBlock Text="Рекомендуется: 5–60 минут"
-                   FontStyle="Italic"
-                   FontSize="10"
-                   Foreground="{DynamicResource TextColorBrush}"
-                   Margin="0,4,0,8"/>
-
-                                        <!-- Остальные настройки -->
-                                        <TextBlock Text="Дней до окончания для уведомлений:"
-                   Margin="0,8,0,2"
-                   Foreground="{DynamicResource TextColorBrush}"/>
-
-                                        <TextBox x:Name="txtNotifyDays"
-                 Text="{Binding NotifyDaysThreshold}"
-                 Style="{StaticResource ModernTextBoxStyle}"
-                 Height="26"
-                 ToolTip="Если осталось меньше или равно этому количеству дней — отправить уведомление"/>
+                                        
 
                                         <CheckBox x:Name="chkDarkTheme"
                   Content="Темная тема"
                   Style="{StaticResource ModernCheckBoxStyle}"
                   Margin="0,8,0,0"
                   Checked="ChkDarkTheme_Changed"
-                  Unchecked="ChkDarkTheme_Changed"/>
-
-                                        <CheckBox x:Name="chkAutoStart"
-                  Content="Добавить в автозагрузку Windows"
-                  IsChecked="{Binding AutoStart, Mode=TwoWay}"
-                  Margin="0,4,0,0"/>
-
-                                        <CheckBox x:Name="chkMinimizeToTray"
-                  Content="Сворачивать в трей при закрытии окна"
-                  IsChecked="{Binding MinimizeToTrayOnClose, Mode=TwoWay}"
-                  Margin="0,4,0,0"/>
-
-                                        <CheckBox x:Name="chkNotifyWorkHours"
-                  Content="Проверять почту и отправлять уведомления только в рабочее время (Пн–Пт, 08:00–16:30)"
-                  IsChecked="{Binding NotifyOnlyInWorkHours, Mode=TwoWay}"
-                  Margin="0,4,0,0"/>
+                  Unchecked="ChkDarkTheme_Changed"/>                                        
 
                                     </StackPanel>
                                 </GroupBox>
@@ -445,19 +411,19 @@
 
                                         <StackPanel Orientation="Horizontal" Margin="0,8,0,0" HorizontalAlignment="Right">
                                             <Button x:Name="btnTestBimoid"
-            Content="Тестовое сообщение"
-            Style="{StaticResource ModernButtonStyle}"
-            Width="190" Height="28"
-            Margin="0,0,8,0"
-            Click="BtnTestBimoid_Click"
-            ToolTip="Отправить тестовое сообщение на указанные аккаунты"/>
+                                                    Content="Тестовое сообщение"
+                                                    Style="{StaticResource ModernButtonStyle}"
+                                                    Width="190" Height="28"
+                                                    Margin="0,0,8,0"
+                                                    Click="BtnTestBimoid_Click"
+                                                    ToolTip="Отправить тестовое сообщение на указанные аккаунты"/>              
 
                                             <Button x:Name="btnTestNewUserNotify"
-            Content="Тест нового пользователя"
-            Style="{StaticResource ModernButtonStyle}"
-            Width="190" Height="28"
-            Click="BtnTestNewUserNotify_Click"
-            ToolTip="Отправить тестовое сообщение о новых пользователях на указанные аккаунты"/>
+                                                    Content="Тест нового пользователя"
+                                                    Style="{StaticResource ModernButtonStyle}"
+                                                    Width="190" Height="28"
+                                                    Click="BtnTestNewUserNotify_Click"
+                                                    ToolTip="Отправить тестовое сообщение о новых пользователях на указанные аккаунты"/>
                                         </StackPanel>
 
                                     </StackPanel>

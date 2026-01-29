@@ -1,21 +1,21 @@
 ﻿using FirebirdSql.Data.FirebirdClient;
 using ImapCertWatcher.Models;
-using ImapCertWatcher.Utils;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using ImapCertWatcher.Utils;
 using System.Text.RegularExpressions;
 
 namespace ImapCertWatcher.Data
 {
     public class DbHelper
     {
-        private readonly AppSettings _settings;
+        private readonly ServerSettings _settings;
         private readonly string _connectionString;
         private readonly Action<string> _addToMiniLog;
 
-        public DbHelper(AppSettings settings, Action<string> addToMiniLog = null)
+        public DbHelper(ServerSettings settings, Action<string> addToMiniLog = null)
         {
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
             _addToMiniLog = addToMiniLog;

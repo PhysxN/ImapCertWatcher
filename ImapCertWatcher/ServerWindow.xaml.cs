@@ -22,10 +22,10 @@ namespace ImapCertWatcher
         {
             InitializeComponent();
 
-            AppSettings settings;
+            ServerSettings settings;
             try
             {
-                settings = SettingsLoader.Load("settings.txt");
+                settings = SettingsLoader.LoadServer("settings.txt");
             }
             catch (Exception ex)
             {

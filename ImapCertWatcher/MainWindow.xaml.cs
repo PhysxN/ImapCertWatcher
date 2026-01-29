@@ -33,7 +33,8 @@ namespace ImapCertWatcher
 {
     public partial class MainWindow : Window
     {
-        private AppSettings _settings;
+        private ClientSettings _clientSettings;
+        private ServerSettings _serverSettings;
         private NotificationManager _notificationManager;
         private HashSet<int> _knownCertIds = new HashSet<int>();
         private DbHelper _db;  
@@ -41,22 +42,19 @@ namespace ImapCertWatcher
         private ObservableCollection<CertRecord> _allItems = new ObservableCollection<CertRecord>();
         private DispatcherTimer _refreshTimer;
         private ObservableCollection<string> _miniLogMessages = new ObservableCollection<string>();
-        private const int MAX_MINI_LOG_LINES = 3;
-
-        private Forms.NotifyIcon _trayIcon;
-        private bool _reallyExit = false;
+        private const int MAX_MINI_LOG_LINES = 3; 
         private string _currentBuildingFilter = "Все";
         private bool _showDeleted = false;
         private string _searchText = "";
         private bool _isDarkTheme = false;
         private const string AUTOSTART_REG_PATH = @"Software\Microsoft\Windows\CurrentVersion\Run";
         private const string AUTOSTART_VALUE_NAME = "ImapCertWatcher";
-        private DispatcherTimer _serverStatusTimer;
+        
         private DispatcherTimer _serverMonitorTimer;
         private DispatcherTimer _connectingAnimationTimer;
         private int _connectingDots = 0;
         private bool _reconnectInProgress = false;
-        private bool _wasOffline = true;
+        
         enum ServerConnectionState
         {
             Connecting,
@@ -67,6 +65,7 @@ namespace ImapCertWatcher
         private int _reconnectDelaySeconds = 2;
         private const int MAX_RECONNECT_DELAY = 30;
         private ServerConnectionState _serverState = ServerConnectionState.Offline;
+        private string _lastTimerValue = "";
         private void ApplyAutoStartSetting()
         {
             try
@@ -78,7 +77,7 @@ namespace ImapCertWatcher
                     string exePath = Assembly.GetExecutingAssembly().Location;
                     exePath = "\"" + exePath + "\"";
 
-                    if (_settings.AutoStart)
+                    if (_clientSettings.AutoStart)
                     {
                         key.SetValue(AUTOSTART_VALUE_NAME, exePath);
                         Log("Автозапуск включен");
@@ -127,19 +126,19 @@ namespace ImapCertWatcher
 
                 // Загружаем настройки
                 var settingsPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "settings.txt");
-                _settings = SettingsLoader.Load(settingsPath);
+                _clientSettings = SettingsLoader.LoadClient(settingsPath);
+                _serverSettings = SettingsLoader.LoadServer(settingsPath);
+
+                this.DataContext = _clientSettings;
+
                 ApplyAutoStartSetting();
 
-                this.DataContext = _settings;
-                _notificationManager = new NotificationManager(_settings, Log);
+                _notificationManager = new NotificationManager(_serverSettings, Log);
 
-                
+
 
                 // Загрузка темы
                 LoadThemeSettings();
-
-                //Трей
-                InitTrayIcon();
 
                 // Настройка DataGrid и обработчиков
                 dgCerts.CanUserAddRows = false;
@@ -175,52 +174,21 @@ namespace ImapCertWatcher
             return t >= start && t <= end;
         }
 
-        private void InitTrayIcon()
-        {
-            try
-            {
-                _trayIcon = new Forms.NotifyIcon();
-                _trayIcon.Icon = System.Drawing.Icon.ExtractAssociatedIcon(
-                    System.Reflection.Assembly.GetExecutingAssembly().Location);
-                _trayIcon.Visible = true;
-                _trayIcon.Text = "ImapCertWatcher";
-
-                var menu = new Forms.ContextMenuStrip();
-                menu.Items.Add("Открыть", null, (s, e) => ShowFromTray());
-                menu.Items.Add("Проверить почту сейчас", null, async (s, e) =>
-                {
-                    await Dispatcher.InvokeAsync(async () => await SendServerCommand("FAST_CHECK"));
-                });
-                menu.Items.Add(new Forms.ToolStripSeparator());
-                menu.Items.Add("Выход", null, (s, e) => ExitFromTray());
-
-                _trayIcon.ContextMenuStrip = menu;
-                _trayIcon.DoubleClick += (s, e) => ShowFromTray();
-            }
-            catch (Exception ex)
-            {
-                Log($"Ошибка инициализации трея: {ex.Message}");
-            }
-        }
-
-        private void ShowFromTray()
-        {
-            try
-            {
-                this.Show();
-                this.WindowState = WindowState.Normal;
-                this.Activate();
-            }
-            catch { }
-        }
+        
 
 
         private void SetServerState(ServerConnectionState state)
         {
+            if (_serverState == state && state != ServerConnectionState.Connecting)
+    return;
             _serverState = state;
 
             Dispatcher.Invoke(() =>
             {
+                if (state != ServerConnectionState.Busy)
+                {
+                    pbServerProgress.Visibility = Visibility.Collapsed;
+                }
                 if (state == ServerConnectionState.Connecting)
                     StartConnectingAnimation();
                 else
@@ -269,46 +237,47 @@ namespace ImapCertWatcher
         {
             try
             {
-                if (_serverState == ServerConnectionState.Offline && _wasOffline)
+                if (_serverState == ServerConnectionState.Offline)
                 {
-                    _wasOffline = false;
                     SetServerState(ServerConnectionState.Connecting);
                 }
 
                 var status = await TcpCommandClient.SendAsync(
-                    _settings.ServerIp,
-                    _settings.ServerPort,
+                    _clientSettings.ServerIp,
+                    _clientSettings.ServerPort,
                     "STATUS");
-                AddToMiniLog("SERVER STATUS RAW: " + status);
 
                 var progress = await TcpCommandClient.SendAsync(
-                    _settings.ServerIp,
-                    _settings.ServerPort,
+                    _clientSettings.ServerIp,
+                    _clientSettings.ServerPort,
                     "GET_PROGRESS");
 
                 var timer = await TcpCommandClient.SendAsync(
-                    _settings.ServerIp,
-                    _settings.ServerPort,
+                    _clientSettings.ServerIp,
+                    _clientSettings.ServerPort,
                     "GET_TIMER");
 
                 var log = await TcpCommandClient.SendAsync(
-                    _settings.ServerIp,
-                    _settings.ServerPort,
+                    _clientSettings.ServerIp,
+                    _clientSettings.ServerPort,
                     "GET_LOG");
 
-                
+                // ✅ только если реально получили ответ
+                if (!string.IsNullOrWhiteSpace(status))
+                {
                     UpdateStatusUI(status);
                     UpdateProgressUI(progress);
                     UpdateTimerUI(timer);
                     UpdateServerLog(log);
-                
+                }
 
-                _reconnectDelaySeconds = 2; // reset backoff on success
-                _wasOffline = false;
+                // reset reconnect backoff on success
+                _reconnectDelaySeconds = 2;
             }
-            catch
+            catch (Exception ex)
             {
-                _wasOffline = true;
+                Log("Server monitor error: " + ex.Message);
+
                 SetServerState(ServerConnectionState.Offline);
 
                 Dispatcher.Invoke(() =>
@@ -327,7 +296,7 @@ namespace ImapCertWatcher
 
             var content = log.Replace("LOG ", "");
 
-            txtMiniLog.Text = content;
+            AddToMiniLog("[SERVER] " + content);
         }
 
         private void UpdateStatusUI(string status)
@@ -335,17 +304,16 @@ namespace ImapCertWatcher
             if (string.IsNullOrWhiteSpace(status))
                 return;
 
-            status = status.Trim().ToUpperInvariant();
+            status = status.ToUpperInvariant();
 
-            // убираем префикс
-            if (status.StartsWith("STATUS"))
-                status = status.Replace("STATUS", "").Trim();
+            // DEBUG (очень полезно)
+            AddToMiniLog("[STATUS RAW] " + status);
 
-            if (status == "BUSY")
+            if (status.Contains("BUSY"))
             {
                 SetServerState(ServerConnectionState.Busy);
             }
-            else if (status == "IDLE")
+            else if (status.Contains("IDLE") || status.Contains("READY") || status.Contains("OK"))
             {
                 SetServerState(ServerConnectionState.Online);
             }
@@ -362,41 +330,51 @@ namespace ImapCertWatcher
 
             var data = progress.Replace("PROGRESS ", "").Split('|');
 
-            var percent = int.Parse(data[0]);
-            var stage = data[1];
+            if (!int.TryParse(data[0], out int percent))
+                return;
 
-            pbServerProgress.Visibility = Visibility.Visible;
-            pbServerProgress.Value = percent;
+            Dispatcher.Invoke(() =>
+            {
+                // показываем только если сервер реально BUSY
+                if (_serverState == ServerConnectionState.Busy)
+                {
+                    pbServerProgress.IsIndeterminate = false;
+                    pbServerProgress.Visibility = Visibility.Visible;
+                    pbServerProgress.Value = percent;
+                }
+                else
+                {
+                    pbServerProgress.Visibility = Visibility.Collapsed;
+                }
+            });
         }
 
         private void UpdateTimerUI(string timer)
         {
-            if (timer.Contains("READY"))
-                txtNextCheck.Text = "Следующая проверка: сейчас";
-            else
-            {
-                var min = timer.Replace("TIMER ", "");
-                txtNextCheck.Text = $"Следующая проверка через {min} мин";
-            }
-        }
+            if (string.IsNullOrWhiteSpace(timer))
+                return;
+            if (timer == _lastTimerValue)
+                return;
 
-        
+            _lastTimerValue = timer;
 
-        private void ExitFromTray()
-        {
-            try
+            Dispatcher.Invoke(() =>
             {
-                _reallyExit = true;
-                if (_trayIcon != null)
+                if (timer.Contains("READY"))
                 {
-                    _trayIcon.Visible = false;
-                    _trayIcon.Dispose();
-                    _trayIcon = null;
+                    txtNextCheck.Text = "Следующая проверка: сейчас";
                 }
-                this.Close();
-            }
-            catch { }
+                else if (timer.StartsWith("TIMER"))
+                {
+                    var min = timer.Replace("TIMER ", "").Trim();
+                    txtNextCheck.Text = $"Следующая проверка через {min} мин";
+                }
+            });
         }
+
+
+
+
 
         private void StartConnectingAnimation()
         {
@@ -428,64 +406,8 @@ namespace ImapCertWatcher
             if (_connectingAnimationTimer != null)
             {
                 _connectingAnimationTimer.Stop();
+                _connectingAnimationTimer.Tick -= ConnectingAnimationTick;
                 _connectingDots = 0;
-            }
-        }
-
-        protected override void OnStateChanged(EventArgs e)
-        {
-            base.OnStateChanged(e);
-
-            // Если свернули окно и включен режим "в трей"
-            if (_settings != null &&
-                _settings.MinimizeToTrayOnClose &&
-                this.WindowState == WindowState.Minimized)
-            {
-                this.Hide();
-                _trayIcon?.ShowBalloonTip(
-                    1000,
-                    "ImapCertWatcher",
-                    "Приложение свернуто в трей и продолжит работать.",
-                    Forms.ToolTipIcon.Info);
-            }
-        }
-
-        
-        private async Task UpdateServerStatus()
-        {
-            try
-            {
-                var response = await TcpCommandClient.SendAsync(
-                    _settings.ServerIp,
-                    _settings.ServerPort,
-                    "STATUS");
-
-                Dispatcher.Invoke(() =>
-                {
-                    if (response.Contains("BUSY"))
-                    {
-                        txtServerStatus.Text = "🟡 Сервер занят";
-                        txtServerStatus.Foreground = Brushes.Orange;
-                    }
-                    else if (response.Contains("IDLE"))
-                    {
-                        txtServerStatus.Text = "🟢 Сервер готов";
-                        txtServerStatus.Foreground = Brushes.Green;
-                    }
-                    else
-                    {
-                        txtServerStatus.Text = "⚪ Неизвестный статус";
-                        txtServerStatus.Foreground = Brushes.Gray;
-                    }
-                });
-            }
-            catch
-            {
-                Dispatcher.Invoke(() =>
-                {
-                    txtServerStatus.Text = "🔴 Сервер недоступен";
-                    txtServerStatus.Foreground = Brushes.Red;
-                });
             }
         }
 
@@ -510,7 +432,7 @@ namespace ImapCertWatcher
                 var initResult = await Task.Run(() =>
                 {
                     OnProgressUpdated("Создание подключения к БД...", 20);
-                    var db = new DbHelper(_settings, AddToMiniLog);
+                    var db = new DbHelper(_serverSettings, AddToMiniLog);
 
                     OnProgressUpdated("Загрузка данных из БД...", 40);
                     var list = db.LoadAll(_showDeleted, _currentBuildingFilter);
@@ -1197,7 +1119,7 @@ namespace ImapCertWatcher
                 }
                 else
                 {
-                    var searchTerms = _searchText.ToLower().Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                    var searchTerms = _searchText.ToLower().Split(new char[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
 
                     _items.Clear();
                     foreach (var item in _allItems)
@@ -1327,8 +1249,8 @@ namespace ImapCertWatcher
                 Cursor = Cursors.Wait;
 
                 var response = await TcpCommandClient.SendAsync(
-                    _settings.ServerIp,
-                    _settings.ServerPort,
+                    _clientSettings.ServerIp,
+                    _clientSettings.ServerPort,
                     cmd);
 
                 statusText.Text = "Ответ сервера: " + response;
@@ -1719,12 +1641,9 @@ namespace ImapCertWatcher
 
             _reconnectInProgress = true;
 
-            Dispatcher.Invoke(() =>
-            {
-                txtServerStatus.Text =
-                    $"🔴 Сервер OFFLINE — повтор через {_reconnectDelaySeconds} сек";
-                txtServerStatus.Foreground = Brushes.Red;
-            });
+
+            SetServerState(ServerConnectionState.Offline);
+
 
             await Task.Delay(_reconnectDelaySeconds * 1000);
 
@@ -1839,8 +1758,8 @@ namespace ImapCertWatcher
             try
             {
                 var result = await TcpCommandClient.SendAsync(
-                    _settings.ServerIp,
-                    _settings.ServerPort,
+                    _clientSettings.ServerIp,
+                    _clientSettings.ServerPort,
                     "STATUS");
 
                 MessageBox.Show(
@@ -1864,13 +1783,13 @@ namespace ImapCertWatcher
         {
             try
             {
-                _settings.FbPassword = pwdFbPassword.Password;
+                _serverSettings.FbPassword = pwdFbPassword.Password;
 
                 SaveSettings();
 
                 try
                 {
-                    _db = new DbHelper(_settings);                    
+                    _db = new DbHelper(_serverSettings);                    
                     LoadFromDb();
                 }
                 catch (Exception dbEx)
@@ -1896,13 +1815,13 @@ namespace ImapCertWatcher
         {
             try
             {
-                var tempSettings = new AppSettings
+                var tempSettings = new ServerSettings
                 {
-                    FirebirdDbPath = _settings.FirebirdDbPath,
-                    FbServer = _settings.FbServer,
-                    FbUser = _settings.FbUser,
+                    FirebirdDbPath = _serverSettings.FirebirdDbPath,
+                    FbServer = _serverSettings.FbServer,
+                    FbUser = _serverSettings.FbUser,
                     FbPassword = pwdFbPassword.Password,
-                    FbDialect = _settings.FbDialect
+                    FbDialect = _serverSettings.FbDialect
                 };
 
                 var tempDb = new DbHelper(tempSettings);
@@ -1937,7 +1856,7 @@ namespace ImapCertWatcher
 
             if (saveFileDialog.ShowDialog() == true)
             {
-                _settings.FirebirdDbPath = saveFileDialog.FileName;
+                _serverSettings.FirebirdDbPath = saveFileDialog.FileName;
                 txtFirebirdDbPath.GetBindingExpression(TextBox.TextProperty).UpdateTarget();
             }
         }
@@ -1948,66 +1867,54 @@ namespace ImapCertWatcher
             {
                 var settingsPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "settings.txt");
 
-                // Обновляем пароли/значения из UI перед сохранением                
-                _settings.FbPassword = pwdFbPassword.Password;
-                // NotifyDaysThreshold и аккаунты уже привязаны через Binding к TextBox'ам
+                var s = _serverSettings;
+
+                s.FbPassword = pwdFbPassword.Password;
 
                 var lines = new[]
                 {
             "# Mail settings",
-            $"MailHost={_settings.MailHost}",
-            $"MailPort={_settings.MailPort}",
-            $"MailUseSsl={_settings.MailUseSsl}",
-            $"MailLogin={_settings.MailLogin}",
-            $"MailPassword={_settings.MailPassword}",
-            $"ImapFolder={_settings.ImapFolder}",
-            $"ImapNewCertificatesFolder={_settings.ImapNewCertificatesFolder}",
-            $"ImapRevocationsFolder={_settings.ImapRevocationsFolder}",
+            $"MailHost={s.MailHost}",
+            $"MailPort={s.MailPort}",
+            $"MailUseSsl={s.MailUseSsl}",
+            $"MailLogin={s.MailLogin}",
+            $"MailPassword={s.MailPassword}",
+
+            $"ImapNewCertificatesFolder={s.ImapNewCertificatesFolder}",
+            $"ImapRevocationsFolder={s.ImapRevocationsFolder}",
             "",
-            "# Filter",
-            $"FilterRecipient={_settings.FilterRecipient}",
-            $"FilterSubjectPrefix={_settings.FilterSubjectPrefix}",
-            "",
+
             "# Firebird settings",
-            $"FirebirdDbPath={_settings.FirebirdDbPath}",
-            $"FbServer={_settings.FbServer}",
-            $"FbUser={_settings.FbUser}",
-            $"FbPassword={_settings.FbPassword}",
-            $"FbDialect={_settings.FbDialect}",
+            $"FirebirdDbPath={s.FirebirdDbPath}",
+            $"FbServer={s.FbServer}",
+            $"FbUser={s.FbUser}",
+            $"FbPassword={s.FbPassword}",
+            $"FbDialect={s.FbDialect}",
             "",
-            "# App behavior",
-            // Переведено на минуты
-            $"CheckIntervalMinutes={_settings.CheckIntervalMinutes}",
-            $"AutoStart={_settings.AutoStart}",
-            $"MinimizeToTrayOnClose={_settings.MinimizeToTrayOnClose}",
-            $"NotifyOnlyInWorkHours={_settings.NotifyOnlyInWorkHours}",
+
+            "# Server behavior",
+            $"CheckIntervalMinutes={s.CheckIntervalMinutes}",
+            $"NotifyOnlyInWorkHours={s.NotifyOnlyInWorkHours}",
             "",
-            "# Bimoid / ObimpCMD",
-            $"NotifyDaysThreshold={_settings.NotifyDaysThreshold}",
-            "BimoidAccountsKrasnoflotskaya=" + (_settings.BimoidAccountsKrasnoflotskaya ?? "").Replace(Environment.NewLine, "\\n"),
-            "BimoidAccountsPionerskaya="   + (_settings.BimoidAccountsPionerskaya   ?? "").Replace(Environment.NewLine, "\\n")
+
+            "# Notifications",
+            $"NotifyDaysThreshold={s.NotifyDaysThreshold}",
+            "BimoidAccountsKrasnoflotskaya=" +
+                (s.BimoidAccountsKrasnoflotskaya ?? "").Replace(Environment.NewLine, "\\n"),
+            "BimoidAccountsPionerskaya=" +
+                (s.BimoidAccountsPionerskaya ?? "").Replace(Environment.NewLine, "\\n"),
         };
 
-                File.WriteAllLines(settingsPath, lines, System.Text.Encoding.UTF8);
+                File.WriteAllLines(settingsPath, lines, Encoding.UTF8);
 
-                // Перезапускаем/перенастраиваем таймер проверки почты.
-                // ВАЖНО: первый запуск теперь происходит через указанный интервал,
-                // чтобы при сохранении настроек не вызывать проверку немедленно.
-                                
-
-                // Обновляем текстовое поле на UI (если оно есть)
-                try
-                {
-                    txtInterval.Text = _settings.CheckIntervalMinutes.ToString();
-                }
-                catch { /* игнорируем, если UI ещё не готов */ }
+                txtInterval.Text = s.CheckIntervalMinutes.ToString();
             }
             catch (Exception ex)
             {
                 throw new Exception($"Не удалось сохранить настройки: {ex.Message}", ex);
             }
 
-            ApplyAutoStartSetting();
+            ApplyAutoStartSetting(); // берет из _clientSettings
         }
 
         private void ProcessSigFile(string sigPath)
@@ -2409,29 +2316,13 @@ namespace ImapCertWatcher
 
         protected override void OnClosing(CancelEventArgs e)
         {
-            if (!_reallyExit && _settings != null && _settings.MinimizeToTrayOnClose)
-            {
-                // перехватываем крестик – прячем в трей
-                e.Cancel = true;
-                this.WindowState = WindowState.Minimized;
-                this.Hide();
-
-                _trayIcon?.ShowBalloonTip(
-                    1000,
-                    "ImapCertWatcher",
-                    "Приложение продолжит работать в трее. Для выхода используйте меню значка.",
-                    Forms.ToolTipIcon.Info);
-
-                return;
-            }
-
             base.OnClosing(e);
         }
 
 
         protected override void OnClosed(EventArgs e)
         {
-            _serverStatusTimer?.Stop();
+            
             _serverMonitorTimer?.Stop();
             base.OnClosed(e);
 
@@ -2440,12 +2331,7 @@ namespace ImapCertWatcher
             if (_refreshTimer != null)
                 _refreshTimer.Tick -= RefreshDaysLeft;
 
-            if (_trayIcon != null)
-            {
-                _trayIcon.Visible = false;
-                _trayIcon.Dispose();
-                _trayIcon = null;
-            }
+            
         }
     }
 }

@@ -26,12 +26,12 @@ namespace ImapCertWatcher.Services
     /// </summary>
     public class ImapNewCertificatesWatcher
     {
-        private readonly AppSettings _settings;
+        private readonly ServerSettings _settings;
         private readonly DbHelper _db;
         private readonly Action<string> _log;
 
         public ImapNewCertificatesWatcher(
-            AppSettings settings,
+            ServerSettings settings,
             DbHelper db,
             Action<string> log = null)
         {

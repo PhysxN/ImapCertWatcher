@@ -19,7 +19,7 @@ namespace ImapCertWatcher
 {
     public partial class ServerSettingsWindow : Window, INotifyPropertyChanged
     {
-        private readonly AppSettings _settings;
+        private readonly ServerSettings _settings;
         private readonly NotificationManager _notificationManager;
 
         // ============================
@@ -50,7 +50,7 @@ namespace ImapCertWatcher
         // Constructor
         // ============================
 
-        public ServerSettingsWindow(AppSettings settings)
+        public ServerSettingsWindow(ServerSettings settings)
         {
             InitializeComponent();
 
@@ -246,7 +246,7 @@ namespace ImapCertWatcher
             {
                 Cursor = System.Windows.Input.Cursors.Wait;
 
-                var testSettings = new AppSettings
+                var testSettings = new ServerSettings
                 {
                     FbServer = _settings.FbServer,
                     FirebirdDbPath = _settings.FirebirdDbPath,
@@ -349,7 +349,7 @@ namespace ImapCertWatcher
         // SETTINGS SAVE FILE
         // ============================
 
-        private static void SaveSettings(string path, AppSettings s)
+        private static void SaveSettings(string path, ServerSettings s)
         {
             var lines = new[]
             {

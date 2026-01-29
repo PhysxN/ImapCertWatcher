@@ -11,7 +11,7 @@ namespace ImapCertWatcher.Services
 {
     public class NotificationManager
     {
-        private readonly AppSettings _settings;
+        private readonly ServerSettings _settings;
         private readonly Action<string> _log;
         private readonly string _obimpDir;
         private readonly string _stateFile;
@@ -34,7 +34,7 @@ namespace ImapCertWatcher.Services
 
         private NotificationState _state = new NotificationState();
 
-        public NotificationManager(AppSettings settings, Action<string> log)
+        public NotificationManager(ServerSettings settings, Action<string> log)
         {
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
             _log = log ?? (_ => { });

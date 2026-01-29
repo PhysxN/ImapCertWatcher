@@ -16,7 +16,7 @@ namespace ImapCertWatcher.Server
     public class ServerHost : IDisposable
     {
         private const string PipeName = "ImapCertWatcherPipe";
-        private readonly AppSettings _settings;
+        private readonly ServerSettings _settings;
         private readonly DbHelper _db;
         private readonly Action<string> _log;
 
@@ -29,10 +29,10 @@ namespace ImapCertWatcher.Server
         private Task _pipeTask;
         private TcpCommandServer _tcpServer;
 
-        public AppSettings Settings => _settings;
+        public ServerSettings Settings => _settings;
 
-        
-        
+
+
         private readonly SemaphoreSlim _checkLock = new SemaphoreSlim(1, 1);
 
         private DateTime _lastCheckTime = DateTime.MinValue;
@@ -44,7 +44,7 @@ namespace ImapCertWatcher.Server
 
         private DateTime _nextTimerRun = DateTime.MinValue;
 
-        public ServerHost(AppSettings settings, DbHelper db, Action<string> log)
+        public ServerHost(ServerSettings settings, DbHelper db, Action<string> log)
         {
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
             _db = db ?? throw new ArgumentNullException(nameof(db));

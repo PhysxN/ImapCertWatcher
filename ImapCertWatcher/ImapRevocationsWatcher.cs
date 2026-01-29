@@ -17,7 +17,7 @@ namespace ImapCertWatcher.Services
 {
     public class ImapRevocationsWatcher
     {
-        private readonly AppSettings _settings;
+        private readonly ServerSettings _settings;
         private readonly DbHelper _db;
         private readonly Action<string> _log;
 
@@ -27,7 +27,7 @@ namespace ImapCertWatcher.Services
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
         public ImapRevocationsWatcher(
-            AppSettings settings,
+            ServerSettings settings,
             DbHelper db,
             Action<string> log)
         {
@@ -88,9 +88,20 @@ namespace ImapCertWatcher.Services
 
                     folder.Open(FolderAccess.ReadWrite);
 
+                    long lastUid = checkAllMessages
+                        ? 0
+                        : _db.GetLastUid(folder.FullName + "_REVOKE");
+
                     var uids = checkAllMessages
                         ? folder.Search(SearchQuery.All)
-                        : folder.Search(SearchQuery.DeliveredAfter(DateTime.Now.AddDays(-7)));
+                        : folder.Search(
+                            SearchQuery.Uids(
+                                new UniqueIdRange(
+                                    new UniqueId((uint)(lastUid + 1)),
+                                    UniqueId.MaxValue
+                                )
+                            )
+                          );
 
                     Log($"Найдено писем: {uids.Count}");
 
@@ -148,10 +159,14 @@ namespace ImapCertWatcher.Services
 
                         MarkProcessed(folder, uidStr);
 
-                        if (!checkAllMessages)
-                            break;
+                        
+                            
                     }
-
+                    if (!checkAllMessages && uids.Count > 0)
+                    {
+                        long maxUid = uids.Max(u => u.Id);
+                        _db.UpdateLastUid(folder.FullName + "_REVOKE", maxUid);
+                    }
                     folder.Close();
                     client.Disconnect(true);
                 }
