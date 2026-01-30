@@ -61,33 +61,43 @@ namespace ImapCertWatcher.Server
         private async Task HandleClient(TcpClient client)
         {
             using (client)
+            using (var stream = client.GetStream())
+            using (var reader = new System.IO.StreamReader(stream, Encoding.UTF8))
+            using (var writer = new System.IO.StreamWriter(stream, Encoding.UTF8) { AutoFlush = true })
             {
-                client.ReceiveTimeout = 10000;
-                client.SendTimeout = 10000;
-
-                var stream = client.GetStream();
-
-                var buffer = new byte[4096];
-                int read = await stream.ReadAsync(buffer, 0, buffer.Length);
-
-                if (read <= 0)
-                    return;
-
-                var request = Encoding.UTF8.GetString(buffer, 0, read).Trim();
-
-                string response;
-
                 try
                 {
-                    response = _commandHandler(request);
+                    client.ReceiveTimeout = 10000;
+                    client.SendTimeout = 10000;
+
+                    // Читаем команду строкой
+                    var request = await reader.ReadLineAsync();
+
+                    if (string.IsNullOrWhiteSpace(request))
+                        return;
+
+                    Console.WriteLine("[SERVER] CMD RECEIVED: " + request);
+
+                    string response;
+
+                    try
+                    {
+                        response = _commandHandler(request);
+                    }
+                    catch (Exception ex)
+                    {
+                        response = "ERROR " + ex.Message;
+                    }
+
+                    // ГАРАНТИРОВАННЫЙ перевод строки
+                    await writer.WriteLineAsync(response);
+
+                    Console.WriteLine("[SERVER] RESPONSE SENT");
                 }
                 catch (Exception ex)
                 {
-                    response = "ERROR: " + ex.Message;
+                    Console.WriteLine("[SERVER] CLIENT ERROR: " + ex.Message);
                 }
-
-                var respBytes = Encoding.UTF8.GetBytes(response);
-                await stream.WriteAsync(respBytes, 0, respBytes.Length);
             }
         }
     }

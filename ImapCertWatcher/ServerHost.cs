@@ -4,11 +4,11 @@ using ImapCertWatcher.Services;
 using ImapCertWatcher.Utils;
 using System;
 using System.IO;
-using System.IO.Pipes;
 using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Newtonsoft.Json;
 
 
 namespace ImapCertWatcher.Server
@@ -25,8 +25,8 @@ namespace ImapCertWatcher.Server
         private readonly ImapRevocationsWatcher _revokeWatcher;
         private readonly NotificationManager _notifications;
 
-        private CancellationTokenSource _pipeCts;
-        private Task _pipeTask;
+        
+        
         private TcpCommandServer _tcpServer;
 
         public ServerSettings Settings => _settings;
@@ -40,6 +40,7 @@ namespace ImapCertWatcher.Server
         private readonly TimeSpan _minCheckInterval = TimeSpan.FromMinutes(10);
         private volatile int _progressPercent = 0;
         private volatile string _currentStage = "IDLE";
+        private readonly object _stateLock = new object();
         private readonly object _logLock = new object();
 
         private DateTime _nextTimerRun = DateTime.MinValue;
@@ -84,9 +85,9 @@ namespace ImapCertWatcher.Server
                 _log("ServerHost: авто-проверка отключена (CheckIntervalMinutes <= 0)");
             }
 
-            StartPipeServer();
             _tcpServer = new TcpCommandServer(5050, HandleRemoteCommand);
             _tcpServer.Start();
+
             _log("TCP Server started. Listening on port 5050");
         }
 
@@ -97,20 +98,31 @@ namespace ImapCertWatcher.Server
             switch (cmd)
             {
                 case "FAST_CHECK":
-                    _ = Task.Run(() => RequestFastCheckAsync(CancellationToken.None));
-                    return "OK FAST STARTED";
+
+                    if (_checkLock.CurrentCount == 0)
+                        return "BUSY";
+
+                    _ = Task.Run(async () =>
+                    {
+                        await RequestFastCheckAsync(CancellationToken.None);
+                    });
+
+                    return "OK";
 
                 case "FULL_CHECK":
                     _ = Task.Run(() => RequestFullCheckAsync());
                     return "OK FULL STARTED";
 
                 case "STATUS":
-                    return _checkLock.CurrentCount == 0
-                        ? "STATUS BUSY"
-                        : "STATUS IDLE";
+
+                    if (_checkLock.CurrentCount == 0)
+                        return "STATUS BUSY";
+
+                    return "STATUS IDLE";
 
                 case "GET_PROGRESS":
-                    return $"PROGRESS {_progressPercent}|{_currentStage}";
+                    lock (_stateLock)
+                        return $"PROGRESS {_progressPercent}|{_currentStage}";
 
                 case "GET_TIMER":
                     var remain = (_nextTimerRun - DateTime.Now);
@@ -122,56 +134,29 @@ namespace ImapCertWatcher.Server
                 case "GET_LOG":
                     return "LOG " + GetLastServerLogLines();
 
+                case "GET_CERTS":
+                    try
+                    {
+                        var list = _db.GetAllCertificates();
+
+                        var json = JsonConvert.SerializeObject(list);
+
+                        _log("GET_CERTS -> send " + list.Count + " records");
+
+                        // ВАЖНО: добавляем перевод строки!
+                        return "CERTS " + json + "\n";
+                    }
+                    catch (Exception ex)
+                    {
+                        _log("GET_CERTS error: " + ex.Message);
+                        return "CERTS []\n";
+                    }
+
                 default:
                     return "UNKNOWN COMMAND";
             }
         }
-
-        private void StartPipeServer()
-        {
-            _pipeCts = new CancellationTokenSource();
-
-            _pipeTask = Task.Run(async () =>
-            {
-                while (!_pipeCts.IsCancellationRequested)
-                {
-                    try
-                    {
-                        using (var server = new NamedPipeServerStream(
-                            PipeName,
-                            PipeDirection.In,
-                            1,
-                            PipeTransmissionMode.Message,
-                            PipeOptions.Asynchronous))
-                        {
-                            _log("Pipe: ожидание команды клиента...");
-                            await server.WaitForConnectionAsync(_pipeCts.Token);
-
-                            using (var reader = new StreamReader(server, Encoding.UTF8))
-                            {
-                                var command = await reader.ReadLineAsync();
-                                _log($"Pipe: получена команда '{command}'");
-
-                                if (command == "FAST_CHECK")
-                                {
-                                    await RequestFastCheckAsync(CancellationToken.None);
-                                }
-                            }
-                        }
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        // корректное завершение
-                        break;
-                    }
-                    catch (Exception ex)
-                    {
-                        _log("Pipe error: " + ex.Message);
-                        await Task.Delay(1000);
-                    }
-                }
-            });
-        }
+                
 
         public async Task<string> RequestFastCheckAsync(CancellationToken token)
         {
@@ -195,28 +180,38 @@ namespace ImapCertWatcher.Server
                 _lastCheckTime = DateTime.Now;
 
                 _log("FAST CHECK started");
-                _progressPercent = 5;
-                _currentStage = "Connecting";
+                lock (_stateLock)
+                {
+                    _progressPercent = 5;
+                    _currentStage = "Connecting";
+                }
 
                 var startedAt = DateTime.Now;
-
-                _progressPercent = 30;
+                lock (_stateLock)
+                {
+                    _progressPercent = 30;
                 _currentStage = "Checking mail";
+                }
                 await Task.WhenAll(
                     _newWatcher.CheckNewCertificatesFastAsync(token),
                     _revokeWatcher.CheckRevocationsFastAsync(token)
                 );
 
                 var newCerts = _db.GetCertificatesAddedAfter(startedAt);
-
-                _progressPercent = 80;
+                lock (_stateLock)
+                {
+                    _progressPercent = 80;
                 _currentStage = "Saving data";
+                }
                 if (newCerts.Count > 0)
                     _notifications.NotifyNewUsers(newCerts);
 
                 _log("FAST CHECK finished");
-                _progressPercent = 100;
-                _currentStage = "IDLE";
+                lock (_stateLock)
+                {
+                    _progressPercent = 100;
+                    _currentStage = "IDLE";
+                }
 
                 return "OK FAST DONE";
             }
@@ -263,8 +258,6 @@ namespace ImapCertWatcher.Server
         }
         public void Dispose()
         {
-            _pipeCts?.Cancel();
-            _pipeTask?.Wait(1000);
             _timer.Dispose();
         }
     }

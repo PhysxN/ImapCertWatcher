@@ -127,6 +127,54 @@ namespace ImapCertWatcher.Data
             }
         }
 
+        public List<CertRecord> GetAllCertificates()
+        {
+            var list = new List<CertRecord>();
+
+            try
+            {
+                using (var conn = new FbConnection(_connectionString))
+                {
+                    conn.Open();
+
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        cmd.CommandText = @"
+SELECT
+    c.ID,
+    c.FIO,
+    c.DATE_START,
+    c.DATE_END,
+    c.CERT_NUMBER,
+    c.FROM_ADDRESS,
+    c.IS_DELETED,
+    c.NOTE,
+    c.BUILDING,
+    c.FOLDER_PATH,
+    c.ARCHIVE_PATH,
+    c.MESSAGE_DATE,
+    (SELECT COUNT(*) FROM CERT_ARCHIVES ca WHERE ca.CERT_ID = c.ID) AS HAS_ARCHIVE
+FROM CERTS c
+ORDER BY c.DATE_END";
+
+                        using (var rdr = cmd.ExecuteReader())
+                        {
+                            while (rdr.Read())
+                            {
+                                list.Add(MapReaderToCertRecord(rdr));
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("GetAllCertificates error: " + ex.Message);
+            }
+
+            return list;
+        }
+
         private void EnsureSequences(FbConnection conn)
         {
             using (var cmd = conn.CreateCommand())
@@ -1109,26 +1157,38 @@ RETURNING ID";
 
         private CertRecord MapReaderToCertRecord(FbDataReader rdr)
         {
-            var id = rdr.GetInt32(0);
-            return new CertRecord
-            {
-                Id = id,
-                Fio = rdr.IsDBNull(1) ? "" : rdr.GetString(1),
-                DateStart = rdr.IsDBNull(2) ? DateTime.MinValue : rdr.GetDateTime(2),
-                DateEnd = rdr.IsDBNull(3) ? DateTime.MinValue : rdr.GetDateTime(3),
-                // DaysLeft из БД больше не используем – он всегда 0, считаешь в UI
-                CertNumber = rdr.IsDBNull(5) ? "" : rdr.GetString(5),
-                FromAddress = rdr.IsDBNull(6) ? "" : rdr.GetString(6),
-                IsDeleted = !rdr.IsDBNull(7) && rdr.GetInt16(7) == 1,
-                Note = rdr.IsDBNull(8) ? "" : rdr.GetString(8),
-                Building = rdr.IsDBNull(9) ? "" : rdr.GetString(9),
-                FolderPath = rdr.IsDBNull(10) ? "" : rdr.GetString(10),
-                ArchivePath = rdr.IsDBNull(11) ? "" : rdr.GetString(11),
-                MessageDate = rdr.IsDBNull(12) ? DateTime.MinValue : rdr.GetDateTime(12),
+            var rec = new CertRecord();
 
-                // новое поле из SELECT (HAS_ARCHIVE)
-                HasArchive = !rdr.IsDBNull(13) && rdr.GetInt32(13) > 0
-            };
+            rec.Id = rdr["ID"] == DBNull.Value ? 0 : Convert.ToInt32(rdr["ID"]);
+            rec.Fio = rdr["FIO"]?.ToString();
+            rec.CertNumber = rdr["CERT_NUMBER"]?.ToString();
+            rec.FromAddress = rdr["FROM_ADDRESS"]?.ToString();
+            rec.Note = rdr["NOTE"]?.ToString();
+            rec.Building = rdr["BUILDING"]?.ToString();
+            rec.FolderPath = rdr["FOLDER_PATH"]?.ToString();
+            rec.ArchivePath = rdr["ARCHIVE_PATH"]?.ToString();
+
+            rec.DateStart = rdr["DATE_START"] == DBNull.Value
+                ? DateTime.MinValue
+                : (DateTime)rdr["DATE_START"];
+
+            rec.DateEnd = rdr["DATE_END"] == DBNull.Value
+                ? DateTime.MinValue
+                : (DateTime)rdr["DATE_END"];
+
+            rec.MessageDate = rdr["MESSAGE_DATE"] == DBNull.Value
+                ? DateTime.MinValue
+                : (DateTime)rdr["MESSAGE_DATE"];
+
+            // Firebird SMALLINT -> bool
+            rec.IsDeleted = rdr["IS_DELETED"] != DBNull.Value &&
+                            Convert.ToInt32(rdr["IS_DELETED"]) == 1;
+
+            // Подзапрос HAS_ARCHIVE
+            if (rdr["HAS_ARCHIVE"] != DBNull.Value)
+                rec.HasArchive = Convert.ToInt32(rdr["HAS_ARCHIVE"]) > 0;
+
+            return rec;
         }
 
 

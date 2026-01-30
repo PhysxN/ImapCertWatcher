@@ -55,10 +55,6 @@
                         <Button x:Name="btnRestoreSelected" Content="Восстановить" 
                                 Style="{StaticResource ModernButtonStyle}" 
                                 Click="BtnRestoreSelected_Click"/>
-                        <Button x:Name="btnLoadSig" Content="Загрузить SIG"  
-                                Style="{StaticResource ModernButtonStyle}"
-                                Click="BtnLoadSig_Click"
-                                ToolTip="Загрузить файл подписи (.sig, .p7s) и извлечь данные сертификата"/>
                         <Button x:Name="btnLoadCer" Content="Загрузить CER"
                                 Style="{StaticResource ModernButtonStyle}"
                                 Click="BtnLoadCer_Click"

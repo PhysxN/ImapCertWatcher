@@ -1,4 +1,5 @@
-﻿using ImapCertWatcher;
+﻿using DocumentFormat.OpenXml.Office2010.Excel;
+using ImapCertWatcher;
 using ImapCertWatcher.Client;
 using ImapCertWatcher.Data;
 using ImapCertWatcher.Models;
@@ -28,6 +29,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using Forms = System.Windows.Forms;
+using Newtonsoft.Json;
 
 namespace ImapCertWatcher
 {
@@ -37,7 +39,7 @@ namespace ImapCertWatcher
         private ServerSettings _serverSettings;
         private NotificationManager _notificationManager;
         private HashSet<int> _knownCertIds = new HashSet<int>();
-        private DbHelper _db;  
+        private ServerApiClient _api;
         private ObservableCollection<CertRecord> _items = new ObservableCollection<CertRecord>();
         private ObservableCollection<CertRecord> _allItems = new ObservableCollection<CertRecord>();
         private DispatcherTimer _refreshTimer;
@@ -54,7 +56,8 @@ namespace ImapCertWatcher
         private DispatcherTimer _connectingAnimationTimer;
         private int _connectingDots = 0;
         private bool _reconnectInProgress = false;
-        
+        private bool _isLoadingFromServer = false;
+
         enum ServerConnectionState
         {
             Connecting,
@@ -220,7 +223,50 @@ namespace ImapCertWatcher
             });
         }
 
+        class ServerApiClient
+        {
+            private ClientSettings _settings;
 
+            public ServerApiClient(ClientSettings settings)
+            {
+                _settings = settings;
+            }
+
+            public async Task<List<CertRecord>> GetCertificates()
+            {
+                var response = await TcpCommandClient.SendAsync(
+                    _settings.ServerIp,
+                    _settings.ServerPort,
+                    "GET_CERTS");
+
+                if (string.IsNullOrWhiteSpace(response))
+                    return new List<CertRecord>();
+
+                if (response.StartsWith("CERTS "))
+                    response = response.Substring(6);
+
+                // Убираем мусор перевода строки
+                response = response.Trim();
+
+                return JsonConvert.DeserializeObject<List<CertRecord>>(response);
+            }
+
+            public async Task UpdateBuilding(int id, string building)
+            {
+                await TcpCommandClient.SendAsync(
+                    _settings.ServerIp,
+                    _settings.ServerPort,
+                    $"UPDATE_BUILDING|{id}|{building}");
+            }
+
+            public async Task MarkDeleted(int id, bool deleted)
+            {
+                await TcpCommandClient.SendAsync(
+                    _settings.ServerIp,
+                    _settings.ServerPort,
+                    $"MARK_DELETED|{id}|{deleted}");
+            }
+        }
         private void StartServerMonitor()
         {
             _serverMonitorTimer = new DispatcherTimer();
@@ -429,29 +475,11 @@ namespace ImapCertWatcher
             try
             {
                 // ТЯЖЁЛАЯ ЧАСТЬ – в фоновом потоке
-                var initResult = await Task.Run(() =>
-                {
-                    OnProgressUpdated("Создание подключения к БД...", 20);
-                    var db = new DbHelper(_serverSettings, AddToMiniLog);
+                _api = new ServerApiClient(_clientSettings);
 
-                    OnProgressUpdated("Загрузка данных из БД...", 40);
-                    var list = db.LoadAll(_showDeleted, _currentBuildingFilter);
-                                        
-                    OnProgressUpdated("Завершение инициализации...", 80);
-                    return (db, list);
-                });
+                await LoadFromServer();
 
                 System.Diagnostics.Debug.WriteLine("Фоновая инициализация завершена");
-
-                // ЛЁГКАЯ ЧАСТЬ – уже в UI-потоке
-                _db = initResult.db;                
-
-                // Заполняем коллекции для грида
-                _allItems.Clear();
-                foreach (var rec in initResult.list)
-                {
-                    _allItems.Add(rec);
-                }
 
                 System.Diagnostics.Debug.WriteLine($"Загружено записей: {_allItems.Count}");
 
@@ -1038,36 +1066,81 @@ namespace ImapCertWatcher
             }
         }
 
-        private void LoadFromDb()
+        
+        private async Task LoadFromServer()
         {
+            // защита от повторных кликов
+            if (_isLoadingFromServer)
+                return;
+
+            _isLoadingFromServer = true;
+
             try
             {
-                if (_db == null) return;
-
-                var sw = Stopwatch.StartNew();
-                var list = _db.LoadAll(_showDeleted, _currentBuildingFilter);
-                sw.Stop();
-
-                Log($"LoadFromDb: {list.Count} записей, showDeleted={_showDeleted}, " +
-                    $"filter={_currentBuildingFilter}, время={sw.ElapsedMilliseconds} мс");
-
-                Dispatcher.Invoke(() =>
+                if (_api == null)
                 {
+                    AddToMiniLog("API ещё не инициализирован");
+                    return;
+                }
+
+                statusText.Text = "Загрузка данных с сервера...";
+                SetServerState(ServerConnectionState.Busy);
+
+                // ===== ЗАГРУЗКА С СЕРВЕРА (НЕ UI ПОТОК) =====
+
+                AddToMiniLog("Запрос GET_CERTS отправлен");
+
+                var list = await _api.GetCertificates();
+                AddToMiniLog("CLIENT received records: " + list.Count);
+
+                AddToMiniLog("Ответ получен");
+
+                if (list == null)
+                {
+                    AddToMiniLog("ОШИБКА: list == null");
+                    list = new List<CertRecord>();
+                }
+
+                // ===== ОБНОВЛЕНИЕ UI =====
+
+                await Dispatcher.InvokeAsync(() =>
+                {
+                    if (_allItems == null)
+                        _allItems = new ObservableCollection<CertRecord>();
+
                     _allItems.Clear();
-                    foreach (var e in list)
+
+                    foreach (var item in list)
                     {
-                        // Больше НЕ делаем _db.HasArchiveInDb(e.Id) по каждой строке
-                        _allItems.Add(e);
+                        if (item != null)
+                            _allItems.Add(item);
                     }
 
                     ApplySearchFilter();
+
+                    statusText.Text = $"Загружено записей: {_allItems.Count}";
                 });
+
+                AddToMiniLog($"Получено с сервера: {list.Count} записей");
             }
             catch (Exception ex)
             {
-                Dispatcher.Invoke(() => statusText.Text = "Ошибка загрузки из БД: " + ex.Message);
+                AddToMiniLog("Ошибка загрузки: " + ex.Message);
+
+                Dispatcher.Invoke(() =>
+                {
+                    statusText.Text = "Ошибка загрузки с сервера";
+                });
+            }
+            finally
+            {
+                _isLoadingFromServer = false;
+
+                if (_serverState != ServerConnectionState.Offline)
+                    SetServerState(ServerConnectionState.Online);
             }
         }
+
 
         // ★ МЕТОД ДЛЯ РАСПАКОВКИ АРХИВА В ПАПКУ ★
         private bool ExtractArchiveToFolder(string archivePath, string extractToFolder)
@@ -1273,7 +1346,7 @@ namespace ImapCertWatcher
             }
         }
 
-        private void BuildingFilter_Checked(object sender, RoutedEventArgs e)
+        private async void BuildingFilter_Checked(object sender, RoutedEventArgs e)
         {
             if (rbAllBuildings.IsChecked == true)
                 _currentBuildingFilter = "Все";
@@ -1282,35 +1355,35 @@ namespace ImapCertWatcher
             else if (rbPionerskaya.IsChecked == true)
                 _currentBuildingFilter = "Пионерская";
 
-            LoadFromDb();
+            await LoadFromServer();
             AddToMiniLog($"Фильтр: {_currentBuildingFilter}");
         }
 
-        private void ChkShowDeleted_Changed(object sender, RoutedEventArgs e)
+        private async void ChkShowDeleted_Changed(object sender, RoutedEventArgs e)
         {
             _showDeleted = chkShowDeleted.IsChecked == true;
-            LoadFromDb();
+            await LoadFromServer();
             AddToMiniLog(_showDeleted ? "Показаны удаленные" : "Скрыты удаленные");
         }
 
-        private void NoteTextBox_LostFocus(object sender, RoutedEventArgs e)
-        {
-            if (sender is TextBox textBox && textBox.DataContext is CertRecord record)
-            {
-                try
-                {
-                    _db.UpdateNote(record.Id, textBox.Text);
-                    statusText.Text = "Примечание сохранено";
-                    AddToMiniLog($"Обновлено примечание: {record.Fio}");
-                }
-                catch (Exception ex)
-                {
-                    MessageBox.Show($"Ошибка сохранения примечания: {ex.Message}", "Ошибка",
-                                  MessageBoxButton.OK, MessageBoxImage.Error);
-                    AddToMiniLog($"Ошибка примечания: {ex.Message}");
-                }
-            }
-        }
+        //private void NoteTextBox_LostFocus(object sender, RoutedEventArgs e)
+        //{
+        //    if (sender is TextBox textBox && textBox.DataContext is CertRecord record)
+        //    {
+        //        try
+        //        {
+        //            _db.UpdateNote(record.Id, textBox.Text);
+        //            statusText.Text = "Примечание сохранено";
+        //            AddToMiniLog($"Обновлено примечание: {record.Fio}");
+        //        }
+        //        catch (Exception ex)
+        //        {
+        //            MessageBox.Show($"Ошибка сохранения примечания: {ex.Message}", "Ошибка",
+        //                          MessageBoxButton.OK, MessageBoxImage.Error);
+        //            AddToMiniLog($"Ошибка примечания: {ex.Message}");
+        //        }
+        //    }
+        //}
 
         
         private void BuildingComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -1378,34 +1451,33 @@ namespace ImapCertWatcher
             }
         }
 
-        private void SaveBuilding(CertRecord record)
+        private async void SaveBuilding(CertRecord record)
         {
             try
             {
-                if (record.Building != null)
+                if (!string.IsNullOrEmpty(record.Building))
                 {
-                    _db.UpdateBuilding(record.Id, record.Building);
-                    statusText.Text = $"Здание сохранено: {record.Building}";
-                    AddToMiniLog($"Обновлено здание: {record.Fio} -> {record.Building}");
+                    await _api.UpdateBuilding(record.Id, record.Building);
+                    statusText.Text = "Здание сохранено";
                 }
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Ошибка сохранения здания: {ex.Message}", "Ошибка",
-                              MessageBoxButton.OK, MessageBoxImage.Error);
-                AddToMiniLog($"Ошибка здания: {ex.Message}");
+                MessageBox.Show(ex.Message);
             }
         }
 
-        private void BtnDeleteSelected_Click(object sender, RoutedEventArgs e)
+        
+
+        private async void BtnDeleteSelected_Click(object sender, RoutedEventArgs e)
         {
             if (dgCerts.SelectedItem is CertRecord record)
             {
                 try
                 {
                     Log($"Пометка на удаление: {record.Fio} (ID: {record.Id})");
-                    _db.MarkAsDeleted(record.Id, true);
-                    LoadFromDb();
+                    await _api.MarkDeleted(record.Id, true);
+                    await LoadFromServer();
                     statusText.Text = "Запись помечена на удаление";
                     AddToMiniLog($"Удален: {record.Fio}");
                 }
@@ -1423,176 +1495,176 @@ namespace ImapCertWatcher
             }
         }
 
-        private void BtnRestoreSelected_Click(object sender, RoutedEventArgs e)
-        {
-            if (dgCerts.SelectedItem is CertRecord record)
-            {
-                try
-                {
-                    _db.MarkAsDeleted(record.Id, false);
-                    LoadFromDb();
-                    statusText.Text = "Запись восстановлена";
-                    AddToMiniLog($"Восстановлен: {record.Fio}");
-                }
-                catch (Exception ex)
-                {
-                    MessageBox.Show($"Ошибка при восстановлении: {ex.Message}", "Ошибка",
-                                  MessageBoxButton.OK, MessageBoxImage.Error);
-                    AddToMiniLog($"Ошибка восстановления: {ex.Message}");
-                }
-            }
-            else
-            {
-                MessageBox.Show("Выберите запись для восстановления", "Информация",
-                              MessageBoxButton.OK, MessageBoxImage.Information);
-            }
-        }
+        //private async void BtnRestoreSelected_Click(object sender, RoutedEventArgs e)
+        //{
+        //    if (dgCerts.SelectedItem is CertRecord record)
+        //    {
+        //        try
+        //        {
+        //            _db.MarkAsDeleted(record.Id, false);
+        //            await LoadFromServer();
+        //            statusText.Text = "Запись восстановлена";
+        //            AddToMiniLog($"Восстановлен: {record.Fio}");
+        //        }
+        //        catch (Exception ex)
+        //        {
+        //            MessageBox.Show($"Ошибка при восстановлении: {ex.Message}", "Ошибка",
+        //                          MessageBoxButton.OK, MessageBoxImage.Error);
+        //            AddToMiniLog($"Ошибка восстановления: {ex.Message}");
+        //        }
+        //    }
+        //    else
+        //    {
+        //        MessageBox.Show("Выберите запись для восстановления", "Информация",
+        //                      MessageBoxButton.OK, MessageBoxImage.Information);
+        //    }
+        //}
 
-        private void BtnOpenArchive_Click(object sender, RoutedEventArgs e)
-        {
-            if (sender is Button button && button.DataContext is CertRecord record)
-            {
-                try
-                {
-                    AddToMiniLog($"Попытка открыть архив для: {record.Fio}");
+        //private void BtnOpenArchive_Click(object sender, RoutedEventArgs e)
+        //{
+        //    if (sender is Button button && button.DataContext is CertRecord record)
+        //    {
+        //        try
+        //        {
+        //            AddToMiniLog($"Попытка открыть архив для: {record.Fio}");
 
-                    // ★ ПРОВЕРЯЕМ АРХИВ В БД В ПЕРВУЮ ОЧЕРЕДЬ ★
-                    if (_db.HasArchiveInDb(record.Id))
-                    {
-                        AddToMiniLog($"Найден архив в БД для ID: {record.Id}");
-                        var (fileData, fileName) = _db.GetArchiveFromDb(record.Id);
-                        if (fileData != null && fileData.Length > 0)
-                        {
-                            AddToMiniLog($"Загружен архив из БД: {fileName} ({fileData.Length} байт)");
+        //            // ★ ПРОВЕРЯЕМ АРХИВ В БД В ПЕРВУЮ ОЧЕРЕДЬ ★
+        //            if (_db.HasArchiveInDb(record.Id))
+        //            {
+        //                AddToMiniLog($"Найден архив в БД для ID: {record.Id}");
+        //                var (fileData, fileName) = _db.GetArchiveFromDb(record.Id);
+        //                if (fileData != null && fileData.Length > 0)
+        //                {
+        //                    AddToMiniLog($"Загружен архив из БД: {fileName} ({fileData.Length} байт)");
 
-                            // Создаем папку Certs в папке программы, если её нет
-                            string certsBaseDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Certs");
-                            if (!Directory.Exists(certsBaseDir))
-                                Directory.CreateDirectory(certsBaseDir);
+        //                    // Создаем папку Certs в папке программы, если её нет
+        //                    string certsBaseDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Certs");
+        //                    if (!Directory.Exists(certsBaseDir))
+        //                        Directory.CreateDirectory(certsBaseDir);
 
-                            // Создаем папку для конкретного пользователя
-                            string userFolder = Path.Combine(certsBaseDir, MakeValidFolderName(record.Fio));
-                            if (!Directory.Exists(userFolder))
-                                Directory.CreateDirectory(userFolder);
+        //                    // Создаем папку для конкретного пользователя
+        //                    string userFolder = Path.Combine(certsBaseDir, MakeValidFolderName(record.Fio));
+        //                    if (!Directory.Exists(userFolder))
+        //                        Directory.CreateDirectory(userFolder);
 
-                            // Сохраняем временный архивный файл
-                            string tempArchivePath = Path.Combine(userFolder, fileName ?? "archive.zip");
-                            File.WriteAllBytes(tempArchivePath, fileData);
+        //                    // Сохраняем временный архивный файл
+        //                    string tempArchivePath = Path.Combine(userFolder, fileName ?? "archive.zip");
+        //                    File.WriteAllBytes(tempArchivePath, fileData);
 
-                            AddToMiniLog($"Архив сохранен во временный файл: {tempArchivePath}");
+        //                    AddToMiniLog($"Архив сохранен во временный файл: {tempArchivePath}");
 
-                            // Распаковываем архив
-                            if (ExtractArchiveToFolder(tempArchivePath, userFolder))
-                            {
-                                // Удаляем временный архив после распаковки
-                                try { File.Delete(tempArchivePath); } catch { }
+        //                    // Распаковываем архив
+        //                    if (ExtractArchiveToFolder(tempArchivePath, userFolder))
+        //                    {
+        //                        // Удаляем временный архив после распаковки
+        //                        try { File.Delete(tempArchivePath); } catch { }
 
-                                // Открываем папку с распакованными файлами
-                                Process.Start("explorer.exe", userFolder);
+        //                        // Открываем папку с распакованными файлами
+        //                        Process.Start("explorer.exe", userFolder);
 
-                                statusText.Text = "Архив распакован и папка открыта";
-                                AddToMiniLog($"Архив распакован и открыт: {record.Fio}");
-                            }
-                            else
-                            {
-                                MessageBox.Show("Не удалось распаковать архив из БД", "Ошибка",
-                                              MessageBoxButton.OK, MessageBoxImage.Error);
-                                AddToMiniLog($"Ошибка распаковки архива из БД: {record.Fio}");
-                            }
-                        }
-                        else
-                        {
-                            MessageBox.Show("Не удалось загрузить архив из БД", "Ошибка",
-                                          MessageBoxButton.OK, MessageBoxImage.Error);
-                            AddToMiniLog($"Ошибка загрузки архива из БД: данные пустые");
-                        }
-                    }
-                    else
-                    {
-                        AddToMiniLog($"Архив не найден в БД для ID: {record.Id}");
+        //                        statusText.Text = "Архив распакован и папка открыта";
+        //                        AddToMiniLog($"Архив распакован и открыт: {record.Fio}");
+        //                    }
+        //                    else
+        //                    {
+        //                        MessageBox.Show("Не удалось распаковать архив из БД", "Ошибка",
+        //                                      MessageBoxButton.OK, MessageBoxImage.Error);
+        //                        AddToMiniLog($"Ошибка распаковки архива из БД: {record.Fio}");
+        //                    }
+        //                }
+        //                else
+        //                {
+        //                    MessageBox.Show("Не удалось загрузить архив из БД", "Ошибка",
+        //                                  MessageBoxButton.OK, MessageBoxImage.Error);
+        //                    AddToMiniLog($"Ошибка загрузки архива из БД: данные пустые");
+        //                }
+        //            }
+        //            else
+        //            {
+        //                AddToMiniLog($"Архив не найден в БД для ID: {record.Id}");
 
-                        // ★ ПРОВЕРЯЕМ СТАРУЮ ЛОГИКУ ДЛЯ ФАЙЛОВОЙ СИСТЕМЫ ★
-                        if (!string.IsNullOrEmpty(record.ArchivePath) && File.Exists(record.ArchivePath))
-                        {
-                            AddToMiniLog($"Найден архив в файловой системе: {record.ArchivePath}");
+        //                // ★ ПРОВЕРЯЕМ СТАРУЮ ЛОГИКУ ДЛЯ ФАЙЛОВОЙ СИСТЕМЫ ★
+        //                if (!string.IsNullOrEmpty(record.ArchivePath) && File.Exists(record.ArchivePath))
+        //                {
+        //                    AddToMiniLog($"Найден архив в файловой системе: {record.ArchivePath}");
 
-                            // ★ Создаем папку Certs в папке программы, если её нет
-                            string certsBaseDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Certs");
-                            if (!Directory.Exists(certsBaseDir))
-                                Directory.CreateDirectory(certsBaseDir);
+        //                    // ★ Создаем папку Certs в папке программы, если её нет
+        //                    string certsBaseDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Certs");
+        //                    if (!Directory.Exists(certsBaseDir))
+        //                        Directory.CreateDirectory(certsBaseDir);
 
-                            // Создаем папку для конкретного пользователя
-                            string userFolder = Path.Combine(certsBaseDir, MakeValidFolderName(record.Fio));
-                            if (!Directory.Exists(userFolder))
-                                Directory.CreateDirectory(userFolder);
+        //                    // Создаем папку для конкретного пользователя
+        //                    string userFolder = Path.Combine(certsBaseDir, MakeValidFolderName(record.Fio));
+        //                    if (!Directory.Exists(userFolder))
+        //                        Directory.CreateDirectory(userFolder);
 
-                            // Распаковываем архив
-                            if (ExtractArchiveToFolder(record.ArchivePath, userFolder))
-                            {
-                                // Открываем папку с распакованными файлами
-                                Process.Start("explorer.exe", userFolder);
+        //                    // Распаковываем архив
+        //                    if (ExtractArchiveToFolder(record.ArchivePath, userFolder))
+        //                    {
+        //                        // Открываем папку с распакованными файлами
+        //                        Process.Start("explorer.exe", userFolder);
 
-                                statusText.Text = "Архив распакован и папка открыта";
-                                AddToMiniLog($"Открыт архив из файловой системы: {record.Fio}");
-                            }
-                            else
-                            {
-                                MessageBox.Show("Не удалось распаковать архив из файловой системы", "Ошибка",
-                                              MessageBoxButton.OK, MessageBoxImage.Error);
-                                AddToMiniLog($"Ошибка распаковки архива из файловой системы: {record.Fio}");
-                            }
-                        }
-                        else
-                        {
-                            MessageBox.Show("Архив не найден ни в базе данных, ни в файловой системе", "Ошибка",
-                                          MessageBoxButton.OK, MessageBoxImage.Error);
-                            AddToMiniLog($"Архив не найден нигде для: {record.Fio}");
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    MessageBox.Show($"Ошибка при работе с архивом: {ex.Message}", "Ошибка",
-                                  MessageBoxButton.OK, MessageBoxImage.Error);
-                    AddToMiniLog($"Ошибка архива: {ex.Message}");
-                }
-            }
-        }
+        //                        statusText.Text = "Архив распакован и папка открыта";
+        //                        AddToMiniLog($"Открыт архив из файловой системы: {record.Fio}");
+        //                    }
+        //                    else
+        //                    {
+        //                        MessageBox.Show("Не удалось распаковать архив из файловой системы", "Ошибка",
+        //                                      MessageBoxButton.OK, MessageBoxImage.Error);
+        //                        AddToMiniLog($"Ошибка распаковки архива из файловой системы: {record.Fio}");
+        //                    }
+        //                }
+        //                else
+        //                {
+        //                    MessageBox.Show("Архив не найден ни в базе данных, ни в файловой системе", "Ошибка",
+        //                                  MessageBoxButton.OK, MessageBoxImage.Error);
+        //                    AddToMiniLog($"Архив не найден нигде для: {record.Fio}");
+        //                }
+        //            }
+        //        }
+        //        catch (Exception ex)
+        //        {
+        //            MessageBox.Show($"Ошибка при работе с архивом: {ex.Message}", "Ошибка",
+        //                          MessageBoxButton.OK, MessageBoxImage.Error);
+        //            AddToMiniLog($"Ошибка архива: {ex.Message}");
+        //        }
+        //    }
+        //}
 
-        private void OpenArchive(CertRecord record)
-        {
-            try
-            {
-                // Пробуем распаковать локальный путь (если задан)
-                if (!string.IsNullOrEmpty(record.ArchivePath) && File.Exists(record.ArchivePath))
-                {
-                    var safeFio = MakeValidFolderName(record.Fio);
-                    string certsBaseDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Certs");
-                    if (!Directory.Exists(certsBaseDir)) Directory.CreateDirectory(certsBaseDir);
-                    string userFolder = Path.Combine(certsBaseDir, safeFio);
-                    if (!Directory.Exists(userFolder)) Directory.CreateDirectory(userFolder);
+        //private void OpenArchive(CertRecord record)
+        //{
+        //    try
+        //    {
+        //        // Пробуем распаковать локальный путь (если задан)
+        //        if (!string.IsNullOrEmpty(record.ArchivePath) && File.Exists(record.ArchivePath))
+        //        {
+        //            var safeFio = MakeValidFolderName(record.Fio);
+        //            string certsBaseDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Certs");
+        //            if (!Directory.Exists(certsBaseDir)) Directory.CreateDirectory(certsBaseDir);
+        //            string userFolder = Path.Combine(certsBaseDir, safeFio);
+        //            if (!Directory.Exists(userFolder)) Directory.CreateDirectory(userFolder);
 
-                    if (ExtractArchiveToFolder(record.ArchivePath, userFolder))
-                    {
-                        statusText.Text = "Архив распакован и открыт";
-                        Process.Start("explorer.exe", userFolder);
-                    }
-                    else
-                    {
-                        MessageBox.Show("Не удалось распаковать архив", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
-                    }
-                }
-                else
-                {
-                    MessageBox.Show("Архив отсутствует или не найден", "Информация", MessageBoxButton.OK, MessageBoxImage.Information);
-                }
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Ошибка при работе с архивом: {ex.Message}", "Ошибка",
-                              MessageBoxButton.OK, MessageBoxImage.Error);
-            }
-        }
+        //            if (ExtractArchiveToFolder(record.ArchivePath, userFolder))
+        //            {
+        //                statusText.Text = "Архив распакован и открыт";
+        //                Process.Start("explorer.exe", userFolder);
+        //            }
+        //            else
+        //            {
+        //                MessageBox.Show("Не удалось распаковать архив", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+        //            }
+        //        }
+        //        else
+        //        {
+        //            MessageBox.Show("Архив отсутствует или не найден", "Информация", MessageBoxButton.OK, MessageBoxImage.Information);
+        //        }
+        //    }
+        //    catch (Exception ex)
+        //    {
+        //        MessageBox.Show($"Ошибка при работе с архивом: {ex.Message}", "Ошибка",
+        //                      MessageBoxButton.OK, MessageBoxImage.Error);
+        //    }
+        //}
 
         private void DgCerts_LoadingRow(object sender, DataGridRowEventArgs e)
         {
@@ -1603,29 +1675,29 @@ namespace ImapCertWatcher
                 {
                     // Для удаленных записей - серый фон
                     e.Row.Background = new SolidColorBrush(_isDarkTheme
-                        ? Color.FromArgb(255, 80, 80, 80)  // Темно-серый для темной темы
-                        : Color.FromArgb(255, 220, 220, 220)); // Светло-серый для светлой темы
+                        ? System.Windows.Media.Color.FromArgb(255, 80, 80, 80)  // Темно-серый для темной темы
+                        : System.Windows.Media.Color.FromArgb(255, 220, 220, 220)); // Светло-серый для светлой темы
                 }
                 else if (record.DaysLeft <= 10)
                 {
                     // Красный фон для срочных сертификатов
                     e.Row.Background = new SolidColorBrush(_isDarkTheme
-                        ? Color.FromArgb(255, 120, 50, 50)   // Темно-красный для темной темы
-                        : Color.FromArgb(255, 255, 200, 200)); // Светло-красный для светлой темы
+                        ? System.Windows.Media.Color.FromArgb(255, 120, 50, 50)   // Темно-красный для темной темы
+                        : System.Windows.Media.Color.FromArgb(255, 255, 200, 200)); // Светло-красный для светлой темы
                 }
                 else if (record.DaysLeft <= 30)
                 {
                     // Желтый фон для предупреждения
                     e.Row.Background = new SolidColorBrush(_isDarkTheme
-                        ? Color.FromArgb(255, 120, 120, 50)   // Темно-желтый для темной темы
-                        : Color.FromArgb(255, 255, 255, 200)); // Светло-желтый для светлой темы
+                        ? System.Windows.Media.Color.FromArgb(255, 120, 120, 50)   // Темно-желтый для темной темы
+                        : System.Windows.Media.Color.FromArgb(255, 255, 255, 200)); // Светло-желтый для светлой темы
                 }
                 else
                 {
                     // Зеленый фон для нормальных сертификатов
                     e.Row.Background = new SolidColorBrush(_isDarkTheme
-                        ? Color.FromArgb(255, 50, 80, 50)     // Темно-зеленый для темной темы
-                        : Color.FromArgb(255, 200, 255, 200)); // Светло-зеленый для светлой темы
+                        ? System.Windows.Media.Color.FromArgb(255, 50, 80, 50)     // Темно-зеленый для темной темы
+                        : System.Windows.Media.Color.FromArgb(255, 200, 255, 200)); // Светло-зеленый для светлой темы
                 }
 
                 // Принудительно устанавливаем цвет текста для всей строки
@@ -1676,56 +1748,56 @@ namespace ImapCertWatcher
             }
         }
 
-        private void AddArchiveMenuItem_Click(object sender, RoutedEventArgs e)
-        {
-            if (dgCerts.SelectedItem is CertRecord record)
-            {
-                if (!string.IsNullOrEmpty(record.ArchivePath) && File.Exists(record.ArchivePath))
-                {
-                    MessageBox.Show("Архив уже прикреплен к этой записи", "Информация",
-                                  MessageBoxButton.OK, MessageBoxImage.Information);
-                    return;
-                }
+        //private void AddArchiveMenuItem_Click(object sender, RoutedEventArgs e)
+        //{
+        //    if (dgCerts.SelectedItem is CertRecord record)
+        //    {
+        //        if (!string.IsNullOrEmpty(record.ArchivePath) && File.Exists(record.ArchivePath))
+        //        {
+        //            MessageBox.Show("Архив уже прикреплен к этой записи", "Информация",
+        //                          MessageBoxButton.OK, MessageBoxImage.Information);
+        //            return;
+        //        }
 
-                var openFileDialog = new OpenFileDialog
-                {
-                    Filter = "ZIP архивы (*.zip)|*.zip",
-                    Title = "Выберите архив с подписью"
-                };
+        //        var openFileDialog = new OpenFileDialog
+        //        {
+        //            Filter = "ZIP архивы (*.zip)|*.zip",
+        //            Title = "Выберите архив с подписью"
+        //        };
 
-                if (openFileDialog.ShowDialog() == true)
-                {
-                    try
-                    {
-                        string selectedFilePath = openFileDialog.FileName;
+        //        if (openFileDialog.ShowDialog() == true)
+        //        {
+        //            try
+        //            {
+        //                string selectedFilePath = openFileDialog.FileName;
 
-                        var safeFio = MakeValidFileName(record.Fio);
-                        var certFolder = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Certs", safeFio);
+        //                var safeFio = MakeValidFileName(record.Fio);
+        //                var certFolder = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Certs", safeFio);
 
-                        if (!Directory.Exists(certFolder))
-                            Directory.CreateDirectory(certFolder);
+        //                if (!Directory.Exists(certFolder))
+        //                    Directory.CreateDirectory(certFolder);
 
-                        string fileName = $"{record.CertNumber}_{Path.GetFileName(selectedFilePath)}";
-                        string destinationPath = Path.Combine(certFolder, fileName);
+        //                string fileName = $"{record.CertNumber}_{Path.GetFileName(selectedFilePath)}";
+        //                string destinationPath = Path.Combine(certFolder, fileName);
 
-                        File.Copy(selectedFilePath, destinationPath, true);
+        //                File.Copy(selectedFilePath, destinationPath, true);
 
-                        _db.UpdateArchivePath(record.Id, destinationPath);
+        //                _db.UpdateArchivePath(record.Id, destinationPath);
 
-                        LoadFromDb();
+        //                await LoadFromServer();
 
-                        statusText.Text = "Архив успешно прикреплен";
-                        AddToMiniLog($"Добавлен архив для: {record.Fio}");
-                    }
-                    catch (Exception ex)
-                    {
-                        MessageBox.Show($"Ошибка при прикреплении архива: {ex.Message}", "Ошибка",
-                                      MessageBoxButton.OK, MessageBoxImage.Error);
-                        AddToMiniLog($"Ошибка добавления архива: {ex.Message}");
-                    }
-                }
-            }
-        }
+        //                statusText.Text = "Архив успешно прикреплен";
+        //                AddToMiniLog($"Добавлен архив для: {record.Fio}");
+        //            }
+        //            catch (Exception ex)
+        //            {
+        //                MessageBox.Show($"Ошибка при прикреплении архива: {ex.Message}", "Ошибка",
+        //                              MessageBoxButton.OK, MessageBoxImage.Error);
+        //                AddToMiniLog($"Ошибка добавления архива: {ex.Message}");
+        //            }
+        //        }
+        //    }
+        //}
 
         private string MakeValidFileName(string name)
         {
@@ -1863,156 +1935,110 @@ namespace ImapCertWatcher
 
         
 
-        private void ProcessSigFile(string sigPath)
-        {
-            try
-            {
-                if (SigCertificateParser.TryParse(sigPath, Log, out var info))
-                {
-                    Log($"[SIG] Обработка файла завершена успешно: {sigPath}");
-                }
-                else
-                {
-                    Log($"[SIG] Не удалось обработать файл: {sigPath}");
-                }
-            }
-            catch (Exception ex)
-            {
-                Log($"[SIG] Ошибка обработки файла {sigPath}: {ex.Message}");
-            }
-        }
+        
 
-        private void BtnLoadSig_Click(object sender, RoutedEventArgs e)
-        {
-            try
-            {
-                var dlg = new Microsoft.Win32.OpenFileDialog
-                {
-                    Title = "Выбор файла подписи",
-                    Filter = "Файлы подписи (*.sig;*.p7s)|*.sig;*.p7s|Все файлы (*.*)|*.*",
-                    Multiselect = false
-                };
+        
 
-                if (dlg.ShowDialog() != true)
-                    return;
+        //private void BtnLoadCer_Click(object sender, RoutedEventArgs e)
+        //{
+        //    var dlg = new Microsoft.Win32.OpenFileDialog
+        //    {
+        //        Filter = "Сертификат (*.cer)|*.cer",
+        //        Multiselect = false
+        //    };
 
-                string filePath = dlg.FileName;
+        //    if (dlg.ShowDialog() != true)
+        //        return;
 
-                Log($"[SIG] Выбран файл для ручной обработки: {filePath}");
+        //    ProcessCerManual(dlg.FileName);
+        //}
 
-                ProcessSigFile(filePath);
-            }
-            catch (Exception ex)
-            {
-                Log($"[SIG] Ошибка выбора файла: {ex.Message}");
-                MessageBox.Show(
-                    $"Ошибка при выборе файла:\n{ex.Message}",
-                    "Ошибка",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Error);
-            }
-        }
+        //private void ProcessCerManual(string cerPath)
+        //{
+        //    try
+        //    {
+        //        if (!CerCertificateParser.TryParse(cerPath, Log, out var info))
+        //        {
+        //            ConfirmDialog.Show(
+        //                this,
+        //                "Ошибка",
+        //                "Не удалось прочитать сертификат."
+        //            );
+        //            return;
+        //        }
 
-        private void BtnLoadCer_Click(object sender, RoutedEventArgs e)
-        {
-            var dlg = new Microsoft.Win32.OpenFileDialog
-            {
-                Filter = "Сертификат (*.cer)|*.cer",
-                Multiselect = false
-            };
+        //        // 🔍 Ищем по ФИО
+        //        var existing = _db.FindByFio(info.Fio);
 
-            if (dlg.ShowDialog() != true)
-                return;
+        //        if (existing != null)
+        //        {
+        //            bool isNewer =
+        //                info.DateStart > existing.DateStart &&
+        //                info.DateEnd > existing.DateEnd;
 
-            ProcessCerManual(dlg.FileName);
-        }
+        //            if (!isNewer)
+        //            {
+        //                ConfirmDialog.Show(
+        //                    this,
+        //                    "Сертификат не новее",
+        //                    $"В базе уже есть более актуальный или равный сертификат:\n\n" +
+        //                    $"ФИО: {existing.Fio}\n" +
+        //                    $"Текущий: {existing.DateStart:dd.MM.yyyy} — {existing.DateEnd:dd.MM.yyyy}\n" +
+        //                    $"Новый:   {info.DateStart:dd.MM.yyyy} — {info.DateEnd:dd.MM.yyyy}\n\n" +
+        //                    $"Замена не требуется."
+        //                );
 
-        private void ProcessCerManual(string cerPath)
-        {
-            try
-            {
-                if (!CerCertificateParser.TryParse(cerPath, Log, out var info))
-                {
-                    ConfirmDialog.Show(
-                        this,
-                        "Ошибка",
-                        "Не удалось прочитать сертификат."
-                    );
-                    return;
-                }
+        //                Log($"[CER] Сертификат НЕ заменён (не новее существующего): {info.Fio}");
+        //                return;
+        //            }
 
-                // 🔍 Ищем по ФИО
-                var existing = _db.FindByFio(info.Fio);
+        //            // 🔔 Сертификат действительно новее → спрашиваем
+        //            bool replace = ConfirmDialog.Show(
+        //                this,
+        //                "Новый сертификат",
+        //                $"Найден более новый сертификат:\n\n" +
+        //                $"ФИО: {existing.Fio}\n" +
+        //                $"Старый: {existing.DateStart:dd.MM.yyyy} — {existing.DateEnd:dd.MM.yyyy}\n" +
+        //                $"Новый:  {info.DateStart:dd.MM.yyyy} — {info.DateEnd:dd.MM.yyyy}\n\n" +
+        //                $"Заменить сертификат?"
+        //            );
 
-                if (existing != null)
-                {
-                    bool isNewer =
-                        info.DateStart > existing.DateStart &&
-                        info.DateEnd > existing.DateEnd;
+        //            if (!replace)
+        //            {
+        //                Log($"[CER] Пользователь отменил замену сертификата для {info.Fio}");
+        //                return;
+        //            }
+        //        }
 
-                    if (!isNewer)
-                    {
-                        ConfirmDialog.Show(
-                            this,
-                            "Сертификат не новее",
-                            $"В базе уже есть более актуальный или равный сертификат:\n\n" +
-                            $"ФИО: {existing.Fio}\n" +
-                            $"Текущий: {existing.DateStart:dd.MM.yyyy} — {existing.DateEnd:dd.MM.yyyy}\n" +
-                            $"Новый:   {info.DateStart:dd.MM.yyyy} — {info.DateEnd:dd.MM.yyyy}\n\n" +
-                            $"Замена не требуется."
-                        );
+        //        // ⬇️ сохраняем
+        //        var entry = new CertEntry
+        //        {
+        //            Fio = info.Fio,
+        //            CertNumber = info.CertNumber,
+        //            DateStart = info.DateStart,
+        //            DateEnd = info.DateEnd,
+        //            FromAddress = "MANUAL",
+        //            FolderPath = "MANUAL",
+        //            MessageDate = DateTime.Now
+        //        };
 
-                        Log($"[CER] Сертификат НЕ заменён (не новее существующего): {info.Fio}");
-                        return;
-                    }
+        //        var (updated, added, _) = _db.InsertOrUpdateAndGetId(entry);
 
-                    // 🔔 Сертификат действительно новее → спрашиваем
-                    bool replace = ConfirmDialog.Show(
-                        this,
-                        "Новый сертификат",
-                        $"Найден более новый сертификат:\n\n" +
-                        $"ФИО: {existing.Fio}\n" +
-                        $"Старый: {existing.DateStart:dd.MM.yyyy} — {existing.DateEnd:dd.MM.yyyy}\n" +
-                        $"Новый:  {info.DateStart:dd.MM.yyyy} — {info.DateEnd:dd.MM.yyyy}\n\n" +
-                        $"Заменить сертификат?"
-                    );
+        //        if (added)
+        //            Log($"[CER] Добавлен новый сертификат: {info.Fio}");
+        //        else if (updated)
+        //            Log($"[CER] Сертификат обновлён: {info.Fio}");
+        //        else
+        //            Log($"[CER] Сертификат не изменён: {info.Fio}");
 
-                    if (!replace)
-                    {
-                        Log($"[CER] Пользователь отменил замену сертификата для {info.Fio}");
-                        return;
-                    }
-                }
-
-                // ⬇️ сохраняем
-                var entry = new CertEntry
-                {
-                    Fio = info.Fio,
-                    CertNumber = info.CertNumber,
-                    DateStart = info.DateStart,
-                    DateEnd = info.DateEnd,
-                    FromAddress = "MANUAL",
-                    FolderPath = "MANUAL",
-                    MessageDate = DateTime.Now
-                };
-
-                var (updated, added, _) = _db.InsertOrUpdateAndGetId(entry);
-
-                if (added)
-                    Log($"[CER] Добавлен новый сертификат: {info.Fio}");
-                else if (updated)
-                    Log($"[CER] Сертификат обновлён: {info.Fio}");
-                else
-                    Log($"[CER] Сертификат не изменён: {info.Fio}");
-
-                LoadFromDb();
-            }
-            catch (Exception ex)
-            {
-                Log($"[CER] Ошибка ручной загрузки: {ex.Message}");
-                ConfirmDialog.Show(this, "Ошибка", ex.Message);
-            }
-        }
+        //        await LoadFromServer();
+        //    }
+        //    catch (Exception ex)
+        //    {
+        //        Log($"[CER] Ошибка ручной загрузки: {ex.Message}");
+        //        ConfirmDialog.Show(this, "Ошибка", ex.Message);
+        //    }
+        //}
 
 
         private void LoadLogs()
@@ -2279,5 +2305,46 @@ namespace ImapCertWatcher
 
             
         }
+
+        // ================= TEMP STUBS =================
+
+        private void BtnRestoreSelected_Click(object sender, RoutedEventArgs e)
+        {
+            MessageBox.Show("Функция временно отключена.\nПереносится на сервер.",
+                "Временно недоступно",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+        }
+
+
+        private void BtnLoadCer_Click(object sender, RoutedEventArgs e)
+        {
+            MessageBox.Show("Ручная загрузка сертификата временно отключена.",
+                "Временно недоступно",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+        }
+
+        private void AddArchiveMenuItem_Click(object sender, RoutedEventArgs e)
+        {
+            MessageBox.Show("Добавление архива временно отключено.",
+                "Временно недоступно",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+        }
+
+        private void BtnOpenArchive_Click(object sender, RoutedEventArgs e)
+        {
+            MessageBox.Show("Открытие архива временно отключено.",
+                "Временно недоступно",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+        }
+
+        private void NoteTextBox_LostFocus(object sender, RoutedEventArgs e)
+        {
+            // Пока просто игнорируем
+        }
+
     }
 }
