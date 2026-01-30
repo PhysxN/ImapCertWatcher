@@ -4,6 +4,7 @@ using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using System.IO;
 
 namespace ImapCertWatcher.Server
 {
@@ -45,16 +46,8 @@ namespace ImapCertWatcher.Server
         {
             while (!_cts.IsCancellationRequested)
             {
-                try
-                {
-                    var client = await _listener.AcceptTcpClientAsync();
-                    _ = HandleClient(client);
-                }
-                catch
-                {
-                    if (!_cts.IsCancellationRequested)
-                        throw;
-                }
+                var client = await _listener.AcceptTcpClientAsync();
+                _ = HandleClient(client);
             }
         }
 
@@ -62,41 +55,32 @@ namespace ImapCertWatcher.Server
         {
             using (client)
             using (var stream = client.GetStream())
-            using (var reader = new System.IO.StreamReader(stream, Encoding.UTF8))
-            using (var writer = new System.IO.StreamWriter(stream, Encoding.UTF8) { AutoFlush = true })
+            using (var reader = new StreamReader(stream, Encoding.UTF8))
+            using (var writer = new StreamWriter(stream, Encoding.UTF8) { AutoFlush = true })
             {
                 try
                 {
-                    client.ReceiveTimeout = 10000;
-                    client.SendTimeout = 10000;
+                    client.ReceiveTimeout = 60000;
+                    client.SendTimeout = 60000;
 
-                    // Читаем команду строкой
+                    // читаем команду
                     var request = await reader.ReadLineAsync();
 
                     if (string.IsNullOrWhiteSpace(request))
                         return;
 
-                    Console.WriteLine("[SERVER] CMD RECEIVED: " + request);
+                    Console.WriteLine("[SERVER] CMD: " + request);
 
-                    string response;
+                    string response = _commandHandler(request);
 
-                    try
-                    {
-                        response = _commandHandler(request);
-                    }
-                    catch (Exception ex)
-                    {
-                        response = "ERROR " + ex.Message;
-                    }
-
-                    // ГАРАНТИРОВАННЫЙ перевод строки
-                    await writer.WriteLineAsync(response);
+                    // ОТПРАВЛЯЕМ ВСЁ КАК ОДНУ СТРОКУ
+                    await writer.WriteAsync(response);
 
                     Console.WriteLine("[SERVER] RESPONSE SENT");
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine("[SERVER] CLIENT ERROR: " + ex.Message);
+                    Console.WriteLine("[SERVER ERROR] " + ex.Message);
                 }
             }
         }

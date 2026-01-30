@@ -132,20 +132,29 @@
                     </StackPanel>
 
                     <!-- Таблица сертификатов -->
-                    <DataGrid x:Name="dgCerts" Grid.Row="4" 
-                              EnableRowVirtualization="True"
-                              EnableColumnVirtualization="True"
-                              VirtualizingPanel.IsVirtualizing="True"
-                              VirtualizingPanel.VirtualizationMode="Recycling"
-                              Style="{StaticResource ModernDataGridStyle}"
-                              IsReadOnly="False" SelectionMode="Single"
-                              CanUserSortColumns="True" CanUserResizeColumns="True"
-                              LoadingRow="DgCerts_LoadingRow"
-                              ContextMenuOpening="DgCerts_ContextMenuOpening"
-                              CellEditEnding="DgCerts_CellEditEnding"
-                              BeginningEdit="DgCerts_BeginningEdit"
-                              PreparingCellForEdit="DgCerts_PreparingCellForEdit"
-                              Loaded="DgCerts_Loaded">
+                    <DataGrid x:Name="dgCerts"
+          Grid.Row="4"
+
+          HeadersVisibility="Column"
+          RowDetailsVisibilityMode="Collapsed"
+
+          EnableRowVirtualization="True"
+          EnableColumnVirtualization="True"
+          VirtualizingPanel.IsVirtualizing="True"
+          VirtualizingPanel.VirtualizationMode="Recycling"
+
+          Style="{StaticResource ModernDataGridStyle}"
+          IsReadOnly="False"
+          SelectionMode="Single"
+          CanUserSortColumns="True"
+          CanUserResizeColumns="True"
+
+          LoadingRow="DgCerts_LoadingRow"
+          ContextMenuOpening="DgCerts_ContextMenuOpening"
+          CellEditEnding="DgCerts_CellEditEnding"
+          BeginningEdit="DgCerts_BeginningEdit"
+          PreparingCellForEdit="DgCerts_PreparingCellForEdit"
+          Loaded="DgCerts_Loaded">
                         <DataGrid.ContextMenu>
                             <ContextMenu Style="{StaticResource ModernContextMenuStyle}">
                                 <MenuItem Header="Добавить архив с подписью" Click="AddArchiveMenuItem_Click"/>
@@ -191,7 +200,8 @@
                                     <DataTemplate>
                                         <ComboBox
     ItemsSource="{Binding AvailableBuildings, RelativeSource={RelativeSource AncestorType=Window}}"
-    SelectedItem="{Binding Building, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+    SelectedItem="{Binding Building, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+    SelectionChanged="BuildingComboBox_SelectionChanged"/>
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellEditingTemplate>
                             </DataGridTemplateColumn>
@@ -300,11 +310,7 @@
                  Style="{StaticResource ModernTextBoxStyle}"
                  Height="26"/>
 
-                                        <Button Content="Проверить соединение"
-                Margin="0,10,0,0"
-                Width="180"
-                Height="28"
-                Click="BtnTestServer_Click"/>
+                                        
 
                                     </StackPanel>
                                 </GroupBox>

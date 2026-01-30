@@ -1,4 +1,5 @@
-﻿using System.IO;
+﻿using System;
+using System.IO;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading.Tasks;
@@ -20,12 +21,34 @@ namespace ImapCertWatcher.Client
                     // отправляем команду
                     await writer.WriteLineAsync(command);
 
-                    // читаем ответ строкой
-                    var response = await reader.ReadLineAsync();
+                    // ЧИТАЕМ ВЕСЬ ОТВЕТ ЦЕЛИКОМ
+                    var response = await reader.ReadToEndAsync();
 
-                    return response ?? "";
+                    return response;
                 }
             }
         }
+        public static async Task DownloadAndOpenArchive(string host, int port, int certId)
+        {
+            string response = await SendAsync(host, port, "GET_ARCHIVE|" + certId);
+
+            if (!response.StartsWith("ARCHIVE "))
+                return;
+
+            var payload = response.Substring(8);
+            var parts = payload.Split(new[] { '|' }, 2);
+
+            string fileName = parts[0];
+            byte[] data = Convert.FromBase64String(parts[1]);
+
+            string tempPath = Path.Combine(Path.GetTempPath(), fileName);
+
+            File.WriteAllBytes(tempPath, data);
+
+            System.Diagnostics.Process.Start(tempPath);
+        }
+
     }
+
+
 }

@@ -93,9 +93,17 @@ namespace ImapCertWatcher.Server
 
         private string HandleRemoteCommand(string cmd)
         {
-            cmd = cmd.Trim().ToUpperInvariant();
+            var originalCmd = cmd.Trim();
+            var upperCmd = originalCmd.ToUpperInvariant();
 
-            switch (cmd)
+            var command = upperCmd.Split('|')[0];
+            if (!command.StartsWith("GET_") &&
+    command != "STATUS")
+            {
+                _log("CMD IN: " + originalCmd);
+            }
+
+            switch (command)
             {
                 case "FAST_CHECK":
 
@@ -152,8 +160,114 @@ namespace ImapCertWatcher.Server
                         return "CERTS []\n";
                     }
 
+                case "MARK_DELETED":
+
+                    var dparts = cmd.Split('|');
+
+                    int did = int.Parse(dparts[1]);
+                    bool deleted = bool.Parse(dparts[2]);
+
+                    _db.MarkAsDeleted(did, deleted);
+                    _log($"MARK_DELETED OK: ID={did}, Deleted={deleted}");
+
+                    return "OK DELETED UPDATED\n";
+
+                case "UPDATE_NOTE":
+                    {
+                        try
+                        {
+                            var parts = cmd.Split(new[] { '|' }, 3);
+
+                            int nid = int.Parse(parts[1]);
+                            string note = parts[2];
+
+                            _log($"UPDATE_NOTE received: ID={nid}");
+
+                            _db.UpdateNote(nid, note);
+
+                            _log($"UPDATE_NOTE OK: ID={nid}");
+
+                            return "OK NOTE UPDATED\n";
+                        }
+                        catch (Exception ex)
+                        {
+                            _log("UPDATE_NOTE ERROR: " + ex.Message);
+                            return "ERROR NOTE UPDATE\n";
+                        }
+                    }
+
+                case "ADD_ARCHIVE":
+                    {
+                        try
+                        {
+                            var aparts = cmd.Split(new[] { '|' }, 4);
+
+                            int certId = int.Parse(aparts[1]);
+                            string certNumber = aparts[2];
+                            byte[] data = Convert.FromBase64String(aparts[3]);
+
+                            _log($"ADD_ARCHIVE received: ID={certId}, Cert={certNumber}, Size={data.Length} bytes");
+
+                            string safeName = certNumber.Replace(" ", "_").Replace("/", "_");
+                            string fileName = safeName + ".zip";
+
+                            _db.SaveArchiveToDb(certId, fileName, data);
+
+                            _log($"ADD_ARCHIVE OK: ID={certId}");
+
+                            return "OK ARCHIVE SAVED\n";
+                        }
+                        catch (Exception ex)
+                        {
+                            _log("ADD_ARCHIVE ERROR: " + ex.Message);
+                            return "ERROR ARCHIVE SAVE\n";
+                        }
+                    }
+
+                case "GET_ARCHIVE":
+                    {
+
+                        int gid = int.Parse(cmd.Split('|')[1]);
+
+                        var result = _db.GetArchiveFromDb(gid);
+
+                        if (result.data == null)
+                            return "ARCHIVE EMPTY\n";
+                        _log($"GET_ARCHIVE request: ID={gid}");
+                        string fileName = result.fileName;
+                        var base64 = Convert.ToBase64String(result.data);
+                        _log($"GET_ARCHIVE OK: ID={gid}, Size={result.data.Length}");
+                        return "ARCHIVE|" + fileName + ".zip|" + base64;
+                    }
+
+                case "SET_BUILDING":
+                    {
+                        try
+                        {
+                            var bparts = originalCmd.Split('|');
+
+                            int bid = int.Parse(bparts[1]);
+                            string building = bparts[2];
+
+                            _log($"SET_BUILDING received: ID={bid}, Building='{building}'");
+
+                            _db.UpdateBuilding(bid, building);
+
+                            _log($"SET_BUILDING OK: ID={bid}");
+
+                            return "OK BUILDING UPDATED\n";
+                        }
+                        catch (Exception ex)
+                        {
+                            _log("SET_BUILDING ERROR: " + ex.Message);
+                            return "ERROR BUILDING UPDATE\n";
+                        }
+                    }
+
+
                 default:
-                    return "UNKNOWN COMMAND";
+                    _log("UNKNOWN CMD: " + originalCmd);
+                    return "UNKNOWN COMMAND\n";
             }
         }
                 
