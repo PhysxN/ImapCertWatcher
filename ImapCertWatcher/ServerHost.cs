@@ -203,13 +203,12 @@ namespace ImapCertWatcher.Server
                             var aparts = cmd.Split(new[] { '|' }, 4);
 
                             int certId = int.Parse(aparts[1]);
-                            string certNumber = aparts[2];
+                            string fileName = aparts[2];
                             byte[] data = Convert.FromBase64String(aparts[3]);
 
-                            _log($"ADD_ARCHIVE received: ID={certId}, Cert={certNumber}, Size={data.Length} bytes");
+                            _log($"ADD_ARCHIVE received: ID={certId}, Cert={fileName}, Size={data.Length} bytes");
 
-                            string safeName = certNumber.Replace(" ", "_").Replace("/", "_");
-                            string fileName = safeName + ".zip";
+                            
 
                             _db.SaveArchiveToDb(certId, fileName, data);
 
@@ -237,7 +236,7 @@ namespace ImapCertWatcher.Server
                         string fileName = result.fileName;
                         var base64 = Convert.ToBase64String(result.data);
                         _log($"GET_ARCHIVE OK: ID={gid}, Size={result.data.Length}");
-                        return "ARCHIVE|" + fileName + ".zip|" + base64;
+                        return "ARCHIVE|" + fileName + "|" + base64;
                     }
 
                 case "SET_BUILDING":

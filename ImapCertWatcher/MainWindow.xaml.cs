@@ -1877,11 +1877,12 @@ namespace ImapCertWatcher
 
                 byte[] bytes = File.ReadAllBytes(dlg.FileName);
                 string base64 = Convert.ToBase64String(bytes);
+                string fileName = Path.GetFileName(dlg.FileName);
 
                 await TcpCommandClient.SendAsync(
                     _clientSettings.ServerIp,
                     _clientSettings.ServerPort,
-                    $"ADD_ARCHIVE|{record.Id}|{record.CertNumber}|{base64}");
+                    $"ADD_ARCHIVE|{record.Id}|{fileName}|{base64}");
 
                 AddToMiniLog("Архив добавлен");
             }
@@ -1898,25 +1899,6 @@ namespace ImapCertWatcher
                 int certId = record.Id;
                 string fio = record.Fio;
 
-                // Запрос архива
-                var response = await TcpCommandClient.SendAsync(
-                    _clientSettings.ServerIp,
-                    _clientSettings.ServerPort,
-                    $"GET_ARCHIVE|{certId}");
-
-                if (string.IsNullOrWhiteSpace(response) || !response.StartsWith("ARCHIVE "))
-                {
-                    MessageBox.Show("Архив не найден");
-                    return;
-                }
-
-                // ARCHIVE filename|base64
-                var payload = response.Substring(8);
-                var parts = payload.Split(new[] { '|' }, 2);
-
-                string fileName = parts[0];
-                byte[] zipData = Convert.FromBase64String(parts[1]);
-
                 // TEMP\ImapCertWatcher\ФИО
                 string safeName = MakeSafeFolderName(fio);
 
@@ -1925,25 +1907,67 @@ namespace ImapCertWatcher
                     "ImapCertWatcher",
                     safeName);
 
-                // пересоздаём папку
-                if (Directory.Exists(tempRoot))
-                    Directory.Delete(tempRoot, true);
+                // =====================================================
+                // ✅ ПРОВЕРКА ЛОКАЛЬНОГО КЭША (ПЕРЕД TCP)
+                // =====================================================
 
+                if (Directory.Exists(tempRoot))
+                {
+                    var files = Directory.GetFiles(tempRoot);
+
+                    if (files.Length > 0)
+                    {
+                        // Уже загружено ранее — просто открываем папку
+                        Process.Start("explorer.exe", tempRoot);
+                        return;
+                    }
+                }
+
+                // =====================================================
+                // 🔽 ЕСЛИ НЕТ КЭША — ИДЁМ НА СЕРВЕР
+                // =====================================================
+
+                var response = await TcpCommandClient.SendAsync(
+                    _clientSettings.ServerIp,
+                    _clientSettings.ServerPort,
+                    $"GET_ARCHIVE|{certId}");
+
+                if (string.IsNullOrWhiteSpace(response) || !response.StartsWith("ARCHIVE|"))
+                {
+                    MessageBox.Show("Архив не найден");
+                    return;
+                }
+
+                // ARCHIVE filename|base64
+                var payload = response.Substring("ARCHIVE|".Length);
+                var parts = payload.Split(new[] { '|' }, 2);
+
+                string fileName = parts[0];
+                byte[] fileData = Convert.FromBase64String(parts[1]);
+
+                // создаем папку
                 Directory.CreateDirectory(tempRoot);
 
-                // сохраняем zip
-                string zipPath = Path.Combine(tempRoot, fileName);
+                // сохраняем файл
+                string filePath = Path.Combine(tempRoot, fileName);
 
-                File.WriteAllBytes(zipPath, zipData);
+                File.WriteAllBytes(filePath, fileData);
 
-                // распаковываем
-                ZipFile.ExtractToDirectory(zipPath, tempRoot);
+                // ===== РЕШЕНИЕ ПО ТИПУ ФАЙЛА =====
 
-                // удаляем zip
-                File.Delete(zipPath);
+                if (fileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+                {
+                    ZipFile.ExtractToDirectory(filePath, tempRoot);
 
-                // открываем папку
-                Process.Start("explorer.exe", tempRoot);
+                    File.Delete(filePath);
+
+                    Process.Start("explorer.exe", tempRoot);
+                }
+                else
+                {
+                    // CER — просто открываем папку
+                    Process.Start("explorer.exe", tempRoot);
+                }
             }
             catch (Exception ex)
             {

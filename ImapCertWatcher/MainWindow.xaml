@@ -163,16 +163,34 @@
                             </ContextMenu>
                         </DataGrid.ContextMenu>
                         <DataGrid.Columns>
-                            <DataGridTextColumn Header="ФИО" Binding="{Binding Fio}" Width="2*"
-                                                ElementStyle="{StaticResource DataGridTextBlockStyle}"/>
-                            <DataGridTextColumn Header="Сертификат" Binding="{Binding CertNumber}" Width="*"
-                                                ElementStyle="{StaticResource DataGridTextBlockStyle}"/>
-                            <DataGridTextColumn Header="Начало" Binding="{Binding DateStart, StringFormat=dd.MM.yyyy}" Width="*"
-                                                ElementStyle="{StaticResource DataGridTextBlockStyle}"/>
-                            <DataGridTextColumn Header="Окончание" Binding="{Binding DateEnd, StringFormat=dd.MM.yyyy}" Width="*"
-                                                ElementStyle="{StaticResource DataGridTextBlockStyle}"/>
-                            <DataGridTextColumn Header="Осталось дней" Binding="{Binding DaysLeft}" Width="*"
-                                                ElementStyle="{StaticResource DataGridTextBlockStyle}"/>
+                            <DataGridTextColumn Header="ФИО"
+                    Binding="{Binding Fio, Mode=OneWay}"
+                    IsReadOnly="True"
+                    Width="2*"
+                    ElementStyle="{StaticResource DataGridTextBlockStyle}"/>
+
+                            <DataGridTextColumn Header="Сертификат"
+                    Binding="{Binding CertNumber, Mode=OneWay}"
+                    IsReadOnly="True"
+                    Width="*"
+                    ElementStyle="{StaticResource DataGridTextBlockStyle}"/>
+
+                            <DataGridTextColumn Header="Начало"
+                    Binding="{Binding DateStart, Mode=OneWay, StringFormat=dd.MM.yyyy}"
+                    IsReadOnly="True"
+                    Width="*"
+                    ElementStyle="{StaticResource DataGridTextBlockStyle}"/>
+
+                            <DataGridTextColumn Header="Окончание"
+                    Binding="{Binding DateEnd, Mode=OneWay, StringFormat=dd.MM.yyyy}"
+                    IsReadOnly="True"
+                    Width="*"
+                    ElementStyle="{StaticResource DataGridTextBlockStyle}"/>
+                            <DataGridTextColumn Header="Осталось дней"
+                                            Binding="{Binding DaysLeft, Mode=OneWay}"
+                                            IsReadOnly="True"
+                                            Width="*"
+                                            ElementStyle="{StaticResource DataGridTextBlockStyle}"/>            
 
                             <DataGridTemplateColumn Header="Архив с ЭЦП" Width="*">
                                 <DataGridTemplateColumn.CellTemplate>
