@@ -157,6 +157,7 @@
     <Compile Include="TcpCommandClient.cs" />
     <Compile Include="TcpCommandServer.cs" />
     <Compile Include="Utils\AsyncHelper.cs" />
+    <Compile Include="NameCaseConverter.cs" />
     <Compile Include="Utils\SafeAsyncTimer.cs" />
     <Compile Include="ZipCerExtractor.cs" />
     <Page Include="ConfirmDialog.xaml">

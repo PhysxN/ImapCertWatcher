@@ -32,9 +32,10 @@ namespace ImapCertWatcher.Models
         {
             get
             {
-                if (DateEnd == DateTime.MinValue) return 0;
-                var days = (int)(DateEnd - DateTime.Now).TotalDays;
-                return Math.Max(0, days); // Не показываем отрицательные значения
+                if (DateEnd == DateTime.MinValue)
+                    return 0;
+
+                return (DateEnd.Date - DateTime.Now.Date).Days;
             }
         }
 

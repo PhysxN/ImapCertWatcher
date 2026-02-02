@@ -2,11 +2,16 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:ImapCertWatcher"
+        xmlns:conv="clr-namespace:ImapCertWatcher"
         Title="Watcher ЭЦП"
         Height="880"
         Width="1300"
         WindowStartupLocation="CenterScreen"
         Background="{DynamicResource WindowBackgroundBrush}">
+
+    <Window.Resources>
+        <conv:NameCaseConverter x:Key="NameCaseConverter"/>
+    </Window.Resources>
 
     <Grid Margin="8" Background="{DynamicResource WindowBackgroundBrush}">
         <TabControl Style="{StaticResource ModernTabControlStyle}" SelectionChanged="TabControl_SelectionChanged">
@@ -164,7 +169,7 @@
                         </DataGrid.ContextMenu>
                         <DataGrid.Columns>
                             <DataGridTextColumn Header="ФИО"
-                    Binding="{Binding Fio, Mode=OneWay}"
+    Binding="{Binding Fio, Mode=OneWay, Converter={StaticResource NameCaseConverter}}"
                     IsReadOnly="True"
                     Width="2*"
                     ElementStyle="{StaticResource DataGridTextBlockStyle}"/>

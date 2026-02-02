@@ -478,6 +478,9 @@ namespace ImapCertWatcher
 
         private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
         {
+            // Очистка папки Certs старше 48 часов (в фоне)
+            _ = CleanupCertsFolderAsync();
+
             this.Loaded -= MainWindow_Loaded;
 
             System.Diagnostics.Debug.WriteLine("MainWindow_Loaded начат");
@@ -1200,7 +1203,10 @@ namespace ImapCertWatcher
                 // ===== ФИЛЬТР УДАЛЕННЫХ =====
                 if (!_showDeleted)
                 {
-                    query = query.Where(x => !x.IsDeleted);
+                    query = query.Where(x =>
+                        !x.IsDeleted &&
+                        x.DaysLeft >= 0
+                    );
                 }
 
                 // ===== ФИЛЬТР ЗДАНИЯ =====
@@ -1902,23 +1908,24 @@ namespace ImapCertWatcher
                 // TEMP\ImapCertWatcher\ФИО
                 string safeName = MakeSafeFolderName(fio);
 
-                string tempRoot = Path.Combine(
-                    Path.GetTempPath(),
-                    "ImapCertWatcher",
+                string certsRoot = GetCertsRoot();
+
+                string certFolder = Path.Combine(
+                    certsRoot,
                     safeName);
 
                 // =====================================================
                 // ✅ ПРОВЕРКА ЛОКАЛЬНОГО КЭША (ПЕРЕД TCP)
                 // =====================================================
 
-                if (Directory.Exists(tempRoot))
+                if (Directory.Exists(certFolder))
                 {
-                    var files = Directory.GetFiles(tempRoot);
+                    var files = Directory.GetFiles(certFolder);
 
                     if (files.Length > 0)
                     {
                         // Уже загружено ранее — просто открываем папку
-                        Process.Start("explorer.exe", tempRoot);
+                        Process.Start("explorer.exe", certFolder);
                         return;
                     }
                 }
@@ -1946,10 +1953,10 @@ namespace ImapCertWatcher
                 byte[] fileData = Convert.FromBase64String(parts[1]);
 
                 // создаем папку
-                Directory.CreateDirectory(tempRoot);
+                Directory.CreateDirectory(certFolder);
 
                 // сохраняем файл
-                string filePath = Path.Combine(tempRoot, fileName);
+                string filePath = Path.Combine(certFolder, fileName);
 
                 File.WriteAllBytes(filePath, fileData);
 
@@ -1957,22 +1964,62 @@ namespace ImapCertWatcher
 
                 if (fileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
                 {
-                    ZipFile.ExtractToDirectory(filePath, tempRoot);
+                    ZipFile.ExtractToDirectory(filePath, certFolder);
 
                     File.Delete(filePath);
 
-                    Process.Start("explorer.exe", tempRoot);
+                    Process.Start("explorer.exe", certFolder);
                 }
                 else
                 {
                     // CER — просто открываем папку
-                    Process.Start("explorer.exe", tempRoot);
+                    Process.Start("explorer.exe", certFolder);
                 }
             }
             catch (Exception ex)
             {
                 MessageBox.Show("Ошибка открытия сертификата:\n" + ex.Message);
             }
+        }
+
+        private string GetCertsRoot()
+        {
+            return Path.Combine(
+                AppDomain.CurrentDomain.BaseDirectory,
+                "Certs");
+        }
+
+        private async Task CleanupCertsFolderAsync()
+        {
+            await Task.Run(() =>
+            {
+                try
+                {
+                    string root = GetCertsRoot();
+
+                    Directory.CreateDirectory(root);
+
+                    foreach (var dir in Directory.GetDirectories(root))
+                    {
+                        try
+                        {
+                            var info = new DirectoryInfo(dir);
+                            var age = DateTime.Now - info.LastWriteTime;
+
+                            if (age > TimeSpan.FromHours(48))
+                            {
+                                Directory.Delete(dir, true);
+                            }
+                        }
+                        catch
+                        {
+                        }
+                    }
+                }
+                catch
+                {
+                }
+            });
         }
 
         private string MakeSafeFolderName(string name)
