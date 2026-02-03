@@ -229,7 +229,7 @@
                                 </DataGridTemplateColumn.CellEditingTemplate>
                             </DataGridTemplateColumn>
 
-                            <DataGridTemplateColumn Header="Примечание" Width="2*">
+                            <DataGridTemplateColumn Header="SN токена" Width="2*">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <TextBox Text="{Binding Note, UpdateSourceTrigger=PropertyChanged}" 
@@ -238,6 +238,11 @@
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
+                            <DataGridTextColumn Header="Аннулирован"
+                            Binding="{Binding RevokedDisplay}"
+                            IsReadOnly="True"
+                            Width="*"
+                            ElementStyle="{StaticResource DataGridTextBlockStyle}"/>
 
                             <DataGridCheckBoxColumn Header="Удален" Binding="{Binding IsDeleted}" Width="*" IsReadOnly="True"
                                                     ElementStyle="{StaticResource DataGridCheckBoxStyle}"/>
@@ -353,9 +358,15 @@
 
                                 <!-- Поведение приложения -->
                                 <GroupBox Header="Поведение приложения" Style="{StaticResource ModernGroupBoxStyle}" Margin="0,12,0,0">
-                                    <StackPanel Margin="6">                                                                             
+                                    <StackPanel Margin="6">
+                                        <Button Content="⚠ Сбросить аннулирования"
+        Style="{StaticResource ModernButtonStyle}"
+        Margin="0,10,0,0"
+        Click="BtnResetRevokes_Click"
+        ToolTip="Удаляет отметки аннулирования и историю REVOKE"/>
 
-                                        
+
+
 
                                         <CheckBox x:Name="chkDarkTheme"
                   Content="Темная тема"
@@ -365,6 +376,8 @@
                   Unchecked="ChkDarkTheme_Changed"/>                                        
 
                                     </StackPanel>
+                                    
+                                    
                                 </GroupBox>
 
 

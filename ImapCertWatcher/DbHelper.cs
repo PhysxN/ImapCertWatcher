@@ -148,6 +148,8 @@ SELECT
     c.CERT_NUMBER,
     c.FROM_ADDRESS,
     c.IS_DELETED,
+    c.IS_REVOKED,
+    c.REVOKE_DATE,
     c.NOTE,
     c.BUILDING,
     c.FOLDER_PATH,
@@ -295,6 +297,8 @@ CREATE TABLE CERTS (
     CERT_NUMBER VARCHAR(100),
     FROM_ADDRESS VARCHAR(200),
     IS_DELETED SMALLINT DEFAULT 0,
+    IS_REVOKED SMALLINT DEFAULT 0,
+    REVOKE_DATE TIMESTAMP,
     NOTE VARCHAR(1000),
     BUILDING VARCHAR(100),
     FOLDER_PATH VARCHAR(300),
@@ -425,6 +429,7 @@ CREATE TABLE IMAP_LAST_UID (
             CreateIndexIfNotExists(conn, "IDX_CERTS_NUMBER", "CERTS", "CERT_NUMBER", false);
             CreateIndexIfNotExists(conn, "IDX_CERTS_FIO", "CERTS", "FIO", false);
             CreateIndexIfNotExists(conn, "UQ_CERTS_FIO_NUMBER", "CERTS", "FIO, CERT_NUMBER", true);
+            CreateIndexIfNotExists(conn, "IDX_CERTS_REVOKED", "CERTS", "IS_REVOKED", false);
 
             // новый индекс под фильтры грида
             CreateIndexIfNotExists(conn, "IDX_CERTS_FILTER", "CERTS", "IS_DELETED, BUILDING, DATE_END", false);
@@ -444,7 +449,9 @@ CREATE TABLE IMAP_LAST_UID (
                 {"BUILDING", "VARCHAR(100)"},
                 {"FOLDER_PATH", "VARCHAR(300)"},
                 {"ARCHIVE_PATH", "VARCHAR(500)"},
-                {"MESSAGE_DATE", "TIMESTAMP"}
+                {"MESSAGE_DATE", "TIMESTAMP"},
+                {"IS_REVOKED", "SMALLINT DEFAULT 0"},
+                {"REVOKE_DATE", "TIMESTAMP"}
             };
 
             foreach (var kv in needed)
@@ -578,6 +585,8 @@ SELECT
     c.CERT_NUMBER,
     c.FROM_ADDRESS,
     c.IS_DELETED,
+    c.IS_REVOKED,
+    c.REVOKE_DATE,
     c.NOTE,
     c.BUILDING,
     c.FOLDER_PATH,
@@ -879,6 +888,8 @@ ROWS 1";
                                                 c.CERT_NUMBER,
                                                 c.FROM_ADDRESS,
                                                 c.IS_DELETED,
+                                                c.IS_REVOKED,
+                                                c.REVOKE_DATE,
                                                 c.NOTE,
                                                 c.BUILDING,
                                                 c.FOLDER_PATH,
@@ -1183,6 +1194,12 @@ RETURNING ID";
             // Firebird SMALLINT -> bool
             rec.IsDeleted = rdr["IS_DELETED"] != DBNull.Value &&
                             Convert.ToInt32(rdr["IS_DELETED"]) == 1;
+            rec.IsRevoked = rdr["IS_REVOKED"] != DBNull.Value &&
+                Convert.ToInt32(rdr["IS_REVOKED"]) == 1;
+
+            rec.RevokeDate = rdr["REVOKE_DATE"] == DBNull.Value
+                ? (DateTime?)null
+                : (DateTime)rdr["REVOKE_DATE"];
 
             // Подзапрос HAS_ARCHIVE
             if (rdr["HAS_ARCHIVE"] != DBNull.Value)
@@ -1246,17 +1263,12 @@ MATCHING (FOLDER_PATH)";
                 using (var cmd = conn.CreateCommand())
                 {
                     var where = new List<string>();
-                    if (!showDeleted) where.Add("c.IS_DELETED = 0");
+                    
                     if (!string.IsNullOrEmpty(buildingFilter) && buildingFilter != "Все")
                     {
                         where.Add("c.BUILDING = @building");
                         cmd.Parameters.AddWithValue("@building", buildingFilter);
-                    }
-
-                    // Показываем только не истёкшие
-                    where.Add("c.DATE_END >= @currentDate");
-                    cmd.Parameters.AddWithValue("@currentDate", DateTime.Now.Date);
-
+                    }    
                     string whereClause = where.Count > 0 ? "WHERE " + string.Join(" AND ", where) : "";
 
                     cmd.CommandText = $@"
@@ -1269,6 +1281,8 @@ SELECT
     c.CERT_NUMBER,
     c.FROM_ADDRESS,
     c.IS_DELETED,
+    c.IS_REVOKED,
+    c.REVOKE_DATE,
     c.NOTE,
     c.BUILDING,
     c.FOLDER_PATH,
@@ -1409,7 +1423,9 @@ WHERE FOLDER_PATH = @folder AND MAIL_UID = @uid AND KIND = @kind";
         /// </summary>
         public void MarkMailProcessed(string folderPath, string mailUid, string kind)
         {
-            if (string.IsNullOrEmpty(mailUid)) return;
+            if (string.IsNullOrEmpty(mailUid))
+                return;
+
             folderPath = folderPath ?? "";
             kind = string.IsNullOrEmpty(kind) ? "GENERIC" : kind.ToUpperInvariant();
 
@@ -1418,41 +1434,70 @@ WHERE FOLDER_PATH = @folder AND MAIL_UID = @uid AND KIND = @kind";
                 using (var conn = new FbConnection(_connectionString))
                 {
                     conn.Open();
+
                     using (var cmd = conn.CreateCommand())
                     {
                         cmd.CommandText = @"
-INSERT INTO PROCESSED_MAILS (FOLDER_PATH, MAIL_UID, KIND, PROCESSED_DATE)
-VALUES (@folder, @uid, @kind, @dt)";
+UPDATE OR INSERT INTO PROCESSED_MAILS
+(FOLDER_PATH, MAIL_UID, KIND, PROCESSED_DATE)
+VALUES (@folder, @uid, @kind, @dt)
+MATCHING (FOLDER_PATH, MAIL_UID, KIND)";
+
                         cmd.Parameters.AddWithValue("@folder", folderPath);
                         cmd.Parameters.AddWithValue("@uid", mailUid);
                         cmd.Parameters.AddWithValue("@kind", kind);
                         cmd.Parameters.AddWithValue("@dt", DateTime.Now);
 
-                        try
-                        {
-                            cmd.ExecuteNonQuery();
-                            Log($"MarkMailProcessed: folder='{folderPath}', uid='{mailUid}', kind='{kind}'");
-                        }
-                        catch (FbException fbEx)
-                        {
-                            // Если это нарушение уникального индекса — значит уже помечали, просто игнорируем.
-                            Log($"MarkMailProcessed: уже существует запись для UID='{mailUid}', kind='{kind}' ({fbEx.Message})");
-                        }
-                        catch (Exception ex)
-                        {
-                            Log($"MarkMailProcessed error: {ex.Message}");
-                        }
+                        cmd.ExecuteNonQuery();
                     }
                 }
+
+                // Логируем ОДИН раз после успешного upsert
+                Log($"MarkMailProcessed OK: folder='{folderPath}', uid='{mailUid}', kind='{kind}'");
             }
-            catch (Exception exOuter)
+            catch (Exception ex)
             {
-                Log($"MarkMailProcessed outer error: {exOuter.Message}");
+                Log($"MarkMailProcessed ERROR: {ex.Message}");
             }
         }
 
         #endregion
 
+        public void ResetRevocations()
+        {
+            using (var conn = new FbConnection(_connectionString))
+            {
+                conn.Open();
+
+                using (var tr = conn.BeginTransaction())
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.Transaction = tr;
+
+                    // 1) Сброс флагов сертификатов
+                    cmd.CommandText = @"
+                        UPDATE CERTS
+                        SET 
+                            IS_REVOKED = 0,
+                            IS_DELETED = 0,
+                            REVOKE_DATE = NULL
+                        WHERE IS_REVOKED = 1 OR IS_DELETED = 1";
+
+                    int certs = cmd.ExecuteNonQuery();
+
+                    // 2) Очистка истории обработанных REVOKE писем
+                    cmd.CommandText = @"
+                        DELETE FROM PROCESSED_MAILS
+                        WHERE KIND = 'REVOKE'";
+
+                    int mails = cmd.ExecuteNonQuery();
+
+                    tr.Commit();
+
+                    Log($"ResetRevocations: CERTS={certs}, MAILS={mails}");
+                }
+            }
+        }
 
         #region Revocation helpers
 
@@ -1461,10 +1506,10 @@ VALUES (@folder, @uid, @kind, @dt)";
         /// Возвращает true если найден и обновлён.
         /// </summary>
         public bool FindAndMarkAsRevokedByCertNumber(
-    string certNumber,
-    string fio,
-    string folderPath,
-    string revokeDateShort)
+                string certNumber,
+                string fio,
+                string folderPath,
+                string revokeDateShort)
         {
             Log($"FindAndMarkAsRevokedByCertNumber: cert={certNumber}, fio={fio}, date={revokeDateShort}");
 
@@ -1479,7 +1524,7 @@ VALUES (@folder, @uid, @kind, @dt)";
                     using (var cmd = conn.CreateCommand())
                     {
                         cmd.CommandText = @"
-                    SELECT ID, NOTE, IS_DELETED
+                    SELECT ID, NOTE, IS_REVOKED, IS_DELETED
                     FROM CERTS
                     WHERE UPPER(TRIM(CERT_NUMBER)) = @cert
                 ";
@@ -1496,37 +1541,48 @@ VALUES (@folder, @uid, @kind, @dt)";
 
                             int id = rdr.GetInt32(0);
                             string oldNote = rdr.IsDBNull(1) ? "" : rdr.GetString(1);
-                            bool isDeleted = !rdr.IsDBNull(2) && rdr.GetInt32(2) == 1;
+                            bool isRevoked =
+                                            rdr["IS_REVOKED"] != DBNull.Value &&
+                                            Convert.ToInt32(rdr["IS_REVOKED"]) == 1;
 
-                            // ★ КЛЮЧЕВОЕ ИЗМЕНЕНИЕ ★
-                            if (isDeleted)
+                            if (isRevoked)
                             {
-                                //Log($"FindAndMarkAsRevokedByCertNumber: уже аннулирован ID={id}, cert={certNumber}");
-                                return false; // ❗ НЕ считаем повторным аннулированием
+                                return false;
                             }
 
-                            string newNote = !string.IsNullOrEmpty(revokeDateShort)
-                                ? $"аннулирован ({revokeDateShort})"
-                                : "аннулирован";
+                            //string newNote = !string.IsNullOrEmpty(revokeDateShort)
+                            //    ? $"аннулирован ({revokeDateShort})"
+                            //    : "аннулирован";
 
-                            string noteToSet = string.IsNullOrEmpty(oldNote)
-                                ? newNote
-                                : $"{oldNote}; {newNote}";
+                            //string noteToSet = string.IsNullOrEmpty(oldNote)
+                            //    ? newNote
+                            //    : $"{oldNote}; {newNote}";
 
                             rdr.Close();
 
                             using (var upd = conn.CreateCommand())
                             {
                                 upd.CommandText = @"
-                            UPDATE CERTS
-                            SET IS_DELETED = 1,
-                                NOTE = @note,
-                                FOLDER_PATH = @folder
-                            WHERE ID = @id
-                              AND IS_DELETED = 0
-                        ";
+                                        UPDATE CERTS
+                                            SET
+                                                IS_DELETED = 1,
+                                                IS_REVOKED = 1,
+                                                REVOKE_DATE = @revDate,
+                                                FOLDER_PATH = @folder
+                                            WHERE ID = @id
+                                              AND IS_REVOKED = 0
+                                        ";
 
-                                upd.Parameters.AddWithValue("@note", noteToSet);
+                                DateTime parsedDate = DateTime.Now;
+
+                                if (!string.IsNullOrEmpty(revokeDateShort))
+                                {
+                                    DateTime dt;
+                                    if (DateTime.TryParse(revokeDateShort, out dt))
+                                        parsedDate = dt;
+                                }
+
+                                upd.Parameters.AddWithValue("@revDate", parsedDate);
                                 upd.Parameters.AddWithValue("@folder", folderPath ?? "");
                                 upd.Parameters.AddWithValue("@id", id);
 
@@ -1609,8 +1665,10 @@ SET
     CERT_NUMBER = @cert,
     DATE_START = @start,
     DATE_END   = @end,
-    IS_DELETED = 0
-WHERE ID = @id";
+    IS_DELETED = 0,
+    IS_REVOKED = 0,
+    REVOKE_DATE = NULL
+    WHERE ID = @id";
 
                     cmd.Parameters.AddWithValue("@cert", certNumber);
                     cmd.Parameters.AddWithValue("@start", start);

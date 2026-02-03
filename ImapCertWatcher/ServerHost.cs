@@ -145,7 +145,7 @@ namespace ImapCertWatcher.Server
                 case "GET_CERTS":
                     try
                     {
-                        var list = _db.GetAllCertificates();
+                        var list = _db.LoadAll(true);
 
                         var json = JsonConvert.SerializeObject(list);
 
@@ -168,6 +168,7 @@ namespace ImapCertWatcher.Server
                     bool deleted = bool.Parse(dparts[2]);
 
                     _db.MarkAsDeleted(did, deleted);
+
                     _log($"MARK_DELETED OK: ID={did}, Deleted={deleted}");
 
                     return "OK DELETED UPDATED\n";
@@ -262,6 +263,25 @@ namespace ImapCertWatcher.Server
                             return "ERROR BUILDING UPDATE\n";
                         }
                     }
+                case "RESET_REVOKES":
+                    {
+                        try
+                        {
+                            _log("RESET_REVOKES started");
+
+                            _db.ResetRevocations();
+
+                            _log("RESET_REVOKES finished");
+
+                            return "OK RESET DONE\n";
+                        }
+                        catch (Exception ex)
+                        {
+                            _log("RESET_REVOKES ERROR: " + ex.Message);
+                            return "ERROR RESET\n";
+                        }
+                    }
+
 
 
                 default:

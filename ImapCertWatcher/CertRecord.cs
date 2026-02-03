@@ -44,6 +44,8 @@ namespace ImapCertWatcher.Models
         public bool IsDeleted { get; set; }
         public bool HasArchiveInDb { get; set; }
         public bool HasArchive { get; set; }
+        public bool IsRevoked { get; set; }
+        public DateTime? RevokeDate { get; set; }
 
         public string Note
         {
@@ -68,6 +70,17 @@ namespace ImapCertWatcher.Models
                     _building = value;
                     OnPropertyChanged(nameof(Building));
                 }
+            }
+        }
+
+        public string RevokedDisplay
+        {
+            get
+            {
+                if (!IsRevoked) return "";
+                return RevokeDate.HasValue
+                    ? $"Да ({RevokeDate.Value:dd.MM.yyyy})"
+                    : "Да";
             }
         }
 

@@ -930,7 +930,7 @@ namespace ImapCertWatcher
                 // Данные
                 foreach (var record in data)
                 {
-                    var status = record.IsDeleted ? "Удален" : "Активен";
+                    var status = record.IsRevoked ? "Аннулирован" : record.IsDeleted ? "Удален" : "Активен";
                     var fio = EscapeCsvField(record.Fio ?? "");
                     var certNumber = EscapeCsvField(record.CertNumber ?? "");
                     var building = EscapeCsvField(record.Building ?? "");
@@ -980,7 +980,7 @@ namespace ImapCertWatcher
                     "Дата окончания",
                     "Осталось дней",
                     "Здание",
-                    "Примечание",
+                    "Серийный номер токена",
                     "Статус"
                 };
 
@@ -1003,7 +1003,7 @@ namespace ImapCertWatcher
                     worksheet.Cell(row, 5).Value = record.DaysLeft;
                     worksheet.Cell(row, 6).Value = record.Building ?? "";
                     worksheet.Cell(row, 7).Value = record.Note ?? "";
-                    worksheet.Cell(row, 8).Value = record.IsDeleted ? "Удален" : "Активен";
+                    worksheet.Cell(row, 8).Value = record.IsRevoked ? "Аннулирован" : record.IsDeleted ? "Удален" : "Активен";
 
                     // Цветовое кодирование по сроку действия
                     if (!record.IsDeleted)
@@ -1204,7 +1204,7 @@ namespace ImapCertWatcher
                 if (!_showDeleted)
                 {
                     query = query.Where(x =>
-                        !x.IsDeleted &&
+                        !x.IsDeleted &&                        
                         x.DaysLeft >= 0
                     );
                 }
@@ -1286,6 +1286,15 @@ namespace ImapCertWatcher
 
         private async void BtnProcessAll_Click(object sender, RoutedEventArgs e)
         {
+            var r = MessageBox.Show(
+                    "Полная проверка может занять длительное время.\n\nЗапустить?",
+                    "Подтверждение",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Warning);
+
+            if (r != MessageBoxResult.Yes)
+                return;
+
             await SendServerCommand("FULL_CHECK");
         }
 
@@ -1476,47 +1485,97 @@ namespace ImapCertWatcher
                               MessageBoxButton.OK, MessageBoxImage.Information);
             }
         }
-                
+
+        private async void BtnResetRevokes_Click(object sender, RoutedEventArgs e)
+        {
+            var r1 = MessageBox.Show(
+                "Эта операция удалит ВСЮ информацию об аннулировании сертификатов.\n\nПродолжить?",
+                "ВНИМАНИЕ",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning);
+
+            if (r1 != MessageBoxResult.Yes)
+                return;
+
+            var r2 = MessageBox.Show(
+                "Вы ТОЧНО уверены?\n\nОперация необратима!",
+                "ПОДТВЕРЖДЕНИЕ",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Error);
+
+            if (r2 != MessageBoxResult.Yes)
+                return;
+
+            try
+            {
+                statusText.Text = "Сброс аннулирований...";
+
+                var resp = await TcpCommandClient.SendAsync(
+                    _clientSettings.ServerIp,
+                    _clientSettings.ServerPort,
+                    "RESET_REVOKES");
+
+                AddToMiniLog("RESET_REVOKES: " + resp);
+
+                await LoadFromServer();
+
+                statusText.Text = "Аннулирования сброшены";
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Ошибка сброса:\n" + ex.Message);
+            }
+        }
+
 
         private void DgCerts_LoadingRow(object sender, DataGridRowEventArgs e)
         {
             if (e.Row.Item is CertRecord record)
             {
-                // Устанавливаем только фон, цвет текста будет управляться стилями
+                // ===== ПРИОРИТЕТ: АННУЛИРОВАН =====
+                if (record.IsRevoked)
+                {
+                    e.Row.Background = new SolidColorBrush(_isDarkTheme
+                        ? System.Windows.Media.Color.FromArgb(255, 90, 60, 60)
+                        : System.Windows.Media.Color.FromArgb(255, 255, 180, 180));
+
+                    e.Row.Foreground = new SolidColorBrush(_isDarkTheme
+                        ? Colors.White : Colors.Black);
+
+                    return;
+                }
+
+                // ===== УДАЛЕН =====
                 if (record.IsDeleted)
                 {
-                    // Для удаленных записей - серый фон
                     e.Row.Background = new SolidColorBrush(_isDarkTheme
-                        ? System.Windows.Media.Color.FromArgb(255, 80, 80, 80)  // Темно-серый для темной темы
-                        : System.Windows.Media.Color.FromArgb(255, 220, 220, 220)); // Светло-серый для светлой темы
+                        ? System.Windows.Media.Color.FromArgb(255, 80, 80, 80)
+                        : System.Windows.Media.Color.FromArgb(255, 220, 220, 220));
                 }
                 else if (record.DaysLeft <= 10)
                 {
-                    // Красный фон для срочных сертификатов
                     e.Row.Background = new SolidColorBrush(_isDarkTheme
-                        ? System.Windows.Media.Color.FromArgb(255, 120, 50, 50)   // Темно-красный для темной темы
-                        : System.Windows.Media.Color.FromArgb(255, 255, 200, 200)); // Светло-красный для светлой темы
+                        ? System.Windows.Media.Color.FromArgb(255, 120, 50, 50)
+                        : System.Windows.Media.Color.FromArgb(255, 255, 200, 200));
                 }
                 else if (record.DaysLeft <= 30)
                 {
-                    // Желтый фон для предупреждения
                     e.Row.Background = new SolidColorBrush(_isDarkTheme
-                        ? System.Windows.Media.Color.FromArgb(255, 120, 120, 50)   // Темно-желтый для темной темы
-                        : System.Windows.Media.Color.FromArgb(255, 255, 255, 200)); // Светло-желтый для светлой темы
+                        ? System.Windows.Media.Color.FromArgb(255, 120, 120, 50)
+                        : System.Windows.Media.Color.FromArgb(255, 255, 255, 200));
                 }
                 else
                 {
-                    // Зеленый фон для нормальных сертификатов
                     e.Row.Background = new SolidColorBrush(_isDarkTheme
-                        ? System.Windows.Media.Color.FromArgb(255, 50, 80, 50)     // Темно-зеленый для темной темы
-                        : System.Windows.Media.Color.FromArgb(255, 200, 255, 200)); // Светло-зеленый для светлой темы
+                        ? System.Windows.Media.Color.FromArgb(255, 50, 80, 50)
+                        : System.Windows.Media.Color.FromArgb(255, 200, 255, 200));
                 }
 
-                // Принудительно устанавливаем цвет текста для всей строки
                 e.Row.Foreground = new SolidColorBrush(_isDarkTheme
                     ? Colors.White : Colors.Black);
             }
         }
+
 
         private async void StartReconnectBackoff()
         {
@@ -1845,6 +1904,8 @@ namespace ImapCertWatcher
 
                     // локальное обновление UI
                     record.IsDeleted = false;
+                    record.IsRevoked = false;
+                    record.RevokeDate = null;
 
                     // обновляем таблицу
                     ApplySearchFilter();

@@ -115,7 +115,7 @@ namespace ImapCertWatcher.Services
 
                         string uidStr = uid.ToString();
 
-                        if (_db.IsMailProcessed(folder.FullName, uidStr, "REVOKE"))
+                        if (!checkAllMessages && _db.IsMailProcessed(folder.FullName, uidStr, "REVOKE"))
                         {
                             Log($"UID={uidStr}: уже обработано, пропуск");
                             continue;
@@ -147,14 +147,29 @@ namespace ImapCertWatcher.Services
                             continue;
                         }
 
-                        string certNumber = match.Groups[1].Value.Trim();
+                        string certNumber = DbHelper.NormalizeCertNumber(match.Groups[1].Value);
 
-                        bool ok = _db.FindAndMarkAsRevokedByCertNumber(certNumber, null, folder.FullName, null);
+                        DateTime? revokeDate = null;
+                        var dateMatch = Regex.Match(body, @"(\d{2}[.\-]\d{2}[.\-]\d{4})");
+                        if (dateMatch.Success)
+                        {
+                            DateTime dt;
+                            if (DateTime.TryParse(dateMatch.Value, out dt))
+                                revokeDate = dt;
+                        }
+
+                        bool ok = _db.FindAndMarkAsRevokedByCertNumber(
+                            certNumber,
+                            null,
+                            folder.FullName,
+                            revokeDate?.ToString("dd.MM.yyyy")
+                        );
 
                         if (ok)
                         {
                             applied++;
-                            Log($"Аннулирован сертификат: {certNumber}");
+                            Log($"Аннулирован сертификат: {certNumber}" +
+                                (revokeDate.HasValue ? $" (дата {revokeDate:dd.MM.yyyy})" : ""));
                         }
 
                         MarkProcessed(folder, uidStr);
