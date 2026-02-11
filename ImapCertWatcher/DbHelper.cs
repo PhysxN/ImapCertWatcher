@@ -140,24 +140,27 @@ namespace ImapCertWatcher.Data
                     using (var cmd = conn.CreateCommand())
                     {
                         cmd.CommandText = @"
-SELECT
-    c.ID,
-    c.FIO,
-    c.DATE_START,
-    c.DATE_END,
-    c.CERT_NUMBER,
-    c.FROM_ADDRESS,
-    c.IS_DELETED,
-    c.IS_REVOKED,
-    c.REVOKE_DATE,
-    c.NOTE,
-    c.BUILDING,
-    c.FOLDER_PATH,
-    c.ARCHIVE_PATH,
-    c.MESSAGE_DATE,
-    (SELECT COUNT(*) FROM CERT_ARCHIVES ca WHERE ca.CERT_ID = c.ID) AS HAS_ARCHIVE
-FROM CERTS c
-ORDER BY c.DATE_END";
+                                            SELECT
+                                                c.ID,
+                                                c.FIO,
+                                                c.DATE_START,
+                                                c.DATE_END,
+                                                c.CERT_NUMBER,
+                                                c.FROM_ADDRESS,
+                                                c.IS_DELETED,
+                                                c.IS_REVOKED,
+                                                c.REVOKE_DATE,
+                                                c.NOTE,
+                                                c.BUILDING,
+                                                c.FOLDER_PATH,
+                                                c.ARCHIVE_PATH,
+                                                c.MESSAGE_DATE,
+                                                c.TOKEN_ID,
+                                                t.SN AS TOKEN_SN,
+                                                (SELECT COUNT(*) FROM CERT_ARCHIVES ca WHERE ca.CERT_ID = c.ID) AS HAS_ARCHIVE
+                                            FROM CERTS c
+                                            LEFT JOIN TOKENS t ON t.ID = c.TOKEN_ID
+                                            ORDER BY c.DATE_END";
 
                         using (var rdr = cmd.ExecuteReader())
                         {
@@ -303,7 +306,8 @@ CREATE TABLE CERTS (
     BUILDING VARCHAR(100),
     FOLDER_PATH VARCHAR(300),
     ARCHIVE_PATH VARCHAR(500),
-    MESSAGE_DATE TIMESTAMP
+    MESSAGE_DATE TIMESTAMP,
+    TOKEN_ID INTEGER
 )";
                         cmd.ExecuteNonQuery();
 
@@ -451,7 +455,8 @@ CREATE TABLE IMAP_LAST_UID (
                 {"ARCHIVE_PATH", "VARCHAR(500)"},
                 {"MESSAGE_DATE", "TIMESTAMP"},
                 {"IS_REVOKED", "SMALLINT DEFAULT 0"},
-                {"REVOKE_DATE", "TIMESTAMP"}
+                {"REVOKE_DATE", "TIMESTAMP"},
+                {"TOKEN_ID", "INTEGER"}
             };
 
             foreach (var kv in needed)
@@ -576,27 +581,27 @@ CREATE TABLE IMAP_LAST_UID (
                     using (var cmd = conn.CreateCommand())
                     {
                         cmd.CommandText = @"
-SELECT
-    c.ID,
-    c.FIO,
-    c.DATE_START,
-    c.DATE_END,
-    c.DAYS_LEFT,
-    c.CERT_NUMBER,
-    c.FROM_ADDRESS,
-    c.IS_DELETED,
-    c.IS_REVOKED,
-    c.REVOKE_DATE,
-    c.NOTE,
-    c.BUILDING,
-    c.FOLDER_PATH,
-    c.ARCHIVE_PATH,
-    c.MESSAGE_DATE,
-    (SELECT COUNT(*) FROM CERT_ARCHIVES ca WHERE ca.CERT_ID = c.ID) AS HAS_ARCHIVE
-FROM CERTS c
-WHERE c.MESSAGE_DATE >= @dt
-  AND c.IS_DELETED = 0
-ORDER BY c.MESSAGE_DATE ASC";
+                                        SELECT
+                                            c.ID,
+                                            c.FIO,
+                                            c.DATE_START,
+                                            c.DATE_END,
+                                            c.CERT_NUMBER,
+                                            c.FROM_ADDRESS,
+                                            c.IS_DELETED,
+                                            c.IS_REVOKED,
+                                            c.REVOKE_DATE,
+                                            c.NOTE,
+                                            c.BUILDING,
+                                            c.FOLDER_PATH,
+                                            c.ARCHIVE_PATH,
+                                            c.MESSAGE_DATE,
+                                            c.TOKEN_ID,
+                                            t.SN AS TOKEN_SN,
+                                            (SELECT COUNT(*) FROM CERT_ARCHIVES ca WHERE ca.CERT_ID = c.ID) AS HAS_ARCHIVE
+                                        FROM CERTS c
+                                        LEFT JOIN TOKENS t ON t.ID = c.TOKEN_ID
+                                        ORDER BY c.DATE_END";
 
                         cmd.Parameters.AddWithValue("@dt", fromUtc);
 
@@ -884,7 +889,6 @@ ROWS 1";
                                                 c.FIO,
                                                 c.DATE_START,
                                                 c.DATE_END,
-                                                c.DAYS_LEFT,
                                                 c.CERT_NUMBER,
                                                 c.FROM_ADDRESS,
                                                 c.IS_DELETED,
@@ -895,11 +899,12 @@ ROWS 1";
                                                 c.FOLDER_PATH,
                                                 c.ARCHIVE_PATH,
                                                 c.MESSAGE_DATE,
+                                                c.TOKEN_ID,
+                                                t.SN AS TOKEN_SN,
                                                 (SELECT COUNT(*) FROM CERT_ARCHIVES ca WHERE ca.CERT_ID = c.ID) AS HAS_ARCHIVE
                                             FROM CERTS c
-                                            WHERE UPPER(TRIM(c.FIO)) = @fio
-                                            ORDER BY c.DATE_END DESC
-                                            ROWS 1";
+                                            LEFT JOIN TOKENS t ON t.ID = c.TOKEN_ID
+                                            ORDER BY c.DATE_END";
                         cmd.Parameters.AddWithValue("@fio", fioNorm);
                         using (var rdr = cmd.ExecuteReader())
                         {
@@ -1200,6 +1205,12 @@ RETURNING ID";
             rec.RevokeDate = rdr["REVOKE_DATE"] == DBNull.Value
                 ? (DateTime?)null
                 : (DateTime)rdr["REVOKE_DATE"];
+            rec.TokenId = rdr["TOKEN_ID"] == DBNull.Value
+                ? (int?)null
+                : Convert.ToInt32(rdr["TOKEN_ID"]);
+            rec.TokenSn = rdr["TOKEN_SN"] == DBNull.Value
+                ? null
+                : rdr["TOKEN_SN"].ToString();
 
             // Подзапрос HAS_ARCHIVE
             if (rdr["HAS_ARCHIVE"] != DBNull.Value)
@@ -1272,26 +1283,27 @@ MATCHING (FOLDER_PATH)";
                     string whereClause = where.Count > 0 ? "WHERE " + string.Join(" AND ", where) : "";
 
                     cmd.CommandText = $@"
-SELECT 
-    c.ID,
-    c.FIO,
-    c.DATE_START,
-    c.DATE_END,
-    c.DAYS_LEFT,
-    c.CERT_NUMBER,
-    c.FROM_ADDRESS,
-    c.IS_DELETED,
-    c.IS_REVOKED,
-    c.REVOKE_DATE,
-    c.NOTE,
-    c.BUILDING,
-    c.FOLDER_PATH,
-    c.ARCHIVE_PATH,
-    c.MESSAGE_DATE,
-    (SELECT COUNT(*) FROM CERT_ARCHIVES ca WHERE ca.CERT_ID = c.ID) AS HAS_ARCHIVE
-FROM CERTS c
-{whereClause}
-ORDER BY c.DATE_END ASC";
+                                        SELECT
+                                            c.ID,
+                                            c.FIO,
+                                            c.DATE_START,
+                                            c.DATE_END,
+                                            c.CERT_NUMBER,
+                                            c.FROM_ADDRESS,
+                                            c.IS_DELETED,
+                                            c.IS_REVOKED,
+                                            c.REVOKE_DATE,
+                                            c.NOTE,
+                                            c.BUILDING,
+                                            c.FOLDER_PATH,
+                                            c.ARCHIVE_PATH,
+                                            c.MESSAGE_DATE,
+                                            c.TOKEN_ID,
+                                            t.SN AS TOKEN_SN,
+                                            (SELECT COUNT(*) FROM CERT_ARCHIVES ca WHERE ca.CERT_ID = c.ID) AS HAS_ARCHIVE
+                                        FROM CERTS c
+                                        LEFT JOIN TOKENS t ON t.ID = c.TOKEN_ID
+                                        ORDER BY c.DATE_END";
 
                     using (var rdr = cmd.ExecuteReader())
                     {
@@ -1462,6 +1474,172 @@ MATCHING (FOLDER_PATH, MAIL_UID, KIND)";
         }
 
         #endregion
+
+        public List<TokenRecord> LoadTokens()
+        {
+            var list = new List<TokenRecord>();
+
+            using (var conn = new FbConnection(_connectionString))
+            {
+                conn.Open();
+
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = @"
+                                        SELECT
+                                            t.ID,
+                                            t.SN,
+                                            c.ID AS OWNER_CERT_ID,
+                                            c.FIO
+                                        FROM TOKENS t
+                                        LEFT JOIN CERTS c ON c.TOKEN_ID = t.ID
+                                        ORDER BY t.SN";
+
+                    using (var rdr = cmd.ExecuteReader())
+                    {
+                        while (rdr.Read())
+                        {
+                            list.Add(new TokenRecord
+                            {
+                                Id = rdr.GetInt32(0),
+                                Sn = rdr.GetString(1),
+                                OwnerCertId = rdr.IsDBNull(2) ? (int?)null : rdr.GetInt32(2),
+                                OwnerFio = rdr.IsDBNull(3) ? null : rdr.GetString(3)
+                            });
+                        }
+                    }
+                }
+            }
+
+            return list;
+        }
+
+        public List<TokenRecord> LoadFreeTokens()
+        {
+            var list = new List<TokenRecord>();
+
+            using (var conn = new FbConnection(_connectionString))
+            {
+                conn.Open();
+
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = @"
+                                        SELECT t.ID, t.SN
+                                        FROM TOKENS t
+                                        WHERE NOT EXISTS (
+                                            SELECT 1 FROM CERTS c WHERE c.TOKEN_ID = t.ID
+                                        )
+                                        ORDER BY t.SN";
+
+                    using (var rdr = cmd.ExecuteReader())
+                    {
+                        while (rdr.Read())
+                        {
+                            list.Add(new TokenRecord
+                            {
+                                Id = rdr.GetInt32(0),
+                                Sn = rdr.GetString(1),
+                                OwnerCertId = null
+                            });
+                        }
+                    }
+                }
+            }
+
+            return list;
+        }
+        public void AssignToken(int tokenId, int certId)
+        {
+            using (var conn = new FbConnection(_connectionString))
+            {
+                conn.Open();
+                using (var tr = conn.BeginTransaction())
+                {
+                    // 1. Убираем токен у других сертификатов
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        cmd.Transaction = tr;
+                        cmd.CommandText = @"
+UPDATE CERTS
+SET TOKEN_ID = NULL
+WHERE TOKEN_ID = @tokenId";
+                        cmd.Parameters.AddWithValue("@tokenId", tokenId);
+                        cmd.ExecuteNonQuery();
+                    }
+
+                    // 2. Назначаем токен текущему сертификату
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        cmd.Transaction = tr;
+                        cmd.CommandText = @"
+UPDATE CERTS
+SET TOKEN_ID = @tokenId
+WHERE ID = @certId";
+                        cmd.Parameters.AddWithValue("@tokenId", tokenId);
+                        cmd.Parameters.AddWithValue("@certId", certId);
+                        cmd.ExecuteNonQuery();
+                    }
+
+                    tr.Commit();
+                }
+            }
+        }
+
+        public void AddToken(string sn)
+        {
+            using (var conn = new FbConnection(_connectionString))
+            {
+                conn.Open();
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = @"
+INSERT INTO TOKENS (SN)
+VALUES (@sn)";
+                    cmd.Parameters.AddWithValue("@sn", sn);
+                    cmd.ExecuteNonQuery();
+                }
+            }
+
+            Log($"AddToken: SN={sn}");
+        }
+
+        public void DeleteToken(int id)
+        {
+            using (var conn = new FbConnection(_connectionString))
+            {
+                conn.Open();
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = @"DELETE FROM TOKENS WHERE ID = @id";
+                    cmd.Parameters.AddWithValue("@id", id);
+                    cmd.ExecuteNonQuery();
+                }
+            }
+
+            Log($"DeleteToken: ID={id}");
+        }
+
+        public void UnassignToken(int tokenId)
+        {
+            using (var conn = new FbConnection(_connectionString))
+            {
+                conn.Open();
+
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = @"
+                UPDATE CERTS
+                SET TOKEN_ID = NULL
+                WHERE TOKEN_ID = @ID";
+
+                    cmd.Parameters.AddWithValue("@ID", tokenId);
+                    cmd.ExecuteNonQuery();
+                }
+            }
+        }
+
+
 
         public void ResetRevocations()
         {

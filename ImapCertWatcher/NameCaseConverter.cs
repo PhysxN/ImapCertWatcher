@@ -2,7 +2,7 @@
 using System.Globalization;
 using System.Windows.Data;
 
-namespace ImapCertWatcher
+namespace ImapCertWatcher.Utils
 {
     public class NameCaseConverter : IValueConverter
     {

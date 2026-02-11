@@ -281,12 +281,83 @@ namespace ImapCertWatcher.Server
                             return "ERROR RESET\n";
                         }
                     }
+                case "GET_TOKENS":
+                    {
+                        var tokens = _db.LoadTokens();
+                        return "TOKENS " + JsonConvert.SerializeObject(tokens);
+                    }
+                case "GET_FREE_TOKENS":
+                    {
+                        var tokens = _db.LoadFreeTokens();
+                        return "TOKENS " + JsonConvert.SerializeObject(tokens);
+                    }
+                case "SET_TOKEN":
+                    {
+                        var parts = cmd.Split('|');
+                        int certId = int.Parse(parts[1]);
+                        int tokenId = int.Parse(parts[2]);
+
+                        _db.AssignToken(tokenId, certId);
+
+                        return "OK";
+                    }
+                case "ADD_TOKEN":
+                    {
+                        try
+                        {
+                            var parts = cmd.Split('|');
+
+                            if (parts.Length < 2)
+                                return "ERROR|INVALID_SN";
+
+                            var sn = parts[1]?.Trim().ToUpper();
+
+                            if (string.IsNullOrWhiteSpace(sn))
+                                return "ERROR|EMPTY_SN";
+
+                            _db.AddToken(sn);
+
+                            return "OK";
+                        }
+                        catch (FirebirdSql.Data.FirebirdClient.FbException ex)
+                        {
+                            // 335544665 = unique constraint violation
+                            if (ex.ErrorCode == 335544665)
+                                return "ERROR|TOKEN_ALREADY_EXISTS";
+
+                            _log("ADD_TOKEN FB ERROR: " + ex.Message);
+                            return "ERROR|DB_ERROR";
+                        }
+                        catch (Exception ex)
+                        {
+                            _log("ADD_TOKEN ERROR: " + ex.Message);
+                            return "ERROR|SERVER_ERROR";
+                        }
+                    }
+
+                case "DELETE_TOKEN":
+                    {
+                        int id = int.Parse(cmd.Split('|')[1]);
+                        _db.DeleteToken(id);
+                        return "OK";
+                    }
+                case "UNASSIGN_TOKEN":
+                    {
+                        var parts = cmd.Split('|');
+                        int tokenId = int.Parse(parts[1]);
+
+                        _db.UnassignToken(tokenId);
+
+                        return "OK";
+                    }
+
 
 
 
                 default:
                     _log("UNKNOWN CMD: " + originalCmd);
                     return "UNKNOWN COMMAND\n";
+
             }
         }
                 

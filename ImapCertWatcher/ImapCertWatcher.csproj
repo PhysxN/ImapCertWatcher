@@ -125,6 +125,7 @@
       <SubType>Designer</SubType>
     </ApplicationDefinition>
     <Compile Include="AppSettings_old.cs" />
+    <Compile Include="BoolToFreeBusyConverter.cs" />
     <Compile Include="CerCertificateParser.cs" />
     <Compile Include="CertEntry.cs" />
     <Compile Include="CertEntryFactory.cs" />
@@ -133,7 +134,9 @@
     <Compile Include="ConfirmDialog.xaml.cs">
       <DependentUpon>ConfirmDialog.xaml</DependentUpon>
     </Compile>
+    <Compile Include="Converter.cs" />
     <Compile Include="DbHelper.cs" />
+    <Compile Include="Utils\EqualIntConverter.cs" />
     <Compile Include="Examples\AsyncOperationsExamples.cs" />
     <Compile Include="ImapNewCertificatesWatcher.cs" />
     <Compile Include="ImapRevocationsWatcher.cs" />
@@ -156,6 +159,8 @@
     </Compile>
     <Compile Include="TcpCommandClient.cs" />
     <Compile Include="TcpCommandServer.cs" />
+    <Compile Include="TokenRecord.cs" />
+    <Compile Include="Utils\TokensForCertConverter.cs" />
     <Compile Include="Utils\AsyncHelper.cs" />
     <Compile Include="NameCaseConverter.cs" />
     <Compile Include="Utils\SafeAsyncTimer.cs" />

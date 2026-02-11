@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 
 namespace ImapCertWatcher.Models
@@ -39,14 +40,44 @@ namespace ImapCertWatcher.Models
             }
         }
 
+        private ObservableCollection<TokenRecord> _availableTokens;
+
+        public ObservableCollection<TokenRecord> AvailableTokens
+        {
+            get => _availableTokens;
+            set
+            {
+                if (_availableTokens == value)
+                    return;
+
+                _availableTokens = value;
+                OnPropertyChanged(nameof(AvailableTokens));
+            }
+        }
+
         public string CertNumber { get; set; }
         public string FromAddress { get; set; }
         public bool IsDeleted { get; set; }
         public bool HasArchiveInDb { get; set; }
         public bool HasArchive { get; set; }
         public bool IsRevoked { get; set; }
+        public bool IsUpdatingFromServer { get; set; }
         public DateTime? RevokeDate { get; set; }
+        private int? _tokenId;
+        public int? TokenId
+        {
+            get => _tokenId;
+            set
+            {
+                // ⛔ ГЛАВНЫЙ СТОП-ПЕТЛЯ
+                if (_tokenId == value)
+                    return;
 
+                _tokenId = value;
+                OnPropertyChanged(nameof(TokenId));
+            }
+        }
+        public string TokenSn { get; set; }
         public string Note
         {
             get => _note;
@@ -100,5 +131,7 @@ namespace ImapCertWatcher.Models
         {
             OnPropertyChanged(nameof(DaysLeft));
         }
+
+
     }
 }
