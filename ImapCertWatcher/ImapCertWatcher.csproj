@@ -135,6 +135,7 @@
     </Compile>
     <Compile Include="Converter.cs" />
     <Compile Include="DbHelper.cs" />
+    <Compile Include="Utils\CryptoHelper.cs" />
     <Compile Include="Utils\EqualIntConverter.cs" />
     <Compile Include="Examples\AsyncOperationsExamples.cs" />
     <Compile Include="ImapNewCertificatesWatcher.cs" />
@@ -161,7 +162,7 @@
     <Compile Include="TokenRecord.cs" />
     <Compile Include="Utils\TokensForCertConverter.cs" />
     <Compile Include="Utils\AsyncHelper.cs" />
-    <Compile Include="NameCaseConverter.cs" />
+    <Compile Include="Utils\NameCaseConverter.cs" />
     <Compile Include="Utils\SafeAsyncTimer.cs" />
     <Compile Include="ZipCerExtractor.cs" />
     <Page Include="ConfirmDialog.xaml">

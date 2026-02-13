@@ -36,8 +36,7 @@ namespace ImapCertWatcher
 {
     public partial class MainWindow : Window
     {
-        private ClientSettings _clientSettings;        
-        private NotificationManager _notificationManager;
+        private ClientSettings _clientSettings;  
         private HashSet<int> _knownCertIds = new HashSet<int>();
         private ServerApiClient _api;
         private ObservableCollection<CertRecord> _items = new ObservableCollection<CertRecord>();
@@ -77,7 +76,7 @@ namespace ImapCertWatcher
         }
         private int _reconnectDelaySeconds = 2;
         private const int MAX_RECONNECT_DELAY = 30;
-        private ServerConnectionState _serverState = ServerConnectionState.Offline;
+        private ServerConnectionState _serverState = ServerConnectionState.Connecting;
         private string _lastTimerValue = "";
         
 
@@ -102,8 +101,9 @@ namespace ImapCertWatcher
             try
             {
                 InitializeComponent();
+                SetServerState(ServerConnectionState.Connecting);
 
-                                // Инициализация мини-лога
+                // Инициализация мини-лога
                 _miniLogMessages = new ObservableCollection<string>();
                 AddToMiniLog("Приложение запущено");
 
@@ -169,50 +169,52 @@ namespace ImapCertWatcher
             return t >= start && t <= end;
         }
 
-        
+
 
 
         private void SetServerState(ServerConnectionState state)
         {
             if (_serverState == state && state != ServerConnectionState.Connecting)
-    return;
+                return;
+
+            if (!Dispatcher.CheckAccess())
+            {
+                Dispatcher.Invoke(() => SetServerState(state));
+                return;
+            }
+
             _serverState = state;
 
-            Dispatcher.Invoke(() =>
+            if (state != ServerConnectionState.Busy)
+                pbServerProgress.Visibility = Visibility.Collapsed;
+
+            if (state == ServerConnectionState.Connecting)
+                StartConnectingAnimation();
+            else
+                StopConnectingAnimation();
+
+            switch (state)
             {
-                if (state != ServerConnectionState.Busy)
-                {
-                    pbServerProgress.Visibility = Visibility.Collapsed;
-                }
-                if (state == ServerConnectionState.Connecting)
-                    StartConnectingAnimation();
-                else
-                    StopConnectingAnimation();
+                case ServerConnectionState.Connecting:
+                    txtServerStatus.Text = "🟡 Подключение к серверу...";
+                    txtServerStatus.Foreground = Brushes.Gold;
+                    break;
 
-                switch (state)
-                {
+                case ServerConnectionState.Online:
+                    txtServerStatus.Text = "🟢 Сервер готов";
+                    txtServerStatus.Foreground = Brushes.LimeGreen;
+                    break;
 
-                    case ServerConnectionState.Connecting:
-                        txtServerStatus.Text = "🟡 Подключение к серверу...";
-                        txtServerStatus.Foreground = Brushes.Gold;
-                        break;
+                case ServerConnectionState.Busy:
+                    txtServerStatus.Text = "🟠 Сервер работает";
+                    txtServerStatus.Foreground = Brushes.Orange;
+                    break;
 
-                    case ServerConnectionState.Online:
-                        txtServerStatus.Text = "🟢 Сервер готов";
-                        txtServerStatus.Foreground = Brushes.LimeGreen;
-                        break;
-
-                    case ServerConnectionState.Busy:
-                        txtServerStatus.Text = "🟠 Сервер работает";
-                        txtServerStatus.Foreground = Brushes.Orange;
-                        break;
-
-                    case ServerConnectionState.Offline:
-                        txtServerStatus.Text = "🔴 Сервер OFFLINE";
-                        txtServerStatus.Foreground = Brushes.Red;
-                        break;
-                }
-            });
+                case ServerConnectionState.Offline:
+                    txtServerStatus.Text = "🔴 Сервер OFFLINE";
+                    txtServerStatus.Foreground = Brushes.Red;
+                    break;
+            }
         }
 
         class ServerApiClient
@@ -308,53 +310,51 @@ namespace ImapCertWatcher
             try
             {
                 if (_serverState == ServerConnectionState.Offline)
-                {
                     SetServerState(ServerConnectionState.Connecting);
-                }
 
-                var status = await TcpCommandClient.SendAsync(
+                var statusTask = TcpCommandClient.SendAsync(
                     _clientSettings.ServerIp,
                     _clientSettings.ServerPort,
                     "STATUS");
 
-                var progress = await TcpCommandClient.SendAsync(
+                var progressTask = TcpCommandClient.SendAsync(
                     _clientSettings.ServerIp,
                     _clientSettings.ServerPort,
                     "GET_PROGRESS");
 
-                var timer = await TcpCommandClient.SendAsync(
+                var timerTask = TcpCommandClient.SendAsync(
                     _clientSettings.ServerIp,
                     _clientSettings.ServerPort,
                     "GET_TIMER");
 
-                var log = await TcpCommandClient.SendAsync(
+                var logTask = TcpCommandClient.SendAsync(
                     _clientSettings.ServerIp,
                     _clientSettings.ServerPort,
                     "GET_LOG");
 
-                // ✅ только если реально получили ответ
-                if (!string.IsNullOrWhiteSpace(status))
+                await Task.WhenAll(statusTask, progressTask, timerTask, logTask);
+
+                var status = statusTask.Result;
+                var progress = progressTask.Result;
+                var timer = timerTask.Result;
+                var log = logTask.Result;
+
+                if (string.IsNullOrWhiteSpace(status))
                 {
-                    UpdateStatusUI(status);
-                    UpdateProgressUI(progress);
-                    UpdateTimerUI(timer);
-                    UpdateServerLog(log);
+                    SetServerState(ServerConnectionState.Offline);
+                    return;
                 }
 
-                // reset reconnect backoff on success
+                UpdateStatusUI(status);
+                UpdateProgressUI(progress);
+                UpdateTimerUI(timer);
+                UpdateServerLog(log);
+
                 _reconnectDelaySeconds = 2;
             }
-            catch (Exception ex)
+            catch
             {
-                Log("Server monitor error: " + ex.Message);
-
                 SetServerState(ServerConnectionState.Offline);
-
-                Dispatcher.Invoke(() =>
-                {
-                    pbServerProgress.Visibility = Visibility.Collapsed;
-                });
-
                 StartReconnectBackoff();
             }
         }
@@ -372,18 +372,27 @@ namespace ImapCertWatcher
         private void UpdateStatusUI(string status)
         {
             if (string.IsNullOrWhiteSpace(status))
+            {
+                AddToMiniLog("[STATUS RAW] <EMPTY>");
+                SetServerState(ServerConnectionState.Offline);
                 return;
+            }
+
+            AddToMiniLog("[STATUS RAW] " + status);
+
+            if (!status.StartsWith("STATUS"))
+            {
+                SetServerState(ServerConnectionState.Offline);
+                return;
+            }
 
             status = status.ToUpperInvariant();
-
-            // DEBUG (очень полезно)
-            AddToMiniLog("[STATUS RAW] " + status);
 
             if (status.Contains("BUSY"))
             {
                 SetServerState(ServerConnectionState.Busy);
             }
-            else if (status.Contains("IDLE") || status.Contains("READY") || status.Contains("OK"))
+            else if (status.Contains("IDLE") || status.Contains("READY"))
             {
                 SetServerState(ServerConnectionState.Online);
             }
@@ -535,7 +544,9 @@ namespace ImapCertWatcher
                 DataLoaded?.Invoke();                
                 StartServerMonitor();
                 // Инициализируем менеджер уведомлений после получения настроек
-                statusText.Text = "Готово";
+                statusText.Text = _serverState == ServerConnectionState.Online
+                ? "Готово"
+                : "Ожидание сервера...";
                 AddToMiniLog($"Инициализация завершена. Загружено записей: {_allItems.Count}");
 
                 System.Diagnostics.Debug.WriteLine("MainWindow_Loaded завершен");
@@ -693,8 +704,14 @@ namespace ImapCertWatcher
                 {
                     var theme = File.ReadAllText(themeFile).Trim();
                     _isDarkTheme = theme.Equals("dark", StringComparison.OrdinalIgnoreCase);
+                    chkDarkTheme.Checked -= ChkDarkTheme_Changed;
+                    chkDarkTheme.Unchecked -= ChkDarkTheme_Changed;
+
                     chkDarkTheme.IsChecked = _isDarkTheme;
                     ApplyTheme(_isDarkTheme);
+
+                    chkDarkTheme.Checked += ChkDarkTheme_Changed;
+                    chkDarkTheme.Unchecked += ChkDarkTheme_Changed;
                 }
             }
             catch (Exception ex)
@@ -1098,7 +1115,7 @@ namespace ImapCertWatcher
                 return;
 
             _isLoadingFromServer = true;
-
+            SetServerState(ServerConnectionState.Connecting);
             try
             {
                 if (_api == null)
@@ -1114,10 +1131,16 @@ namespace ImapCertWatcher
 
                 AddToMiniLog("Запрос GET_CERTS отправлен");
 
-                var list = await _api.GetCertificates();
-                AddToMiniLog("CLIENT received records: " + list.Count);
-                var tokens = await _api.GetTokens();
-                var freeTokens = await _api.GetFreeTokens();
+                // параллельные запросы
+                var certTask = _api.GetCertificates();
+                var tokensTask = _api.GetTokens();
+                var freeTask = _api.GetFreeTokens();
+
+                await Task.WhenAll(certTask, tokensTask, freeTask);
+
+                var list = certTask.Result;
+                var tokens = tokensTask.Result;
+                var freeTokens = freeTask.Result;
 
                 AddToMiniLog("Ответ получен");
 
@@ -1196,9 +1219,6 @@ namespace ImapCertWatcher
             finally
             {
                 _isLoadingFromServer = false;
-
-                if (_serverState != ServerConnectionState.Offline)
-                    SetServerState(ServerConnectionState.Online);
             }
         }
 
@@ -1323,7 +1343,16 @@ namespace ImapCertWatcher
 
                 response = response.Replace("TOKENS", "").Trim();
 
-                var tokens = JsonConvert.DeserializeObject<List<TokenRecord>>(response);
+                List<TokenRecord> tokens;
+
+                try
+                {
+                    tokens = JsonConvert.DeserializeObject<List<TokenRecord>>(response);
+                }
+                catch
+                {
+                    tokens = new List<TokenRecord>();
+                }
 
                 int? selectedId = null;
                 if (dgTokens.SelectedItem is TokenRecord selected)
@@ -1785,8 +1814,6 @@ namespace ImapCertWatcher
 
                     statusText.Text = "Запись помечена на удаление";
                     AddToMiniLog($"Удален: {record.Fio}");
-                    statusText.Text = "Запись помечена на удаление";
-                    AddToMiniLog($"Удален: {record.Fio}");
                 }
                 catch (Exception ex)
                 {
@@ -2233,21 +2260,16 @@ namespace ImapCertWatcher
             foreach (var t in source)
                 _filteredTokens.Add(t);
 
-            if (!_showBusyTokens && _filteredTokens.Count == 0)
+            if (!_showBusyTokens && !_filteredTokens.Any())
             {
-                _filteredTokens.Add(new TokenRecord
-                {
-                    Sn = "Свободных токенов нет"
-                });
-
                 dgTokens.IsEnabled = false;
+                tokensStatusText.Text = "Свободных токенов нет";
             }
             else
             {
                 dgTokens.IsEnabled = true;
+                tokensStatusText.Text = $"Показано токенов: {_filteredTokens.Count}";
             }
-
-            tokensStatusText.Text = $"Показано токенов: {_filteredTokens.Count}";
         }
 
         private async void BtnRestoreSelected_Click(object sender, RoutedEventArgs e)
@@ -2268,9 +2290,7 @@ namespace ImapCertWatcher
 
                     statusText.Text = "Запись восстановлена";
                     AddToMiniLog("Восстановлено: " + record.Fio);
-
-                    statusText.Text = "Запись восстановлена";
-                    AddToMiniLog("Восстановлено: " + record.Fio);
+                   
                 }
                 catch (Exception ex)
                 {

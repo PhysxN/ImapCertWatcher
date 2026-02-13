@@ -4,9 +4,9 @@
 
     <!-- Цвета -->
     <SolidColorBrush x:Key="WindowBackgroundBrush" Color="#FF2D2D30"/>
-    <SolidColorBrush x:Key="ControlBackgroundBrush" Color="#FF1E1E1E"/>
-    <SolidColorBrush x:Key="TextColorBrush" Color="#FFFFFFFF"/>
-    <SolidColorBrush x:Key="BorderColorBrush" Color="#FF555555"/>
+    <SolidColorBrush x:Key="ControlBackgroundBrush" Color="#1E1E1E"/>
+    <SolidColorBrush x:Key="TextColorBrush" Color="#EAEAEA"/>
+    <SolidColorBrush x:Key="BorderColorBrush" Color="#3A3A3A"/>
     <SolidColorBrush x:Key="AccentColorBrush" Color="#FF007ACC"/>
     <SolidColorBrush x:Key="HoverColorBrush" Color="#FF3E3E42"/>
     <SolidColorBrush x:Key="FreeTokenBrush" Color="#284628"/>

@@ -46,8 +46,23 @@ namespace ImapCertWatcher.Server
         {
             while (!_cts.IsCancellationRequested)
             {
-                var client = await _listener.AcceptTcpClientAsync();
-                _ = HandleClient(client);
+                try
+                {
+                    var client = await _listener.AcceptTcpClientAsync();
+                    _ = HandleClient(client);
+                }
+                catch (ObjectDisposedException)
+                {
+                    // listener остановлен — выходим из цикла
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("[SERVER ACCEPT ERROR] " + ex.Message);
+
+                    if (_cts.IsCancellationRequested)
+                        break;
+                }
             }
         }
 
@@ -74,7 +89,7 @@ namespace ImapCertWatcher.Server
                     string response = _commandHandler(request);
 
                     // ОТПРАВЛЯЕМ ВСЁ КАК ОДНУ СТРОКУ
-                    await writer.WriteAsync(response);
+                    await writer.WriteAsync(response + "\n");
 
                     Console.WriteLine("[SERVER] RESPONSE SENT");
                 }

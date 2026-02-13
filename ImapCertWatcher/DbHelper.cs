@@ -581,27 +581,28 @@ CREATE TABLE IMAP_LAST_UID (
                     using (var cmd = conn.CreateCommand())
                     {
                         cmd.CommandText = @"
-                                        SELECT
-                                            c.ID,
-                                            c.FIO,
-                                            c.DATE_START,
-                                            c.DATE_END,
-                                            c.CERT_NUMBER,
-                                            c.FROM_ADDRESS,
-                                            c.IS_DELETED,
-                                            c.IS_REVOKED,
-                                            c.REVOKE_DATE,
-                                            c.NOTE,
-                                            c.BUILDING,
-                                            c.FOLDER_PATH,
-                                            c.ARCHIVE_PATH,
-                                            c.MESSAGE_DATE,
-                                            c.TOKEN_ID,
-                                            t.SN AS TOKEN_SN,
-                                            (SELECT COUNT(*) FROM CERT_ARCHIVES ca WHERE ca.CERT_ID = c.ID) AS HAS_ARCHIVE
-                                        FROM CERTS c
-                                        LEFT JOIN TOKENS t ON t.ID = c.TOKEN_ID
-                                        ORDER BY c.DATE_END";
+                                            SELECT
+                                                c.ID,
+                                                c.FIO,
+                                                c.DATE_START,
+                                                c.DATE_END,
+                                                c.CERT_NUMBER,
+                                                c.FROM_ADDRESS,
+                                                c.IS_DELETED,
+                                                c.IS_REVOKED,
+                                                c.REVOKE_DATE,
+                                                c.NOTE,
+                                                c.BUILDING,
+                                                c.FOLDER_PATH,
+                                                c.ARCHIVE_PATH,
+                                                c.MESSAGE_DATE,
+                                                c.TOKEN_ID,
+                                                t.SN AS TOKEN_SN,
+                                                (SELECT COUNT(*) FROM CERT_ARCHIVES ca WHERE ca.CERT_ID = c.ID) AS HAS_ARCHIVE
+                                            FROM CERTS c
+                                            LEFT JOIN TOKENS t ON t.ID = c.TOKEN_ID
+                                            WHERE c.MESSAGE_DATE >= @dt
+                                            ORDER BY c.DATE_END";
 
                         cmd.Parameters.AddWithValue("@dt", fromUtc);
 

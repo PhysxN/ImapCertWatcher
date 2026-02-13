@@ -266,7 +266,7 @@
                     </DataGrid>
 
                     <!-- Статус бар -->
-                    <StatusBar Grid.Row="5" Margin="0,8,0,4" Background="{DynamicResource ControlBackgroundBrush}">
+                    <StatusBar Grid.Row="5" Margin="0,8,0,4" Style="{StaticResource ModernStatusBarStyle}">
                         <StatusBarItem>
                             <TextBlock x:Name="statusText" Foreground="{DynamicResource TextColorBrush}">Готов</TextBlock>
                         </StatusBarItem>
@@ -341,6 +341,7 @@
                     />
                         <CheckBox x:Name="chkShowBusyTokens"
           Content="Показать занятые"
+          Style="{StaticResource ModernCheckBoxStyle}"
           Margin="15,0,0,0"
           VerticalAlignment="Center"
           Checked="ChkShowBusyTokens_Changed"
@@ -349,35 +350,78 @@
                     </StackPanel>
 
                     <!-- Таблица токенов -->
-                    <DataGrid x:Name="dgTokens"
-                  Grid.Row="1"
-                  Style="{StaticResource ModernDataGridStyle}"
-                    RowStyle="{StaticResource TokenRowStyle}"
-                  AutoGenerateColumns="False"
-                  SelectionMode="Single"
-                  CanUserAddRows="False">
+                    <ListBox x:Name="dgTokens"
+                             Grid.Row="1"
+                             ItemsSource="{Binding FilteredTokens}"         
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             Style="{StaticResource ModernListBoxStyle}"
+                             ItemContainerStyle="{StaticResource ModernListBoxItemStyle}"
+                             Background="{DynamicResource WindowBackgroundBrush}"
+                             BorderBrush="{DynamicResource BorderColorBrush}"
+                             BorderThickness="1">           
 
-                        <DataGrid.Columns>
+                        <ListBox.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <WrapPanel />
+                            </ItemsPanelTemplate>
+                        </ListBox.ItemsPanel>
 
-                            <DataGridTextColumn Header="SN токена"
-                                    Binding="{Binding Sn}"
-                                    Width="2*"/>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Border Margin="5"
+                Padding="8"
+                Width="220"
+                CornerRadius="8">
 
-                            <DataGridTextColumn Header="Владелец"
-                                    Binding="{Binding OwnerFio}"
-                                    Width="3*"/>
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="Background"
+                            Value="{DynamicResource ControlBackgroundBrush}"/>
 
-                        </DataGrid.Columns>
+                                            <Style.Triggers>
 
-                    </DataGrid>
+                                                <!-- Свободный -->
+                                                <DataTrigger Binding="{Binding IsFree}" Value="True">
+                                                    <Setter Property="Background"
+                                    Value="{DynamicResource FreeTokenBrush}"/>
+                                                </DataTrigger>
 
+                                                <!-- Занятый -->
+                                                <DataTrigger Binding="{Binding IsFree}" Value="False">
+                                                    <Setter Property="Background"
+                                    Value="{DynamicResource BusyTokenBrush}"/>
+                                                </DataTrigger>
+
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
+
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding Sn}"
+                           FontWeight="SemiBold"
+                           Foreground="{DynamicResource TextColorBrush}"/>
+
+                                        <TextBlock Text="{Binding OwnerFio}"
+                           FontSize="12"
+                           Opacity="0.85"
+                           Foreground="{DynamicResource TextColorBrush}"/>
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
                     <!-- статус -->
-                    <StatusBar Grid.Row="2">
+                    <StatusBar Grid.Row="2"
+           Margin="0,8,0,4"
+           Style="{StaticResource ModernStatusBarStyle}">
+
                         <StatusBarItem>
                             <TextBlock x:Name="tokensStatusText"
-                           Foreground="{DynamicResource TextColorBrush}"
-                           Text="Токены загружены"/>
+                   Foreground="{DynamicResource TextColorBrush}"
+                   VerticalAlignment="Center"
+                   Text="Токены загружены"/>
                         </StatusBarItem>
+
                     </StatusBar>
 
                 </Grid>
@@ -540,10 +584,24 @@
                              FontFamily="Consolas" FontSize="10"
                              TextWrapping="Wrap"/>
 
-                    <StatusBar Grid.Row="2" Margin="0,8,0,0" Background="{DynamicResource ControlBackgroundBrush}">
+                    <StatusBar Grid.Row="2"
+           Margin="0,8,0,0"
+           Background="{DynamicResource ControlBackgroundBrush}">
+
+                        <StatusBar.ItemContainerStyle>
+                            <Style TargetType="StatusBarItem">
+                                <Setter Property="Focusable" Value="False"/>
+                                <Setter Property="Background" Value="Transparent"/>
+                            </Style>
+                        </StatusBar.ItemContainerStyle>
+
                         <StatusBarItem>
-                            <TextBlock x:Name="logStatusText" Foreground="{DynamicResource TextColorBrush}">Логи загружены</TextBlock>
+                            <TextBlock x:Name="logStatusText"
+                   Foreground="{DynamicResource TextColorBrush}">
+            Логи загружены
+                            </TextBlock>
                         </StatusBarItem>
+
                     </StatusBar>
 
                     <!-- Прогресс-бар на вкладке логов -->

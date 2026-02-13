@@ -38,5 +38,37 @@
 
         public string BimoidAccountsKrasnoflotskaya { get; set; }
         public string BimoidAccountsPionerskaya { get; set; }
+
+        // ✅ ВОТ СЮДА метод
+        public ServerSettings Clone()
+        {
+            return new ServerSettings
+            {
+                MailHost = this.MailHost,
+                MailPort = this.MailPort,
+                MailUseSsl = this.MailUseSsl,
+                MailLogin = this.MailLogin,
+                MailPassword = this.MailPassword,
+
+                ImapNewCertificatesFolder = this.ImapNewCertificatesFolder,
+                ImapRevocationsFolder = this.ImapRevocationsFolder,
+
+                FirebirdDbPath = this.FirebirdDbPath,
+                FbServer = this.FbServer,
+                FbUser = this.FbUser,
+                FbPassword = this.FbPassword,
+                FbDialect = this.FbDialect,
+                FbCharset = this.FbCharset,
+
+                CheckIntervalMinutes = this.CheckIntervalMinutes,
+                NotifyDaysThreshold = this.NotifyDaysThreshold,
+                NotifyOnlyInWorkHours = this.NotifyOnlyInWorkHours,
+                AutoStartServer = this.AutoStartServer,
+                MinimizeToTrayOnClose = this.MinimizeToTrayOnClose,
+
+                BimoidAccountsKrasnoflotskaya = this.BimoidAccountsKrasnoflotskaya,
+                BimoidAccountsPionerskaya = this.BimoidAccountsPionerskaya
+            };
+        }
     }
 }

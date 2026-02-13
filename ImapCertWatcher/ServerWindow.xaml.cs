@@ -110,7 +110,8 @@ namespace ImapCertWatcher
         {
             _trayIcon = new System.Windows.Forms.NotifyIcon();
 
-            _trayIcon.Icon = System.Drawing.SystemIcons.Application;
+            _trayIcon.Icon = System.Drawing.Icon.ExtractAssociatedIcon(
+                        Assembly.GetExecutingAssembly().Location);
             _trayIcon.Text = "ImapCertWatcher Server";
             _trayIcon.Visible = true;
 
@@ -299,12 +300,49 @@ namespace ImapCertWatcher
 
         private void Settings_Click(object sender, RoutedEventArgs e)
         {
+            // Копируем текущие настройки
+            var oldSettings = _server.Settings.Clone();
+
             var wnd = new ServerSettingsWindow(_server.Settings)
             {
                 Owner = this
             };
-            wnd.ShowDialog();
-            AppendLog("Настройки изменены. Перезапустите сервер.");
+
+            if (wnd.ShowDialog() == true)
+            {
+                bool needRestart = NeedRestart(oldSettings, _server.Settings);
+
+                if (needRestart)
+                {
+                    MessageBox.Show(
+                        "Некоторые изменения вступят в силу после перезапуска сервера.",
+                        "Перезапуск требуется",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Information);
+                }
+                else
+                {
+                    AppendLog("Настройки применены без перезапуска.");
+                }
+            }
+        }
+
+        private bool NeedRestart(ServerSettings oldS, ServerSettings newS)
+        {
+            // 🔴 БД — всегда требует перезапуска
+            if (oldS.FirebirdDbPath != newS.FirebirdDbPath) return true;
+            if (oldS.FbServer != newS.FbServer) return true;
+            if (oldS.FbUser != newS.FbUser) return true;
+            if (oldS.FbPassword != newS.FbPassword) return true;
+
+            // 🟡 Почта — лучше перезапуск
+            if (oldS.MailHost != newS.MailHost) return true;
+            if (oldS.MailPort != newS.MailPort) return true;
+            if (oldS.MailUseSsl != newS.MailUseSsl) return true;
+            if (oldS.MailLogin != newS.MailLogin) return true;
+            if (oldS.MailPassword != newS.MailPassword) return true;
+
+            return false;
         }
 
         private void Restart_Click(object sender, RoutedEventArgs e)

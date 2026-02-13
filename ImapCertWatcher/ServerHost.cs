@@ -390,7 +390,7 @@ namespace ImapCertWatcher.Server
                     _currentStage = "Connecting";
                 }
 
-                var startedAt = DateTime.Now;
+                var startedAt = DateTime.UtcNow;
                 lock (_stateLock)
                 {
                     _progressPercent = 30;

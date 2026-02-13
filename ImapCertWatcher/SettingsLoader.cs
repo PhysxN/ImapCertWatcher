@@ -22,7 +22,8 @@ namespace ImapCertWatcher.Utils
             s.MailPort = GetInt(all, "MailPort", 993);
             s.MailUseSsl = GetBool(all, "MailUseSsl", true);
             s.MailLogin = Get(all, "MailLogin");
-            s.MailPassword = Get(all, "MailPassword");
+            var encPass = Get(all, "MailPassword");
+            s.MailPassword = CryptoHelper.Unprotect(encPass);
 
             // ===== IMAP =====
             s.ImapNewCertificatesFolder = Get(all, "ImapNewCertificatesFolder", "INBOX");

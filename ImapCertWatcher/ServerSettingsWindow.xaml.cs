@@ -70,6 +70,47 @@ namespace ImapCertWatcher
         // Auto IMAP folder loading
         // ============================
 
+        private string MakeFriendlyImapError(Exception ex)
+        {
+            var msg = ex.Message?.ToLower() ?? "";
+
+            if (msg.Contains("invalid credentials") ||
+                msg.Contains("authentication") ||
+                msg.Contains("login"))
+            {
+                return "Неверный логин или пароль.\n\n" +
+                       "Проверьте учетные данные почты.";
+            }
+
+            if (msg.Contains("imap is disabled"))
+            {
+                return "IMAP отключен в настройках почты.\n\n" +
+                       "Включите IMAP в веб-интерфейсе почты.";
+            }
+
+            if (msg.Contains("ssl") || msg.Contains("tls"))
+            {
+                return "Ошибка SSL соединения.\n\n" +
+                       "Проверьте порт и настройку SSL.";
+            }
+
+            if (msg.Contains("timeout"))
+            {
+                return "Сервер почты не отвечает.\n\n" +
+                       "Проверьте интернет-соединение.";
+            }
+
+            if (msg.Contains("unable to connect") ||
+                msg.Contains("connection refused"))
+            {
+                return "Не удалось подключиться к серверу.\n\n" +
+                       "Проверьте адрес IMAP сервера и порт.";
+            }
+
+            // fallback
+            return "Ошибка подключения к почте:\n\n" + ex.Message;
+        }
+
         private async Task AutoLoadFoldersAsync()
         {
             if (_cachedImapFolders != null)
@@ -89,10 +130,10 @@ namespace ImapCertWatcher
             catch (Exception ex)
             {
                 MessageBox.Show(
-                    "Ошибка загрузки папок IMAP:\n\n" + ex.Message,
-                    "IMAP",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Warning);
+                            MakeFriendlyImapError(ex),
+                            "Ошибка IMAP",
+                            MessageBoxButton.OK,
+                            MessageBoxImage.Warning);
             }
             finally
             {
@@ -184,7 +225,7 @@ namespace ImapCertWatcher
                 MessageBoxButton.OK,
                 MessageBoxImage.Information);
 
-            Close();
+            DialogResult = true;
         }
 
         // ============================
@@ -225,10 +266,10 @@ namespace ImapCertWatcher
             catch (Exception ex)
             {
                 MessageBox.Show(
-                    "Ошибка подключения к почте:\n\n" + ex.Message,
-                    "IMAP ошибка",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Error);
+                        MakeFriendlyImapError(ex),
+                        "Ошибка IMAP",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Error);
             }
             finally
             {
@@ -360,7 +401,7 @@ namespace ImapCertWatcher
                 $"MailPort={s.MailPort}",
                 $"MailUseSsl={s.MailUseSsl}",
                 $"MailLogin={s.MailLogin}",
-                $"MailPassword={s.MailPassword}",
+                $"MailPassword={CryptoHelper.Protect(s.MailPassword)}",
                 $"ImapNewCertificatesFolder={s.ImapNewCertificatesFolder}",
                 $"ImapRevocationsFolder={s.ImapRevocationsFolder}",
 
@@ -376,6 +417,7 @@ namespace ImapCertWatcher
                 $"CheckIntervalMinutes={s.CheckIntervalMinutes}",
                 $"NotifyDaysThreshold={s.NotifyDaysThreshold}",
                 $"NotifyOnlyInWorkHours={s.NotifyOnlyInWorkHours}",
+                $"MinimizeToTrayOnClose={s.MinimizeToTrayOnClose}",
 
                 // ===== BIMOID =====
                 $"BimoidAccountsKrasnoflotskaya={s.BimoidAccountsKrasnoflotskaya?.Replace(Environment.NewLine, "\\n")}",
