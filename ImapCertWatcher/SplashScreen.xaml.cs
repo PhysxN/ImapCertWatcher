@@ -16,54 +16,11 @@ namespace ImapCertWatcher
 
         public SplashScreen(string gifPath = null)
         {
-            InitializeComponent();
-
-            // применяем тему до инициализации анимации
-            ApplyThemeFromFile();
+            InitializeComponent();            
 
             _gifPath = gifPath ?? FindDefaultGif();
             InitializeAnimation();
-        }
-
-        private void ApplyThemeFromFile()
-        {
-            try
-            {
-                var themeFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "theme.txt");
-                bool isDark = false;
-
-                if (File.Exists(themeFile))
-                {
-                    var theme = File.ReadAllText(themeFile).Trim();
-                    isDark = theme.Equals("dark", StringComparison.OrdinalIgnoreCase);
-                }
-
-                if (isDark)
-                {
-                    // тёмная тема – цвета такие же, как в MainWindow
-                    rootBorder.Background = new SolidColorBrush(Color.FromRgb(0x2D, 0x2D, 0x30));   // DarkWindowBackground
-                    rootBorder.BorderBrush = new SolidColorBrush(Color.FromRgb(0x00, 0x7A, 0xCC));  // DarkAccentColor
-
-                    statusText.Foreground = Brushes.White;
-                    progressBar.Foreground = new SolidColorBrush(Color.FromRgb(0x00, 0x7A, 0xCC));
-                    spinner.Stroke = new SolidColorBrush(Color.FromRgb(0x00, 0x7A, 0xCC));
-                }
-                else
-                {
-                    // светлая тема – исходные цвета
-                    rootBorder.Background = new SolidColorBrush(Color.FromRgb(0xF0, 0xF0, 0xF0));
-                    rootBorder.BorderBrush = new SolidColorBrush(Color.FromRgb(0x00, 0x78, 0xD7));
-
-                    statusText.Foreground = Brushes.Black;
-                    progressBar.Foreground = new SolidColorBrush(Color.FromRgb(0x00, 0x78, 0xD7));
-                    spinner.Stroke = new SolidColorBrush(Color.FromRgb(0x00, 0x78, 0xD7));
-                }
-            }
-            catch
-            {
-                // На всякий случай ничего не делаем при ошибке – останутся дефолтные цвета
-            }
-        }
+        }        
 
         private string FindDefaultGif()
         {

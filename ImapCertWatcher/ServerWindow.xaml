@@ -102,7 +102,7 @@
             MinHeight="32"
             Background="#FFF5C2C2"
             Click="Restart_Click"
-            ToolTip="Перезапуск сервера с перечитыванием settings.txt"/>
+            ToolTip="Перезапуск сервера с перечитыванием server.settings.txt"/>
             
             <Button Grid.Column="3"
             Content="Закрыть"

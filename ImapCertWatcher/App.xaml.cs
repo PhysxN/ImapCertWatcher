@@ -15,6 +15,8 @@ namespace ImapCertWatcher
         public static bool IsServerMode { get; private set; }
         private SplashScreen _splashScreen;
 
+
+
         private async void Application_Startup(object sender, StartupEventArgs e)
         {
             // ===== SERVER MODE =====

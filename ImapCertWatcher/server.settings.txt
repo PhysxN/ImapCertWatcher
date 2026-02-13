@@ -1,0 +1,26 @@
+# ===== SERVER =====
+
+AutoStartServer=true
+
+MailHost=imap.yandex.ru
+MailPort=993
+MailUseSsl=True
+MailLogin=...
+MailPassword=...
+
+ImapNewCertificatesFolder=...
+ImapRevocationsFolder=...
+
+FirebirdDbPath=C:\DB_PHYSXN\certs.fdb
+FbServer=127.0.0.1
+FbUser=SYSDBA
+FbPassword=
+FbDialect=3
+FbCharset=UTF8
+
+CheckIntervalMinutes=2
+NotifyDaysThreshold=12
+NotifyOnlyInWorkHours=True
+
+BimoidAccountsKrasnoflotskaya=leonid
+BimoidAccountsPionerskaya=

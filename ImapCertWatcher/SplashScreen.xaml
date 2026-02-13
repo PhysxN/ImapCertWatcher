@@ -14,8 +14,8 @@
     <!-- ДАЛЬШЕЕ СОДЕРЖИМОЕ ОКНА -->
 
     <Border x:Name="rootBorder"
-            Background="#FFF0F0F0" 
-            BorderBrush="#FF0078D7" 
+        Background="{DynamicResource WindowBackgroundBrush}"
+        BorderBrush="{DynamicResource AccentColorBrush}"
             BorderThickness="2"
             CornerRadius="15">
         <Grid>
@@ -31,7 +31,7 @@
                 <Canvas Width="100" Height="100">
                     <Ellipse x:Name="spinner" 
                              Width="100" Height="100" 
-                             Stroke="#FF0078D7" 
+                             Stroke="{DynamicResource AccentColorBrush}" 
                              StrokeThickness="4"
                              StrokeDashArray="1,10"
                              RenderTransformOrigin="0.5,0.5">
@@ -60,7 +60,7 @@
                        Text="Инициализация..."
                        HorizontalAlignment="Center"
                        Margin="10"
-                       Foreground="#FF000000"
+                       Foreground="{DynamicResource TextColorBrush}"
                        FontSize="14"
                        FontWeight="SemiBold"/>
 
@@ -70,7 +70,8 @@
                          Height="8"
                          Margin="20,10,20,20"
                          IsIndeterminate="True"
-                         Foreground="#FF0078D7"/>
+                         Foreground="{DynamicResource AccentColorBrush}"
+                        Background="{DynamicResource ControlBackgroundBrush}"/>
         </Grid>
     </Border>
 </Window>

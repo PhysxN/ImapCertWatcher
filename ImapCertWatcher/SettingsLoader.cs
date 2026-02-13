@@ -64,8 +64,7 @@ namespace ImapCertWatcher.Utils
             c.ServerIp = Get(all, "ServerIp", "127.0.0.1");
             c.ServerPort = GetInt(all, "ServerPort", 5050);
 
-            c.AutoStart = GetBool(all, "AutoStart", false);
-            c.MinimizeToTrayOnClose = GetBool(all, "MinimizeToTrayOnClose", true);
+            
             c.DarkTheme = GetBool(all, "DarkTheme", false);
 
             return c;
@@ -79,7 +78,7 @@ namespace ImapCertWatcher.Utils
         private static Dictionary<string, string> LoadRaw(string path)
         {
             if (!File.Exists(path))
-                throw new FileNotFoundException("settings.txt not found", path);
+                throw new FileNotFoundException($"Settings file not found: {path}", path);
 
             var dict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 

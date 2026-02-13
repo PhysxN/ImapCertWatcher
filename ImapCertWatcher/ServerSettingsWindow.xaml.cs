@@ -172,11 +172,11 @@ namespace ImapCertWatcher
             _settings.ImapNewCertificatesFolder = cmbNewCertsFolder.Text;
             _settings.ImapRevocationsFolder = cmbRevocationsFolder.Text;
 
-            SaveSettings("settings.txt", _settings);
+            var settingsPath = System.IO.Path.Combine(
+                AppDomain.CurrentDomain.BaseDirectory,
+                "server.settings.txt");
 
-            MessageBox.Show(
-                $"NEW: {_settings.ImapNewCertificatesFolder}\nREVOKE: {_settings.ImapRevocationsFolder}",
-                "Сохранено");
+            SaveSettings(settingsPath, _settings);
 
             MessageBox.Show(
                 "Настройки сохранены.\nПерезапустите сервер.",

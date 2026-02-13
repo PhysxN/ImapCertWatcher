@@ -1,0 +1,15 @@
+﻿<ResourceDictionary
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- Цвета -->
+    <SolidColorBrush x:Key="WindowBackgroundBrush" Color="#FF2D2D30"/>
+    <SolidColorBrush x:Key="ControlBackgroundBrush" Color="#FF1E1E1E"/>
+    <SolidColorBrush x:Key="TextColorBrush" Color="#FFFFFFFF"/>
+    <SolidColorBrush x:Key="BorderColorBrush" Color="#FF555555"/>
+    <SolidColorBrush x:Key="AccentColorBrush" Color="#FF007ACC"/>
+    <SolidColorBrush x:Key="HoverColorBrush" Color="#FF3E3E42"/>
+    <SolidColorBrush x:Key="FreeTokenBrush" Color="#284628"/>
+    <SolidColorBrush x:Key="BusyTokenBrush" Color="#3C3C3C"/>
+
+</ResourceDictionary>

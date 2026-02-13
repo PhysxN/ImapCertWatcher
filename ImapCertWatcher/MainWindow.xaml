@@ -352,10 +352,10 @@
                     <DataGrid x:Name="dgTokens"
                   Grid.Row="1"
                   Style="{StaticResource ModernDataGridStyle}"
+                    RowStyle="{StaticResource TokenRowStyle}"
                   AutoGenerateColumns="False"
                   SelectionMode="Single"
-                  CanUserAddRows="False"
-                  LoadingRow="DgTokens_LoadingRow">
+                  CanUserAddRows="False">
 
                         <DataGrid.Columns>
 
@@ -404,92 +404,108 @@
                                 <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
 
-                            <!-- Левая колонка - Настройки почты -->
+                            <!-- Левая колонка -->
                             <StackPanel Grid.Column="0">
-                                <GroupBox Header="Подключение к серверу" Style="{StaticResource ModernGroupBoxStyle}" Margin="0,12,0,0">
+
+                                <GroupBox Header="Подключение к серверу"
+                              Style="{StaticResource ModernGroupBoxStyle}"
+                              Margin="0,12,0,0">
+
                                     <StackPanel Margin="6">
 
-                                        <TextBlock Text="IP сервера:" Foreground="{DynamicResource TextColorBrush}"/>
+                                        <TextBlock Text="IP сервера:"
+                                       Foreground="{DynamicResource TextColorBrush}"/>
 
                                         <TextBox Text="{Binding ServerIp}"
-                 Style="{StaticResource ModernTextBoxStyle}"
-                 Height="26"
-                 ToolTip="IP компьютера где запущен сервер"/>
+                                     Style="{StaticResource ModernTextBoxStyle}"
+                                     Height="26"
+                                     ToolTip="IP компьютера где запущен сервер"/>
 
-                                        <TextBlock Text="Порт:" Margin="0,8,0,2" Foreground="{DynamicResource TextColorBrush}"/>
+                                        <TextBlock Text="Порт:"
+                                       Margin="0,8,0,2"
+                                       Foreground="{DynamicResource TextColorBrush}"/>
 
                                         <TextBox Text="{Binding ServerPort}"
-                 Style="{StaticResource ModernTextBoxStyle}"
-                 Height="26"/>
+                                     Style="{StaticResource ModernTextBoxStyle}"
+                                     Height="26"/>
 
-                                        
+                                        <!-- 🔽 НОВАЯ КНОПКА -->
+                                        <Button Content="Сохранить настройки"
+                                    Style="{StaticResource ModernButtonStyle}"
+                                    Margin="0,12,0,0"
+                                    Height="30"
+                                    Click="BtnSaveSettings_Click"/>
 
                                     </StackPanel>
                                 </GroupBox>
 
-
-
-                                
                             </StackPanel>
 
                             <!-- Разделитель -->
-                            <Rectangle Grid.Column="1" Fill="{DynamicResource BorderColorBrush}" Width="1" VerticalAlignment="Stretch" Margin="0,20"/>
+                            <Rectangle Grid.Column="1"
+                           Fill="{DynamicResource BorderColorBrush}"
+                           Width="1"
+                           VerticalAlignment="Stretch"
+                           Margin="0,20"/>
 
-                            <!-- Правая колонка - Настройки БД и приложения -->
+                            <!-- Правая колонка -->
                             <StackPanel Grid.Column="2">
-                                <!-- База данных -->
-                                
 
-                                <!-- Поведение приложения -->
-                                <GroupBox Header="Поведение приложения" Style="{StaticResource ModernGroupBoxStyle}" Margin="0,12,0,0">
+                                <GroupBox Header="Поведение приложения"
+                              Style="{StaticResource ModernGroupBoxStyle}"
+                              Margin="0,12,0,0">
+
                                     <StackPanel Margin="6">
+
                                         <Button Content="⚠ Сбросить аннулирования"
-        Style="{StaticResource ModernButtonStyle}"
-        Margin="0,10,0,0"
-        Click="BtnResetRevokes_Click"
-        ToolTip="Удаляет отметки аннулирования и историю REVOKE"/>
-
-
-
+                                    Style="{StaticResource ModernButtonStyle}"
+                                    Margin="0,10,0,0"
+                                    Click="BtnResetRevokes_Click"
+                                    ToolTip="Удаляет отметки аннулирования и историю REVOKE"/>
 
                                         <CheckBox x:Name="chkDarkTheme"
-                  Content="Темная тема"
-                  Style="{StaticResource ModernCheckBoxStyle}"
-                  Margin="0,8,0,0"
-                  Checked="ChkDarkTheme_Changed"
-                  Unchecked="ChkDarkTheme_Changed"/>                                        
+                                      Content="Темная тема"
+                                      Style="{StaticResource ModernCheckBoxStyle}"
+                                      Margin="0,8,0,0"
+                                      Checked="ChkDarkTheme_Changed"
+                                      Unchecked="ChkDarkTheme_Changed"/>
 
                                     </StackPanel>
-                                    
-                                    
                                 </GroupBox>
 
-
-                                
                             </StackPanel>
+
                         </Grid>
                     </ScrollViewer>
 
-                    <!-- Мини-лог на вкладке настроек -->
-                    <Border Grid.Row="2" Margin="0,12,0,4" BorderBrush="{DynamicResource BorderColorBrush}" BorderThickness="1"
-                            Background="{DynamicResource ControlBackgroundBrush}" CornerRadius="4">
-                        <TextBlock x:Name="txtMiniLogSettings" 
-                                   Margin="4,2"
-                                   FontSize="10" 
-                                   FontFamily="Consolas"
-                                   Foreground="{DynamicResource TextColorBrush}"
-                                   TextWrapping="NoWrap"
-                                   ToolTip="Последние действия"
-                                   Text="Мини-лог готов"/>
+                    <!-- Мини-лог -->
+                    <Border Grid.Row="2"
+                Margin="0,12,0,4"
+                BorderBrush="{DynamicResource BorderColorBrush}"
+                BorderThickness="1"
+                Background="{DynamicResource ControlBackgroundBrush}"
+                CornerRadius="4">
+
+                        <TextBlock x:Name="txtMiniLogSettings"
+                       Margin="4,2"
+                       FontSize="10"
+                       FontFamily="Consolas"
+                       Foreground="{DynamicResource TextColorBrush}"
+                       TextWrapping="NoWrap"
+                       ToolTip="Последние действия"
+                       Text="Мини-лог готов"/>
                     </Border>
 
-                    <!-- Прогресс-бар на вкладке настроек -->
-                    <ProgressBar x:Name="progressMailCheckSettings" Grid.Row="3" 
-                                 Height="6" Margin="0,4,0,2"
-                                 Visibility="Collapsed"
-                                 IsIndeterminate="True"
-                                 Background="{DynamicResource ControlBackgroundBrush}"
-                                 Foreground="{DynamicResource AccentColorBrush}"/>
+                    <!-- Прогресс -->
+                    <ProgressBar x:Name="progressMailCheckSettings"
+                     Grid.Row="3"
+                     Height="6"
+                     Margin="0,4,0,2"
+                     Visibility="Collapsed"
+                     IsIndeterminate="True"
+                     Background="{DynamicResource ControlBackgroundBrush}"
+                     Foreground="{DynamicResource AccentColorBrush}"/>
+
                 </Grid>
             </TabItem>
 

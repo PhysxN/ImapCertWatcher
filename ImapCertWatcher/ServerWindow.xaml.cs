@@ -26,21 +26,24 @@ namespace ImapCertWatcher
             "ImapCertWatcherServer";
         private System.Windows.Forms.NotifyIcon _trayIcon;
         public ServerWindow()
-
         {
             InitializeComponent();
             InitTray();
 
             ServerSettings settings;
-            ApplyServerAutoStart();
+
             try
             {
-                settings = SettingsLoader.LoadServer("settings.txt");
+                var settingsPath = System.IO.Path.Combine(
+                    AppDomain.CurrentDomain.BaseDirectory,
+                    "server.settings.txt");
+
+                settings = SettingsLoader.LoadServer(settingsPath);
             }
             catch (Exception ex)
             {
                 MessageBox.Show(
-                    "Ошибка загрузки settings.txt:\n\n" + ex.Message,
+                    "Ошибка загрузки server.settings.txt:\n\n" + ex.Message,
                     "Ошибка",
                     MessageBoxButton.OK,
                     MessageBoxImage.Error);
@@ -94,6 +97,8 @@ namespace ImapCertWatcher
                 settings,
                 db,
                 AppendLog);
+
+            ApplyServerAutoStart();   // 🔥 ТОЛЬКО ПОСЛЕ создания _server
 
             _server.Start();
 

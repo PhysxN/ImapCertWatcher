@@ -1,20 +1,32 @@
 ﻿using ImapCertWatcher.Utils;
-using System.IO;
+using System.Collections.Generic;
 using System.Text;
+using System.IO;
 
 public static class SettingsSaver
 {
-    public static void Save(string path, ClientSettings client, ServerSettings server)
+    public static void SaveClient(string path, ClientSettings client)
     {
-        var lines = new[]
+        var lines = new List<string>
         {
-            // ===== CLIENT =====
+            "# ===== CLIENT =====",
+            "",
             $"ServerIp={client.ServerIp}",
             $"ServerPort={client.ServerPort}",
-            $"AutoStart={client.AutoStart}",
-            $"MinimizeToTrayOnClose={client.MinimizeToTrayOnClose}",
+            $"DarkTheme={client.DarkTheme}"
+        };
 
-            // ===== SERVER =====
+        File.WriteAllLines(path, lines, Encoding.UTF8);
+    }
+
+    public static void SaveServer(string path, ServerSettings server)
+    {
+        var lines = new List<string>
+        {
+            "# ===== SERVER =====",
+            "",
+            $"AutoStartServer={server.AutoStartServer}",
+
             $"MailHost={server.MailHost}",
             $"MailPort={server.MailPort}",
             $"MailUseSsl={server.MailUseSsl}",

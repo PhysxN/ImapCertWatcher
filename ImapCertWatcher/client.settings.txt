@@ -1,0 +1,5 @@
+# ===== CLIENT =====
+
+ServerIp=192.168.0.125
+ServerPort=5050
+DarkTheme=False

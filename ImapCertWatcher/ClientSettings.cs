@@ -37,10 +37,7 @@ namespace ImapCertWatcher.Utils
 
         // ===== UI =====
 
-        public bool AutoStart { get; set; } = false;
-
-        public bool MinimizeToTrayOnClose { get; set; } = true;
-
+        
         public bool DarkTheme { get; set; } = false;
     }
 }

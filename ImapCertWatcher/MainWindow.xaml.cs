@@ -36,8 +36,7 @@ namespace ImapCertWatcher
 {
     public partial class MainWindow : Window
     {
-        private ClientSettings _clientSettings;
-        private ServerSettings _serverSettings;
+        private ClientSettings _clientSettings;        
         private NotificationManager _notificationManager;
         private HashSet<int> _knownCertIds = new HashSet<int>();
         private ServerApiClient _api;
@@ -56,9 +55,7 @@ namespace ImapCertWatcher
         private string _currentBuildingFilter = "Все";
         private bool _showDeleted = false;
         private string _searchText = "";
-        private bool _isDarkTheme = false;
-        private const string AUTOSTART_REG_PATH = @"Software\Microsoft\Windows\CurrentVersion\Run";
-        private const string AUTOSTART_VALUE_NAME = "ImapCertWatcher";
+        private bool _isDarkTheme = false;        
         private bool _certsLoadedOnce = false;
         private bool _showBusyTokens = false;
         private bool _isUpdatingTokensGrid = false;
@@ -82,34 +79,7 @@ namespace ImapCertWatcher
         private const int MAX_RECONNECT_DELAY = 30;
         private ServerConnectionState _serverState = ServerConnectionState.Offline;
         private string _lastTimerValue = "";
-        private void ApplyAutoStartSetting()
-        {
-            try
-            {
-                using (var key = Registry.CurrentUser.OpenSubKey(AUTOSTART_REG_PATH, true))
-                {
-                    if (key == null) return;
-
-                    string exePath = Assembly.GetExecutingAssembly().Location;
-                    exePath = "\"" + exePath + "\"";
-
-                    if (_clientSettings.AutoStart)
-                    {
-                        key.SetValue(AUTOSTART_VALUE_NAME, exePath);
-                        Log("Автозапуск включен");
-                    }
-                    else
-                    {
-                        key.DeleteValue(AUTOSTART_VALUE_NAME, false);
-                        Log("Автозапуск выключен");
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Log($"Ошибка настройки автозапуска: {ex.Message}");
-            }
-        }
+        
 
         // Список доступных зданий
         public ObservableCollection<string> AvailableBuildings { get; } =
@@ -141,18 +111,15 @@ namespace ImapCertWatcher
                 Task.Run(() => CleanOldLogs());
 
                 // Загружаем настройки
-                var settingsPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "settings.txt");
-                _clientSettings = SettingsLoader.LoadClient(settingsPath);
-                _serverSettings = SettingsLoader.LoadServer(settingsPath);
+                var baseDir = AppDomain.CurrentDomain.BaseDirectory;
+
+                var clientPath = Path.Combine(baseDir, "client.settings.txt");
+
+                _clientSettings = SettingsLoader.LoadClient(clientPath);
+
 
                 this.DataContext = _clientSettings;
                 dgTokens.ItemsSource = _filteredTokens;
-
-                ApplyAutoStartSetting();
-
-                _notificationManager = new NotificationManager(_serverSettings, Log);
-
-
 
                 // Загрузка темы
                 LoadThemeSettings();
@@ -751,26 +718,22 @@ namespace ImapCertWatcher
 
         private void ApplyTheme(bool dark)
         {
-            var res = Application.Current.Resources;
+            var dictionaries = Application.Current.Resources.MergedDictionaries;
 
-            if (dark)
+            // Удаляем старую тему (она всегда первая)
+            if (dictionaries.Count > 0)
+                dictionaries.RemoveAt(0);
+
+            var themeDict = new ResourceDictionary
             {
-                res["WindowBackgroundBrush"] = res["DarkWindowBackground"];
-                res["ControlBackgroundBrush"] = res["DarkControlBackground"];
-                res["TextColorBrush"] = res["DarkTextColor"];
-                res["BorderColorBrush"] = res["DarkBorderColor"];
-                res["AccentColorBrush"] = res["DarkAccentColor"];
-                res["HoverColorBrush"] = res["DarkHoverColor"];
-            }
-            else
-            {
-                res["WindowBackgroundBrush"] = res["LightWindowBackground"];
-                res["ControlBackgroundBrush"] = res["LightControlBackground"];
-                res["TextColorBrush"] = res["LightTextColor"];
-                res["BorderColorBrush"] = res["LightBorderColor"];
-                res["AccentColorBrush"] = res["LightAccentColor"];
-                res["HoverColorBrush"] = res["LightHoverColor"];
-            }
+                Source = new Uri(
+                    dark
+                        ? "Themes/DarkTheme.xaml"
+                        : "Themes/LightTheme.xaml",
+                    UriKind.Relative)
+            };
+
+            dictionaries.Insert(0, themeDict);
         }
 
         private void ChkDarkTheme_Changed(object sender, RoutedEventArgs e)
@@ -1379,6 +1342,19 @@ namespace ImapCertWatcher
                         dgTokens.SelectedItem = item;
                 }
             }
+            catch (Exception ex)
+            {
+                AddToMiniLog("Сервер недоступен (LoadTokens): " + ex.Message);
+
+                Dispatcher.Invoke(() =>
+                {
+                    _filteredTokens.Clear();
+                    dgTokens.IsEnabled = false;
+                    tokensStatusText.Text = "Сервер недоступен";
+                });
+
+                SetServerState(ServerConnectionState.Offline);
+            }
             finally
             {
                 _isUpdatingTokensGrid = false;
@@ -1508,25 +1484,7 @@ namespace ImapCertWatcher
             }
         }
 
-        private void DgTokens_LoadingRow(object sender, DataGridRowEventArgs e)
-        {
-            if (e.Row.Item is TokenRecord token)
-            {
-                // 🔹 Строка-заглушка "Свободных токенов нет"
-                if (token.Sn == "Свободных токенов нет")
-                {
-                    e.Row.Background = Brushes.Transparent;
-                    e.Row.Foreground = Brushes.Gray;
-                    e.Row.IsEnabled = false;
-                    return;
-                }
-
-                // 🔹 Обычные токены
-                e.Row.Background = token.IsFree
-                    ? new SolidColorBrush(Color.FromRgb(200, 255, 200))
-                    : new SolidColorBrush(Color.FromRgb(230, 230, 230));
-            }
-        }
+        
 
         private void ShowProgressBar(bool show)
         {
@@ -2353,6 +2311,31 @@ namespace ImapCertWatcher
             }
         }
 
+        private void BtnSaveSettings_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                var clientPath = Path.Combine(
+                    AppDomain.CurrentDomain.BaseDirectory,
+                    "client.settings.txt");
+
+                SettingsSaver.SaveClient(clientPath, _clientSettings);
+
+                AddToMiniLog("Клиентские настройки сохранены");
+
+                MessageBox.Show("Настройки сохранены.",
+                    "Сохранено",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+
+                _api = new ServerApiClient(_clientSettings);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Ошибка сохранения:\n" + ex.Message);
+            }
+        }
+
         private async void BtnOpenArchive_Click(object sender, RoutedEventArgs e)
         {
             try
@@ -2479,9 +2462,7 @@ namespace ImapCertWatcher
                 {
                 }
             });
-        }
-
-        
+        }        
 
         private string MakeSafeFolderName(string name)
         {
