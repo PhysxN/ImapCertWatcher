@@ -329,6 +329,26 @@
         <Setter Property="BorderBrush" Value="{DynamicResource BorderColorBrush}"/>
         <Setter Property="BorderThickness" Value="1"/>
         <Setter Property="Padding" Value="6"/>
+
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ListBox">
+                    <Border
+                    Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}"
+                    Padding="{TemplateBinding Padding}">
+
+                        <ScrollViewer
+                        Background="{TemplateBinding Background}"
+                        Focusable="false">
+                            <ItemsPresenter/>
+                        </ScrollViewer>
+
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
     </Style>
 
     <Style x:Key="ModernListBoxItemStyle" TargetType="ListBoxItem">

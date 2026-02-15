@@ -352,11 +352,11 @@
                     <!-- Таблица токенов -->
                     <ListBox x:Name="dgTokens"
                              Grid.Row="1"
-                             ItemsSource="{Binding FilteredTokens}"         
+                             ItemsSource="{Binding FilteredTokens}"
                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                              Style="{StaticResource ModernListBoxStyle}"
                              ItemContainerStyle="{StaticResource ModernListBoxItemStyle}"
-                             Background="{DynamicResource WindowBackgroundBrush}"
+                             Background="{DynamicResource ControlBackgroundBrush}"
                              BorderBrush="{DynamicResource BorderColorBrush}"
                              BorderThickness="1">           
 
