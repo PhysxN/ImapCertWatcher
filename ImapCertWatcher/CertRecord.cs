@@ -11,7 +11,39 @@ namespace ImapCertWatcher.Models
         private DateTime _dateEnd;
 
         public int Id { get; set; }
-        public string Fio { get; set; }
+        private string _fio;
+        public string Fio
+        {
+            get => FormatName(_fio);
+            set
+            {
+                if (_fio == value)
+                    return;
+
+                _fio = value;
+                OnPropertyChanged(nameof(Fio));
+            }
+        }
+
+        private string FormatName(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return string.Empty;
+
+            var text = value.Trim().ToLower();
+            var words = text.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+
+            for (int i = 0; i < words.Length; i++)
+            {
+                if (words[i].Length > 1)
+                    words[i] = char.ToUpper(words[i][0]) + words[i].Substring(1);
+                else
+                    words[i] = words[i].ToUpper();
+            }
+
+            return string.Join(" ", words);
+        }
+
         public DateTime DateStart { get; set; }
 
         public DateTime DateEnd

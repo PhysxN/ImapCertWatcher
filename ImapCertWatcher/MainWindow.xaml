@@ -2,18 +2,13 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:ImapCertWatcher"
-        xmlns:conv="clr-namespace:ImapCertWatcher.Utils"
         Title="Watcher ЭЦП"
         Height="880"
         Width="1300"
         WindowStartupLocation="CenterScreen"
         Background="{DynamicResource WindowBackgroundBrush}">
 
-    <Window.Resources>
-        <conv:NameCaseConverter x:Key="NameCaseConverter"/>
-        <!--<conv:BoolToFreeBusyConverter x:Key="BoolToFreeBusyConverter"/>
-        <conv:EqualIntConverter x:Key="EqualIntConverter"/>-->
-    </Window.Resources>
+    
 
     <Grid Margin="8" Background="{DynamicResource WindowBackgroundBrush}">
         <TabControl Style="{StaticResource ModernTabControlStyle}" SelectionChanged="TabControl_SelectionChanged">
@@ -51,10 +46,6 @@
                         <Button x:Name="btnExportExcel" Content="Экспорт в Excel" 
                                 Style="{StaticResource ModernButtonStyle}" 
                                 Click="BtnExportExcel_Click"/>
-                        <TextBlock Text="Интервал (минуты):" VerticalAlignment="Center" Margin="8,0,4,0"
-                                   Foreground="{DynamicResource TextColorBrush}"/>
-                        <TextBlock x:Name="txtInterval" VerticalAlignment="Center" Margin="0,0,16,0"
-                                   Foreground="{DynamicResource TextColorBrush}"/>
 
                         <Button x:Name="btnDeleteSelected" Content="Пометить на удаление" 
                                 Style="{StaticResource ModernButtonStyle}" 
@@ -171,7 +162,7 @@
                         </DataGrid.ContextMenu>
                         <DataGrid.Columns>
                             <DataGridTextColumn Header="ФИО"
-                                                Binding="{Binding Fio, Mode=OneWay, Converter={StaticResource NameCaseConverter}}"
+                                                Binding="{Binding Fio, Mode=OneWay}"
                                                 IsReadOnly="True"
                                                 Width="2*"
                                                 ElementStyle="{StaticResource DataGridTextBlockStyle}"/>        
@@ -352,13 +343,13 @@
                     <!-- Таблица токенов -->
                     <ListBox x:Name="dgTokens"
                              Grid.Row="1"
-                             ItemsSource="{Binding FilteredTokens}"
                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                              Style="{StaticResource ModernListBoxStyle}"
+                             ItemsSource="{Binding FilteredTokens, RelativeSource={RelativeSource AncestorType=Window}}"
                              ItemContainerStyle="{StaticResource ModernListBoxItemStyle}"
                              Background="{DynamicResource ControlBackgroundBrush}"
                              BorderBrush="{DynamicResource BorderColorBrush}"
-                             BorderThickness="1">           
+                             BorderThickness="1">      
 
                         <ListBox.ItemsPanel>
                             <ItemsPanelTemplate>
@@ -368,45 +359,76 @@
 
                         <ListBox.ItemTemplate>
                             <DataTemplate>
-                                <Border Margin="5"
-                Padding="8"
-                Width="220"
-                CornerRadius="8">
+                                <ContentControl Content="{Binding}">
+                                    <ContentControl.Style>
+                                        <Style TargetType="ContentControl">
 
-                                    <Border.Style>
-                                        <Style TargetType="Border">
-                                            <Setter Property="Background"
-                            Value="{DynamicResource ControlBackgroundBrush}"/>
+                                            <!-- 🔹 БАЗОВЫЙ шаблон (обычный токен) -->
+                                            <Setter Property="ContentTemplate">
+                                                <Setter.Value>
+                                                    <DataTemplate>
+                                                        <Border Margin="5"
+                                        Padding="8"
+                                        Width="220"
+                                        CornerRadius="8">
 
+                                                            <Border.Style>
+                                                                <Style TargetType="Border">
+                                                                    <Setter Property="Background"
+                                                    Value="{DynamicResource ControlBackgroundBrush}"/>
+
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding Token.IsFree}" Value="True">
+                                                                            <Setter Property="Background"
+                                                            Value="{DynamicResource FreeTokenBrush}"/>
+                                                                        </DataTrigger>
+
+                                                                        <DataTrigger Binding="{Binding Token.IsFree}" Value="False">
+                                                                            <Setter Property="Background"
+                                                            Value="{DynamicResource BusyTokenBrush}"/>
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </Border.Style>
+
+                                                            <StackPanel>
+                                                                <TextBlock Text="{Binding Token.Sn}"
+                                                   FontWeight="SemiBold"
+                                                   Foreground="{DynamicResource TextColorBrush}"/>
+
+                                                                <TextBlock Text="{Binding Token.OwnerFioFormatted}"
+                                                   FontSize="12"
+                                                   Opacity="0.85"
+                                                   Foreground="{DynamicResource TextColorBrush}"/>
+                                                            </StackPanel>
+                                                        </Border>
+                                                    </DataTemplate>
+                                                </Setter.Value>
+                                            </Setter>
+
+                                            <!-- 🔹 Если это заголовок -->
                                             <Style.Triggers>
-
-                                                <!-- Свободный -->
-                                                <DataTrigger Binding="{Binding IsFree}" Value="True">
-                                                    <Setter Property="Background"
-                                    Value="{DynamicResource FreeTokenBrush}"/>
+                                                <DataTrigger Binding="{Binding IsHeader}" Value="True">
+                                                    <Setter Property="ContentTemplate">
+                                                        <Setter.Value>
+                                                            <DataTemplate>
+                                                                <Border Width="{Binding RelativeSource={RelativeSource AncestorType=ListBox}, Path=ActualWidth}"
+                                                                     Margin="0,10,0,4">
+                                                                    <TextBlock Text="{Binding HeaderText}"
+                                                                   FontSize="14"
+                                                                   FontWeight="Bold"
+                                                                   Margin="10,0,0,0"
+                                                                   Foreground="{DynamicResource AccentColorBrush}"/>        
+                                                                </Border>
+                                                            </DataTemplate>
+                                                        </Setter.Value>
+                                                    </Setter>
                                                 </DataTrigger>
-
-                                                <!-- Занятый -->
-                                                <DataTrigger Binding="{Binding IsFree}" Value="False">
-                                                    <Setter Property="Background"
-                                    Value="{DynamicResource BusyTokenBrush}"/>
-                                                </DataTrigger>
-
                                             </Style.Triggers>
+
                                         </Style>
-                                    </Border.Style>
-
-                                    <StackPanel>
-                                        <TextBlock Text="{Binding Sn}"
-                           FontWeight="SemiBold"
-                           Foreground="{DynamicResource TextColorBrush}"/>
-
-                                        <TextBlock Text="{Binding OwnerFio}"
-                           FontSize="12"
-                           Opacity="0.85"
-                           Foreground="{DynamicResource TextColorBrush}"/>
-                                    </StackPanel>
-                                </Border>
+                                    </ContentControl.Style>
+                                </ContentControl>
                             </DataTemplate>
                         </ListBox.ItemTemplate>
                     </ListBox>

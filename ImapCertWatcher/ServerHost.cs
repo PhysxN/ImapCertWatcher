@@ -122,11 +122,22 @@ namespace ImapCertWatcher.Server
                     return "OK FULL STARTED";
 
                 case "STATUS":
+                    {
+                        bool isBusy = _checkLock.CurrentCount == 0;
 
-                    if (_checkLock.CurrentCount == 0)
-                        return "STATUS BUSY";
+                        var remainStatus = (_nextTimerRun - DateTime.Now);
+                        string timerPart;
 
-                    return "STATUS IDLE";
+                        if (remainStatus.TotalSeconds < 0)
+                            timerPart = "TIMER READY";
+                        else
+                            timerPart = $"TIMER {(int)remainStatus.TotalMinutes + 1}";
+
+                        if (isBusy)
+                            return $"STATUS BUSY\n{timerPart}";
+                        else
+                            return $"STATUS IDLE\n{timerPart}";
+                    }
 
                 case "GET_PROGRESS":
                     lock (_stateLock)

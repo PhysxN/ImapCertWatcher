@@ -135,6 +135,7 @@
     </Compile>
     <Compile Include="Converter.cs" />
     <Compile Include="DbHelper.cs" />
+    <Compile Include="Models\TokenListItem.cs" />
     <Compile Include="Utils\CryptoHelper.cs" />
     <Compile Include="Utils\EqualIntConverter.cs" />
     <Compile Include="Examples\AsyncOperationsExamples.cs" />
