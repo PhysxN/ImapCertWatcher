@@ -79,8 +79,10 @@ namespace ImapCertWatcher
         private int _reconnectDelaySeconds = 2;
         private const int MAX_RECONNECT_DELAY = 30;
         private ServerConnectionState _serverState = ServerConnectionState.Connecting;
-        private string _lastTimerValue = "";
-        private string _lastStatusRaw = "";
+        private static readonly TimeSpan PollBusy = TimeSpan.FromMilliseconds(500);
+        private static readonly TimeSpan PollOnline = TimeSpan.FromSeconds(3);
+        private static readonly TimeSpan PollConnecting = TimeSpan.FromSeconds(1);
+
 
 
         // Список доступных зданий
@@ -226,6 +228,7 @@ namespace ImapCertWatcher
                     txtNextCheck.Visibility = Visibility.Visible;
                     break;
             }
+            AdjustPollingInterval();
         }
 
         class ServerApiClient
@@ -307,7 +310,7 @@ namespace ImapCertWatcher
         private async void StartServerMonitor()
         {
             _serverMonitorTimer = new DispatcherTimer();
-            _serverMonitorTimer.Interval = TimeSpan.FromMilliseconds(500);
+            _serverMonitorTimer.Interval = PollConnecting;
             _serverMonitorTimer.Tick += async (s, e) =>
             {
                 await UpdateServerMonitor();
@@ -315,6 +318,32 @@ namespace ImapCertWatcher
 
             _serverMonitorTimer.Start();
             await UpdateServerMonitor();
+        }
+
+        private void AdjustPollingInterval()
+        {
+            if (_serverMonitorTimer == null)
+                return;
+
+            switch (_serverState)
+            {
+                case ServerConnectionState.Busy:
+                    _serverMonitorTimer.Interval = PollBusy;
+                    break;
+
+                case ServerConnectionState.Online:
+                    _serverMonitorTimer.Interval = PollOnline;
+                    break;
+
+                case ServerConnectionState.Connecting:
+                    _serverMonitorTimer.Interval = PollConnecting;
+                    break;
+
+                case ServerConnectionState.Offline:
+                    _serverMonitorTimer.Interval =
+                        TimeSpan.FromSeconds(_reconnectDelaySeconds);
+                    break;
+            }
         }
 
         private async Task UpdateServerMonitor()
@@ -331,34 +360,21 @@ namespace ImapCertWatcher
                     _clientSettings.ServerPort,
                     "STATUS");
 
-                if (string.IsNullOrWhiteSpace(response))
+                // 🔴 Любая некорректность ответа → уходим в backoff
+                if (string.IsNullOrWhiteSpace(response) ||
+                    !response.StartsWith("STATE|"))
                 {
-                    SetServerState(ServerConnectionState.Offline);
+                    StartReconnectBackoff();
                     return;
                 }
 
-                var lines = response
-                    .Split(new[] { '\r', '\n' },
-                           StringSplitOptions.RemoveEmptyEntries);
-
-                foreach (var line in lines)
-                {
-                    if (line.StartsWith("STATUS"))
-                        UpdateStatusUI(line);
-
-                    else if (line.StartsWith("TIMER"))
-                        UpdateTimerUI(line);
-
-                    else if (line.StartsWith("PROGRESS"))
-                        UpdateProgressUI(line);
-
-                    else if (line.StartsWith("LOG"))
-                        UpdateServerLog(line);
-                }
+                // ✅ Ответ корректный — сервер жив
+                ParseServerState(response);
             }
             catch
             {
-                SetServerState(ServerConnectionState.Offline);
+                // 🔴 TCP ошибка
+                StartReconnectBackoff();
             }
             finally
             {
@@ -366,96 +382,73 @@ namespace ImapCertWatcher
             }
         }
 
-        private void UpdateServerLog(string log)
+        private void ParseServerState(string stateLine)
         {
-            if (!log.StartsWith("LOG"))
-                return;
+            try
+            {
+                // STATE|BUSY=1|PROGRESS=30|STAGE=Checking mail|TIMER=12
 
-            var content = log.Replace("LOG ", "");
+                var parts = stateLine.Split('|');
 
-            AddToMiniLog("[SERVER] " + content);
-        }
+                bool isBusy = false;
+                int progress = 0;
+                int timerMinutes = 0;
+                string stage = "";
 
-        private void UpdateStatusUI(string status)
-        {
-            if (string.IsNullOrWhiteSpace(status))
+                foreach (var part in parts)
+                {
+                    if (part.StartsWith("BUSY="))
+                    {
+                        var value = part.Replace("BUSY=", "");
+                        isBusy = value == "1";
+                    }
+
+                    else if (part.StartsWith("PROGRESS="))
+                        int.TryParse(part.Replace("PROGRESS=", ""), out progress);
+
+                    else if (part.StartsWith("TIMER="))
+                        int.TryParse(part.Replace("TIMER=", ""), out timerMinutes);
+
+                    else if (part.StartsWith("STAGE="))
+                        stage = part.Replace("STAGE=", "");
+                }
+
+                Dispatcher.Invoke(() =>
+                {
+                    _reconnectDelaySeconds = 2;
+                    if (isBusy)
+                        SetServerState(ServerConnectionState.Busy);
+                    else
+                        SetServerState(ServerConnectionState.Online);
+
+                    // Прогресс
+                    if (isBusy)
+                    {
+                        pbServerProgress.Visibility = Visibility.Visible;
+                        pbServerProgress.Value = progress;
+                    }
+                    else
+                    {
+                        pbServerProgress.Visibility = Visibility.Collapsed;
+                    }
+
+                    // Таймер
+                    if (!isBusy)
+                    {
+                        if (timerMinutes <= 0)
+                            txtNextCheck.Text = "Следующая проверка: сейчас";
+                        else
+                            txtNextCheck.Text = $"Следующая проверка через {timerMinutes} мин";
+                    }
+                });
+            }
+            catch
             {
                 SetServerState(ServerConnectionState.Offline);
-                return;
             }
-
-            if (status != _lastStatusRaw)
-            {
-                _lastStatusRaw = status;
-                AddToMiniLog("[STATUS RAW] " + status);
-            }
-
-            if (!status.StartsWith("STATUS"))
-            {
-                SetServerState(ServerConnectionState.Offline);
-                return;
-            }
-
-            status = status.ToUpperInvariant();
-
-            if (status.Contains("BUSY"))
-                SetServerState(ServerConnectionState.Busy);
-            else if (status.Contains("IDLE") || status.Contains("READY"))
-                SetServerState(ServerConnectionState.Online);
-            else
-                SetServerState(ServerConnectionState.Offline);
         }
 
-        private void UpdateProgressUI(string progress)
-        {
-            if (!progress.StartsWith("PROGRESS"))
-                return;
-
-            var data = progress.Replace("PROGRESS ", "").Split('|');
-
-            if (!int.TryParse(data[0], out int percent))
-                return;
-
-            Dispatcher.Invoke(() =>
-            {
-                // показываем только если сервер реально BUSY
-                if (_serverState == ServerConnectionState.Busy)
-                {
-                    pbServerProgress.IsIndeterminate = false;
-                    pbServerProgress.Visibility = Visibility.Visible;
-                    pbServerProgress.Value = percent;
-                }
-                else
-                {
-                    pbServerProgress.Visibility = Visibility.Collapsed;
-                }
-            });
-        }
-
-        private void UpdateTimerUI(string timer)
-        {
-            if (_serverState != ServerConnectionState.Online)
-                return;
-            if (string.IsNullOrWhiteSpace(timer))
-                return;
-            if (timer == _lastTimerValue)
-                return;
-
-            _lastTimerValue = timer;
-
-            Dispatcher.Invoke(() =>
-            {
-                if (timer.Contains("READY"))
-                {
-                    txtNextCheck.Text = "Следующая проверка: сейчас";
-                }
-                else if (timer.StartsWith("TIMER"))
-                {
-                    var min = timer.Replace("TIMER ", "").Trim();
-                    txtNextCheck.Text = $"Следующая проверка через {min} мин";
-                }
-            });
-        }
+             
 
         private void StartConnectingAnimation()
         {

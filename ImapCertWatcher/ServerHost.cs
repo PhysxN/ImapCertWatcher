@@ -37,11 +37,12 @@ namespace ImapCertWatcher.Server
 
         private DateTime _lastCheckTime = DateTime.MinValue;
 
-        private readonly TimeSpan _minCheckInterval = TimeSpan.FromMinutes(10);
+        private TimeSpan MinCheckInterval => TimeSpan.FromMinutes(_settings.CheckIntervalMinutes);
         private volatile int _progressPercent = 0;
         private volatile string _currentStage = "IDLE";
         private readonly object _stateLock = new object();
         private readonly object _logLock = new object();
+        
 
         private DateTime _nextTimerRun = DateTime.MinValue;
 
@@ -56,17 +57,35 @@ namespace ImapCertWatcher.Server
             _notifications = new NotificationManager(_settings, _log);
 
             _timer = new SafeAsyncTimer(
-                        async ct =>
+                    async ct =>
+                    {
+                        try
+                        {
+                            _log("AUTO CHECK triggered");
+
+                            var result = await RequestFastCheckAsync(ct);
+
+                            _log("AUTO CHECK result: " + result);
+                        }
+                        catch (Exception ex)
+                        {
+                            _log("AUTO CHECK ERROR: " + ex.Message);
+                        }
+                        finally
                         {
                             _nextTimerRun = DateTime.Now.AddMinutes(_settings.CheckIntervalMinutes);
-                        },
-                        ex => _log("ServerHost timer error: " + ex.Message)
-                        );
+                        }
+                    },
+                    ex => _log("ServerHost timer fatal error: " + ex.Message)
+);
         }
 
 
         public void Start()
         {
+            if (_tcpServer != null)
+                return;
+
             if (_settings.CheckIntervalMinutes > 0)
             {
                 var interval = TimeSpan.FromMinutes(_settings.CheckIntervalMinutes);
@@ -80,15 +99,9 @@ namespace ImapCertWatcher.Server
 
                 _log($"ServerHost: таймер запущен, интервал {_settings.CheckIntervalMinutes} мин.");
             }
-            else
-            {
-                _log("ServerHost: авто-проверка отключена (CheckIntervalMinutes <= 0)");
-            }
 
             _tcpServer = new TcpCommandServer(5050, HandleRemoteCommand);
             _tcpServer.Start();
-
-            _log("TCP Server started. Listening on port 5050");
         }
 
         private string HandleRemoteCommand(string cmd)
@@ -106,37 +119,27 @@ namespace ImapCertWatcher.Server
             switch (command)
             {
                 case "FAST_CHECK":
-
-                    if (_checkLock.CurrentCount == 0)
-                        return "BUSY";
-
-                    _ = Task.Run(async () =>
-                    {
-                        await RequestFastCheckAsync(CancellationToken.None);
-                    });
-
+                    _ = RequestFastCheckAsync(CancellationToken.None);
                     return "OK";
 
                 case "FULL_CHECK":
-                    _ = Task.Run(() => RequestFullCheckAsync());
-                    return "OK FULL STARTED";
+                    _ = RequestFullCheckAsync();
+                    return "OK";
 
                 case "STATUS":
                     {
                         bool isBusy = _checkLock.CurrentCount == 0;
 
-                        var remainStatus = (_nextTimerRun - DateTime.Now);
-                        string timerPart;
+                        int minutesLeft = 0;
+                        var Statusremain = (_nextTimerRun - DateTime.Now);
 
-                        if (remainStatus.TotalSeconds < 0)
-                            timerPart = "TIMER READY";
-                        else
-                            timerPart = $"TIMER {(int)remainStatus.TotalMinutes + 1}";
+                        if (Statusremain.TotalSeconds > 0)
+                            minutesLeft = (int)Math.Ceiling(Statusremain.TotalMinutes);
 
-                        if (isBusy)
-                            return $"STATUS BUSY\n{timerPart}";
-                        else
-                            return $"STATUS IDLE\n{timerPart}";
+                        lock (_stateLock)
+                        {
+                            return $"STATE|BUSY={(isBusy ? 1 : 0)}|PROGRESS={_progressPercent}|STAGE={_currentStage}|TIMER={minutesLeft}";
+                        }
                     }
 
                 case "GET_PROGRESS":
@@ -371,30 +374,30 @@ namespace ImapCertWatcher.Server
 
             }
         }
-                
+
 
         public async Task<string> RequestFastCheckAsync(CancellationToken token)
         {
-            // защита частоты
-            var sinceLast = DateTime.Now - _lastCheckTime;
-
-            if (sinceLast < _minCheckInterval)
-            {
-                var wait = _minCheckInterval - sinceLast;
-                return $"BUSY WAIT {(int)wait.TotalMinutes + 1} MIN";
-            }
-
-            // защита параллельности
+            // защита от параллельного запуска
             if (!await _checkLock.WaitAsync(0))
-            {
                 return "BUSY RUNNING";
-            }
 
             try
             {
+                // защита частоты (ПОСЛЕ захвата lock)
+                var sinceLast = DateTime.Now - _lastCheckTime;
+
+                if (sinceLast < MinCheckInterval)
+                {
+                    var wait = MinCheckInterval - sinceLast;
+                    return $"BUSY WAIT {(int)wait.TotalMinutes + 1} MIN";
+                }
+
+                
                 _lastCheckTime = DateTime.Now;
 
                 _log("FAST CHECK started");
+
                 lock (_stateLock)
                 {
                     _progressPercent = 5;
@@ -402,26 +405,31 @@ namespace ImapCertWatcher.Server
                 }
 
                 var startedAt = DateTime.UtcNow;
+
                 lock (_stateLock)
                 {
                     _progressPercent = 30;
-                _currentStage = "Checking mail";
+                    _currentStage = "Checking mail";
                 }
+
                 await Task.WhenAll(
                     _newWatcher.CheckNewCertificatesFastAsync(token),
                     _revokeWatcher.CheckRevocationsFastAsync(token)
                 );
 
                 var newCerts = _db.GetCertificatesAddedAfter(startedAt);
+
                 lock (_stateLock)
                 {
                     _progressPercent = 80;
-                _currentStage = "Saving data";
+                    _currentStage = "Saving data";
                 }
+
                 if (newCerts.Count > 0)
                     _notifications.NotifyNewUsers(newCerts);
 
                 _log("FAST CHECK finished");
+
                 lock (_stateLock)
                 {
                     _progressPercent = 100;
@@ -432,24 +440,40 @@ namespace ImapCertWatcher.Server
             }
             finally
             {
+                
                 _checkLock.Release();
             }
         }
 
-        public Task RequestFullCheckAsync()
+        public async Task<string> RequestFullCheckAsync()
         {
-            return Task.Run(() =>
+            if (!await _checkLock.WaitAsync(0))
+                return "BUSY RUNNING";
+
+            try
             {
-                _log("ПОЛНАЯ проверка почты");
+                lock (_stateLock)
+                {
+                    _progressPercent = 10;
+                    _currentStage = "Full check started";
+                }
 
-                // ✅ новые сертификаты — ВСЕ письма
+                // просто вызываем синхронные методы
                 _newWatcher.ProcessNewCertificates(true, CancellationToken.None);
-
-                // ✅ аннулирования — ВСЕ письма
                 _revokeWatcher.ProcessRevocations(true, CancellationToken.None);
 
-                _log("ПОЛНАЯ проверка завершена");
-            });
+                lock (_stateLock)
+                {
+                    _progressPercent = 100;
+                    _currentStage = "IDLE";
+                }
+
+                return "OK FULL DONE";
+            }
+            finally
+            {
+                _checkLock.Release();
+            }
         }
 
         private string GetLastServerLogLines(int count = 20)
@@ -473,7 +497,17 @@ namespace ImapCertWatcher.Server
         }
         public void Dispose()
         {
-            _timer.Dispose();
+            try
+            {
+                _tcpServer?.Stop();
+            }
+            catch { }
+
+            try
+            {
+                _timer.Dispose();
+            }
+            catch { }
         }
     }
 }

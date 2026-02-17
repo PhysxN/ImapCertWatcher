@@ -24,9 +24,19 @@ namespace ImapCertWatcher.Server
 
         public void Start()
         {
+            if (_listener != null)
+                return; // уже запущен
+
             _cts = new CancellationTokenSource();
 
             _listener = new TcpListener(IPAddress.Any, _port);
+
+            // ВАЖНО — ускоряет повторный запуск после падения
+            _listener.Server.SetSocketOption(
+                SocketOptionLevel.Socket,
+                SocketOptionName.ReuseAddress,
+                true);
+
             _listener.Start();
 
             Task.Run(AcceptLoop);
@@ -40,27 +50,31 @@ namespace ImapCertWatcher.Server
                 _listener?.Stop();
             }
             catch { }
+            finally
+            {
+                _listener = null;
+                _cts = null;
+            }
         }
 
         private async Task AcceptLoop()
         {
-            while (!_cts.IsCancellationRequested)
+            var listener = _listener;
+
+            while (_cts != null && !_cts.IsCancellationRequested)
             {
                 try
                 {
-                    var client = await _listener.AcceptTcpClientAsync();
-                    _ = HandleClient(client);
+                    var client = await listener.AcceptTcpClientAsync();
+                    _ = Task.Run(() => HandleClient(client));
                 }
                 catch (ObjectDisposedException)
                 {
-                    // listener остановлен — выходим из цикла
                     break;
                 }
-                catch (Exception ex)
+                catch
                 {
-                    Console.WriteLine("[SERVER ACCEPT ERROR] " + ex.Message);
-
-                    if (_cts.IsCancellationRequested)
+                    if (_cts == null || _cts.IsCancellationRequested)
                         break;
                 }
             }
@@ -78,6 +92,7 @@ namespace ImapCertWatcher.Server
                     client.ReceiveTimeout = 60000;
                     client.SendTimeout = 60000;
 
+                    
                     // читаем команду
                     var request = await reader.ReadLineAsync();
 
