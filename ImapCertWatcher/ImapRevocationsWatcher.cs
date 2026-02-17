@@ -55,11 +55,7 @@ namespace ImapCertWatcher.Services
         /// </summary>
         public void ProcessRevocations(bool checkAllMessages, CancellationToken token)
         {
-            if (token.IsCancellationRequested)
-            {
-                Log("Обработка аннулирований прервана пользователем.");
-                return;
-            }
+            token.ThrowIfCancellationRequested();
 
             int processed = 0;
             int applied = 0;
@@ -73,20 +69,40 @@ namespace ImapCertWatcher.Services
                     client.Timeout = 60000;
                     client.ServerCertificateValidationCallback = (s, c, h, e) => true;
 
-                    client.Connect(
-                        _settings.MailHost,
-                        _settings.MailPort,
-                        _settings.MailUseSsl
-                            ? SecureSocketOptions.SslOnConnect
-                            : SecureSocketOptions.StartTlsWhenAvailable);
+                    for (int attempt = 1; attempt <= 2; attempt++)
+                    {
+                        try
+                        {
+                            client.Connect(
+                                _settings.MailHost,
+                                _settings.MailPort,
+                                _settings.MailUseSsl
+                                    ? SecureSocketOptions.SslOnConnect
+                                    : SecureSocketOptions.StartTlsWhenAvailable);
+
+                            break;
+                        }
+                        catch (Exception ex)
+                        {
+                            Log($"IMAP connect attempt {attempt} failed: {ex.Message}");
+
+                            if (attempt == 2)
+                                throw;
+
+                            Task.Delay(3000, token).Wait(token);
+                        }
+                    }
+                    token.ThrowIfCancellationRequested();
                     Log($"IMAP подключение: {_settings.MailHost}:{_settings.MailPort}, SSL={_settings.MailUseSsl}");
 
                     client.Authenticate(_settings.MailLogin, _settings.MailPassword);
+                    token.ThrowIfCancellationRequested();
 
                     string folderName = string.IsNullOrWhiteSpace(_settings.ImapRevocationsFolder) ? "INBOX" : _settings.ImapRevocationsFolder;
                     IMailFolder folder = client.GetFolder(folderName) ?? client.Inbox;
 
                     folder.Open(FolderAccess.ReadWrite);
+                    folder.CountChanged += (s, e) => { };
 
                     long lastUid = checkAllMessages
                         ? 0
@@ -102,16 +118,19 @@ namespace ImapCertWatcher.Services
                                 )
                             )
                           );
+                    const int MaxPerRun = 200;
+
+                    if (uids.Count > MaxPerRun)
+                    {
+                        uids = uids.Take(MaxPerRun).ToList();
+                        Log($"Ограничение: обрабатываем только {MaxPerRun} писем за прогон");
+                    }
 
                     Log($"Найдено писем: {uids.Count}");
 
                     foreach (var uid in uids)
                     {
-                        if (token.IsCancellationRequested)
-                        {
-                            Log("Обработка аннулирований отменена");
-                            break;
-                        }
+                        token.ThrowIfCancellationRequested();
 
                         string uidStr = uid.ToString();
 
@@ -213,10 +232,8 @@ namespace ImapCertWatcher.Services
 
         public Task CheckRevocationsFastAsync(CancellationToken token)
         {
-            return Task.Run(() =>
-            {
-                ProcessRevocations(false, token);
-            }, token);
+            ProcessRevocations(false, token);
+            return Task.CompletedTask;
         }
 
         private static string GetBodyText(MimeMessage msg)

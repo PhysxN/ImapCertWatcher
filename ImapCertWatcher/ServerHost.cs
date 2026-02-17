@@ -15,7 +15,6 @@ namespace ImapCertWatcher.Server
 {
     public class ServerHost : IDisposable
     {
-        private const string PipeName = "ImapCertWatcherPipe";
         private readonly ServerSettings _settings;
         private readonly DbHelper _db;
         private readonly Action<string> _log;
@@ -41,7 +40,6 @@ namespace ImapCertWatcher.Server
         private volatile int _progressPercent = 0;
         private volatile string _currentStage = "IDLE";
         private readonly object _stateLock = new object();
-        private readonly object _logLock = new object();
         
 
         private DateTime _nextTimerRun = DateTime.MinValue;
@@ -131,10 +129,14 @@ namespace ImapCertWatcher.Server
                         bool isBusy = _checkLock.CurrentCount == 0;
 
                         int minutesLeft = 0;
-                        var Statusremain = (_nextTimerRun - DateTime.Now);
 
-                        if (Statusremain.TotalSeconds > 0)
-                            minutesLeft = (int)Math.Ceiling(Statusremain.TotalMinutes);
+                        if (_settings.CheckIntervalMinutes > 0)
+                        {
+                            var remainStatus = _nextTimerRun - DateTime.Now;
+
+                            if (remainStatus.TotalSeconds > 0)
+                                minutesLeft = (int)Math.Ceiling(remainStatus.TotalMinutes);
+                        }
 
                         lock (_stateLock)
                         {
@@ -147,11 +149,18 @@ namespace ImapCertWatcher.Server
                         return $"PROGRESS {_progressPercent}|{_currentStage}";
 
                 case "GET_TIMER":
-                    var remain = (_nextTimerRun - DateTime.Now);
-                    if (remain.TotalSeconds < 0)
-                        return "TIMER READY";
+                    {
+                        if (_settings.CheckIntervalMinutes <= 0)
+                            return "TIMER DISABLED";
 
-                    return $"TIMER {(int)remain.TotalMinutes + 1}";
+                        var remain = _nextTimerRun - DateTime.Now;
+
+                        if (remain.TotalSeconds <= 0)
+                            return "TIMER READY";
+
+                        return $"TIMER {(int)Math.Ceiling(remain.TotalMinutes)}";
+                    }
+               
 
                 case "GET_LOG":
                     return "LOG " + GetLastServerLogLines();
@@ -390,11 +399,14 @@ namespace ImapCertWatcher.Server
                 if (sinceLast < MinCheckInterval)
                 {
                     var wait = MinCheckInterval - sinceLast;
-                    return $"BUSY WAIT {(int)wait.TotalMinutes + 1} MIN";
+
+                    _log($"FAST CHECK skipped. Wait {wait.TotalMinutes:F1} min");
+
+                    return $"BUSY WAIT {(int)Math.Ceiling(wait.TotalMinutes)} MIN";
                 }
 
+
                 
-                _lastCheckTime = DateTime.Now;
 
                 _log("FAST CHECK started");
 
@@ -412,10 +424,14 @@ namespace ImapCertWatcher.Server
                     _currentStage = "Checking mail";
                 }
 
-                await Task.WhenAll(
-                    _newWatcher.CheckNewCertificatesFastAsync(token),
-                    _revokeWatcher.CheckRevocationsFastAsync(token)
-                );
+                using (var timeoutCts = new CancellationTokenSource(TimeSpan.FromMinutes(5)))
+                using (var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(token, timeoutCts.Token))
+                {
+                    await Task.WhenAll(
+                        _newWatcher.CheckNewCertificatesFastAsync(linkedCts.Token),
+                        _revokeWatcher.CheckRevocationsFastAsync(linkedCts.Token)
+                    );
+                }
 
                 var newCerts = _db.GetCertificatesAddedAfter(startedAt);
 
@@ -435,6 +451,11 @@ namespace ImapCertWatcher.Server
                     _progressPercent = 100;
                     _currentStage = "IDLE";
                 }
+
+                _lastCheckTime = DateTime.Now;
+
+                if (_settings.CheckIntervalMinutes > 0)
+                    _nextTimerRun = DateTime.Now.AddMinutes(_settings.CheckIntervalMinutes);
 
                 return "OK FAST DONE";
             }
@@ -459,14 +480,27 @@ namespace ImapCertWatcher.Server
                 }
 
                 // просто вызываем синхронные методы
-                _newWatcher.ProcessNewCertificates(true, CancellationToken.None);
-                _revokeWatcher.ProcessRevocations(true, CancellationToken.None);
+                using (var timeoutCts = new CancellationTokenSource(TimeSpan.FromMinutes(15)))
+                {
+                    try
+                    {
+                        _newWatcher.ProcessNewCertificates(true, timeoutCts.Token);
+                        _revokeWatcher.ProcessRevocations(true, timeoutCts.Token);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        _log("FULL CHECK timeout");
+                    }
+                }
 
                 lock (_stateLock)
                 {
                     _progressPercent = 100;
                     _currentStage = "IDLE";
                 }
+
+                if (_settings.CheckIntervalMinutes > 0)
+                    _nextTimerRun = DateTime.Now.AddMinutes(_settings.CheckIntervalMinutes);
 
                 return "OK FULL DONE";
             }

@@ -101,12 +101,29 @@ namespace ImapCertWatcher.Services
                     client.Timeout = 60000;
                     client.ServerCertificateValidationCallback = (s, c, h, e) => true;
 
-                    client.Connect(
-                        _settings.MailHost,
-                        _settings.MailPort,
-                        _settings.MailUseSsl
-                            ? SecureSocketOptions.SslOnConnect
-                            : SecureSocketOptions.StartTlsWhenAvailable);
+                    for (int attempt = 1; attempt <= 2; attempt++)
+                    {
+                        try
+                        {
+                            client.Connect(
+                                _settings.MailHost,
+                                _settings.MailPort,
+                                _settings.MailUseSsl
+                                    ? SecureSocketOptions.SslOnConnect
+                                    : SecureSocketOptions.StartTlsWhenAvailable);
+
+                            break;
+                        }
+                        catch (Exception ex)
+                        {
+                            Log($"IMAP connect attempt {attempt} failed: {ex.Message}");
+
+                            if (attempt == 2)
+                                throw;
+
+                            Task.Delay(3000, token).Wait(token);
+                        }
+                    }
                     _log($"IMAP подключение: {_settings.MailHost}:{_settings.MailPort}, SSL={_settings.MailUseSsl}");
 
                     try
@@ -118,6 +135,7 @@ namespace ImapCertWatcher.Services
                         Log("Ошибка авторизации IMAP: " + ex.Message);
                         return;
                     }
+                    token.ThrowIfCancellationRequested();
 
                     string folderName = string.IsNullOrWhiteSpace(_settings.ImapNewCertificatesFolder) ? "INBOX" : _settings.ImapNewCertificatesFolder;
                     IMailFolder root = client.GetFolder(folderName) ?? client.Inbox;
@@ -156,11 +174,13 @@ namespace ImapCertWatcher.Services
             token.ThrowIfCancellationRequested();  // Проверка на отмену в начале
             if (folder == null) return;
 
-            Log($"Папка '{folder.FullName}' открыта. Всего писем: {folder.Count}");
+
 
             try
             {
                 folder.Open(FolderAccess.ReadWrite);
+                folder.CountChanged += (s, e) => { };
+                Log($"Папка '{folder.FullName}' открыта. Всего писем: {folder.Count}");
             }
             catch (Exception ex)
             {
@@ -186,6 +206,16 @@ namespace ImapCertWatcher.Services
                                 )
                             )
                           );
+
+                
+                const int MaxPerRun = 200;
+
+                if (uids.Count > MaxPerRun)
+                {
+                    uids = uids.Take(MaxPerRun).ToList();
+                    Log($"Ограничение: обрабатываем только {MaxPerRun} писем за прогон");
+                }
+                
             }
             catch (Exception ex)
             {
@@ -196,8 +226,34 @@ namespace ImapCertWatcher.Services
             foreach (var uid in uids)
             {
                 token.ThrowIfCancellationRequested();  // Проверка на отмену в цикле
+                total++;
                 try
                 {
+                    var summaries = folder.Fetch(
+                    new[] { uid },
+                    MessageSummaryItems.BodyStructure
+);
+
+                    var summary = summaries.FirstOrDefault();
+                    if (summary == null)
+                    {
+                        skipped++;
+                        continue;
+                    }
+
+                    // проверяем есть ли ZIP
+                    bool hasZip = summary.Attachments?
+                        .Any(a => a.FileName != null &&
+                                  a.FileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+                        ?? false;
+
+                    if (!hasZip)
+                    {
+                        _db.MarkMailProcessed(folder.FullName, uid.ToString(), "NEW");
+                        skipped++;
+                        continue;
+                    }
+
                     var message = folder.GetMessage(uid);
                     ProcessMessage(folder, message, uid, uid.ToString(), ref total, ref addedOrUpdated, ref skipped);
                 }
@@ -216,7 +272,7 @@ namespace ImapCertWatcher.Services
             // Сводка
             Log(
                 $"ИТОГО [{folder.FullName}]: " +
-                $"писем={total}, добавлено/обновлено={addedOrUpdated}, пропущено={skipped}");
+                $"обработано всего={total}, добавлено/обновлено={addedOrUpdated}, пропущено={skipped}");
 
             try { folder.Close(); } catch { }
 
@@ -243,8 +299,7 @@ namespace ImapCertWatcher.Services
     ref int addedOrUpdated,
     ref int skipped)
         {
-            total++;
-
+            
             string folderPath = folder.FullName;
             string subject = string.IsNullOrWhiteSpace(message.Subject)
                 ? "(без темы)"
@@ -273,6 +328,8 @@ namespace ImapCertWatcher.Services
 
             foreach (var attach in zipAttachments)
             {
+                var started = DateTime.UtcNow;
+
                 string zipPath = SaveAttachmentToTemp(attach);
                 if (zipPath == null)
                     continue;
@@ -281,6 +338,18 @@ namespace ImapCertWatcher.Services
                 {
                     if (ProcessZip(zipPath, folderPath, uidStr))
                         anySaved = true;
+
+                    // ---- Проверка времени обработки одного письма ----
+                    var elapsed = DateTime.UtcNow - started;
+
+                    if (elapsed.TotalSeconds > 30)
+                    {
+                        Log($"UID={uidStr} | предупреждение: обработка вложения заняла {elapsed.TotalSeconds:F1} сек");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log($"UID={uidStr} | ошибка обработки ZIP: {ex.Message}");
                 }
                 finally
                 {
@@ -302,17 +371,7 @@ namespace ImapCertWatcher.Services
             }
         }
 
-        public Task ProcessNewCertificatesAsync(
-    bool checkAllMessages,
-    CancellationToken token)
-        {
-            return Task.Run(() =>
-            {
-                token.ThrowIfCancellationRequested();
-                ProcessNewCertificates(checkAllMessages, token);
-            }, token);
-        }
-
+        
         // =====================================================================
         // ZIP → CER → DB
         // =====================================================================
@@ -382,10 +441,8 @@ namespace ImapCertWatcher.Services
 
         public Task CheckNewCertificatesFastAsync(CancellationToken token)
         {
-            return Task.Run(() =>
-            {
-                ProcessNewCertificates(false, token);
-            }, token);
+            ProcessNewCertificates(false, token);
+            return Task.CompletedTask;
         }
 
         // =====================================================================
@@ -407,7 +464,10 @@ namespace ImapCertWatcher.Services
 
         private string SaveAttachmentToTemp(MimeEntity attach)
         {
-            if (attach is MimePart part && part.Content?.Stream?.Length > 50_000_000)
+            if (attach is MimePart part &&
+                    part.ContentDisposition != null &&
+                    part.ContentDisposition.Size.HasValue &&
+                    part.ContentDisposition.Size.Value > 50_000_000)
             {
                 Log("ZIP слишком большой — пропущен");
                 return null;
