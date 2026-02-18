@@ -121,7 +121,7 @@ namespace ImapCertWatcher.Services
                             if (attempt == 2)
                                 throw;
 
-                            Task.Delay(3000, token).Wait(token);
+                            Task.Delay(3000, token).GetAwaiter().GetResult();
                         }
                     }
                     _log($"IMAP подключение: {_settings.MailHost}:{_settings.MailPort}, SSL={_settings.MailUseSsl}");
@@ -140,9 +140,16 @@ namespace ImapCertWatcher.Services
                     string folderName = string.IsNullOrWhiteSpace(_settings.ImapNewCertificatesFolder) ? "INBOX" : _settings.ImapNewCertificatesFolder;
                     IMailFolder root = client.GetFolder(folderName) ?? client.Inbox;
 
-                    ProcessFolderRecursive(client, root, checkAllMessages, ref total, ref addedOrUpdated, ref skipped, token);
-
-                    client.Disconnect(true);
+                    try
+                    {
+                        ProcessFolderRecursive(client, root, checkAllMessages,
+                            ref total, ref addedOrUpdated, ref skipped, token);
+                    }
+                    finally
+                    {
+                        if (client.IsConnected)
+                            client.Disconnect(true);
+                    }
                 }
             }
             catch (OperationCanceledException)
@@ -179,7 +186,7 @@ namespace ImapCertWatcher.Services
             try
             {
                 folder.Open(FolderAccess.ReadWrite);
-                folder.CountChanged += (s, e) => { };
+                
                 Log($"Папка '{folder.FullName}' открыта. Всего писем: {folder.Count}");
             }
             catch (Exception ex)
@@ -223,18 +230,17 @@ namespace ImapCertWatcher.Services
                 return;
             }
 
+            var summaries = folder.Fetch(
+            uids,
+            MessageSummaryItems.BodyStructure);
+
             foreach (var uid in uids)
             {
-                token.ThrowIfCancellationRequested();  // Проверка на отмену в цикле
+                token.ThrowIfCancellationRequested();
                 total++;
                 try
                 {
-                    var summaries = folder.Fetch(
-                    new[] { uid },
-                    MessageSummaryItems.BodyStructure
-);
-
-                    var summary = summaries.FirstOrDefault();
+                    var summary = summaries.FirstOrDefault(s => s.UniqueId == uid);
                     if (summary == null)
                     {
                         skipped++;

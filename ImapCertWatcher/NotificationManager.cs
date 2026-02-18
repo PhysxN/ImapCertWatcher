@@ -168,7 +168,9 @@ namespace ImapCertWatcher.Services
 
                 foreach (var rec in newRecords)
                 {
-                    if (rec == null || string.IsNullOrWhiteSpace(rec.Fio))
+                    if (rec == null
+                        || rec.IsDeleted
+                        || string.IsNullOrWhiteSpace(rec.Fio))
                         continue;
 
                     string key = $"newuser:{rec.Id}";
@@ -258,6 +260,7 @@ namespace ImapCertWatcher.Services
 
         private List<string> GetAccountsForBuilding(string building)
         {
+            building = building?.Trim();
             string raw = null;
 
             if (string.Equals(building, "Краснофлотская", StringComparison.OrdinalIgnoreCase))
@@ -300,17 +303,7 @@ namespace ImapCertWatcher.Services
                 .ToList();
         }
 
-        private bool SendForBuilding(string building, string message)
-        {
-            var accounts = GetAccountsForBuilding(building);
-            if (accounts.Count == 0)
-            {
-                _log(string.Format("[Notify] Для здания '{0}' не настроены bimoid-аккаунты.", building));
-                return false;
-            }
-
-            return SendToAccounts(accounts, message);
-        }
+        
 
         private bool SendToAccounts(List<string> accounts, string message)
         {
@@ -347,7 +340,28 @@ namespace ImapCertWatcher.Services
                     CreateNoWindow = true
                 };
 
-                Process.Start(psi);
+                using (var proc = Process.Start(psi))
+                {
+                    if (proc == null)
+                    {
+                        _log("[Notify] Не удалось запустить demo.bat");
+                        return false;
+                    }
+
+                    // ждём максимум 30 секунд
+                    if (!proc.WaitForExit(30000))
+                    {
+                        _log("[Notify] demo.bat завис (таймаут 30 сек)");
+                        try { proc.Kill(); } catch { }
+                        return false;
+                    }
+
+                    if (proc.ExitCode != 0)
+                    {
+                        _log("[Notify] demo.bat завершился с ошибкой, код: " + proc.ExitCode);
+                        return false;
+                    }
+                }
 
                 _log(string.Format("[Notify] Отправлено через ObimpCMD ({0} получателей).", accounts.Count));
                 return true;

@@ -66,7 +66,7 @@ namespace ImapCertWatcher.Server
                 try
                 {
                     var client = await listener.AcceptTcpClientAsync();
-                    _ = Task.Run(() => HandleClient(client));
+                    _ = HandleClient(client);   // ← вот тут заменили
                 }
                 catch (ObjectDisposedException)
                 {

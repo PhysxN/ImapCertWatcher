@@ -89,120 +89,140 @@ namespace ImapCertWatcher.Services
                             if (attempt == 2)
                                 throw;
 
-                            Task.Delay(3000, token).Wait(token);
+                            Task.Delay(3000, token).GetAwaiter().GetResult();
                         }
                     }
+
                     token.ThrowIfCancellationRequested();
+
                     Log($"IMAP подключение: {_settings.MailHost}:{_settings.MailPort}, SSL={_settings.MailUseSsl}");
 
                     client.Authenticate(_settings.MailLogin, _settings.MailPassword);
+
                     token.ThrowIfCancellationRequested();
 
-                    string folderName = string.IsNullOrWhiteSpace(_settings.ImapRevocationsFolder) ? "INBOX" : _settings.ImapRevocationsFolder;
+                    string folderName =
+                        string.IsNullOrWhiteSpace(_settings.ImapRevocationsFolder)
+                            ? "INBOX"
+                            : _settings.ImapRevocationsFolder;
+
                     IMailFolder folder = client.GetFolder(folderName) ?? client.Inbox;
 
                     folder.Open(FolderAccess.ReadWrite);
-                    folder.CountChanged += (s, e) => { };
 
-                    long lastUid = checkAllMessages
-                        ? 0
-                        : _db.GetLastUid(folder.FullName + "_REVOKE");
+                    try
+                    {
+                        long lastUid = checkAllMessages
+                            ? 0
+                            : _db.GetLastUid(folder.FullName + "_REVOKE");
 
-                    var uids = checkAllMessages
-                        ? folder.Search(SearchQuery.All)
-                        : folder.Search(
-                            SearchQuery.Uids(
-                                new UniqueIdRange(
-                                    new UniqueId((uint)(lastUid + 1)),
-                                    UniqueId.MaxValue
+                        var uids = checkAllMessages
+                            ? folder.Search(SearchQuery.All)
+                            : folder.Search(
+                                SearchQuery.Uids(
+                                    new UniqueIdRange(
+                                        new UniqueId((uint)(lastUid + 1)),
+                                        UniqueId.MaxValue
+                                    )
                                 )
-                            )
-                          );
-                    const int MaxPerRun = 200;
+                              );
 
-                    if (uids.Count > MaxPerRun)
-                    {
-                        uids = uids.Take(MaxPerRun).ToList();
-                        Log($"Ограничение: обрабатываем только {MaxPerRun} писем за прогон");
-                    }
+                        const int MaxPerRun = 200;
 
-                    Log($"Найдено писем: {uids.Count}");
-
-                    foreach (var uid in uids)
-                    {
-                        token.ThrowIfCancellationRequested();
-
-                        string uidStr = uid.ToString();
-
-                        if (!checkAllMessages && _db.IsMailProcessed(folder.FullName, uidStr, "REVOKE"))
+                        if (uids.Count > MaxPerRun)
                         {
-                            Log($"UID={uidStr}: уже обработано, пропуск");
-                            continue;
+                            uids = uids.Take(MaxPerRun).ToList();
+                            Log($"Ограничение: обрабатываем только {MaxPerRun} писем за прогон");
                         }
 
-                        processed++;
+                        Log($"Найдено писем: {uids.Count}");
 
-                        MimeMessage message;
-                        try
+                        foreach (var uid in uids)
                         {
-                            message = folder.GetMessage(uid);
-                        }
-                        catch
-                        {
-                            continue;
-                        }
+                            token.ThrowIfCancellationRequested();
 
-                        string body = GetBodyText(message);
-                        if (string.IsNullOrWhiteSpace(body))
-                        {
-                            MarkProcessed(folder, uidStr);
-                            continue;
-                        }
+                            string uidStr = uid.ToString();
 
-                        var match = CertNumberRegex.Match(body);
-                        if (!match.Success)
-                        {
-                            MarkProcessed(folder, uidStr);
-                            continue;
-                        }
+                            if (!checkAllMessages &&
+                                _db.IsMailProcessed(folder.FullName, uidStr, "REVOKE"))
+                            {
+                                Log($"UID={uidStr}: уже обработано, пропуск");
+                                continue;
+                            }
 
-                        string certNumber = DbHelper.NormalizeCertNumber(match.Groups[1].Value);
+                            processed++;
 
-                        DateTime? revokeDate = null;
-                        var dateMatch = Regex.Match(body, @"(\d{2}[.\-]\d{2}[.\-]\d{4})");
-                        if (dateMatch.Success)
-                        {
-                            DateTime dt;
-                            if (DateTime.TryParse(dateMatch.Value, out dt))
+                            MimeMessage message;
+                            try
+                            {
+                                message = folder.GetMessage(uid);
+                            }
+                            catch
+                            {
+                                continue;
+                            }
+
+                            string body = GetBodyText(message);
+                            if (string.IsNullOrWhiteSpace(body))
+                            {
+                                MarkProcessed(folder, uidStr);
+                                continue;
+                            }
+
+                            var match = CertNumberRegex.Match(body);
+                            if (!match.Success)
+                            {
+                                MarkProcessed(folder, uidStr);
+                                continue;
+                            }
+
+                            string certNumber =
+                                DbHelper.NormalizeCertNumber(match.Groups[1].Value);
+
+                            DateTime? revokeDate = null;
+
+                            var dateMatch =
+                                Regex.Match(body, @"(\d{2}[.\-]\d{2}[.\-]\d{4})");
+
+                            if (dateMatch.Success &&
+                                DateTime.TryParse(dateMatch.Value, out DateTime dt))
+                            {
                                 revokeDate = dt;
+                            }
+
+                            bool ok =
+                                _db.FindAndMarkAsRevokedByCertNumber(
+                                    certNumber,
+                                    null,
+                                    folder.FullName,
+                                    revokeDate?.ToString("dd.MM.yyyy")
+                                );
+
+                            if (ok)
+                            {
+                                applied++;
+                                Log($"Аннулирован сертификат: {certNumber}" +
+                                    (revokeDate.HasValue
+                                        ? $" (дата {revokeDate:dd.MM.yyyy})"
+                                        : ""));
+                            }
+
+                            MarkProcessed(folder, uidStr);
                         }
 
-                        bool ok = _db.FindAndMarkAsRevokedByCertNumber(
-                            certNumber,
-                            null,
-                            folder.FullName,
-                            revokeDate?.ToString("dd.MM.yyyy")
-                        );
-
-                        if (ok)
+                        if (!checkAllMessages && uids.Count > 0)
                         {
-                            applied++;
-                            Log($"Аннулирован сертификат: {certNumber}" +
-                                (revokeDate.HasValue ? $" (дата {revokeDate:dd.MM.yyyy})" : ""));
+                            long maxUid = uids.Max(u => u.Id);
+                            _db.UpdateLastUid(folder.FullName + "_REVOKE", maxUid);
                         }
-
-                        MarkProcessed(folder, uidStr);
-
-                        
-                            
                     }
-                    if (!checkAllMessages && uids.Count > 0)
+                    finally
                     {
-                        long maxUid = uids.Max(u => u.Id);
-                        _db.UpdateLastUid(folder.FullName + "_REVOKE", maxUid);
+                        try { folder.Close(); } catch { }
+
+                        if (client.IsConnected)
+                            client.Disconnect(true);
                     }
-                    folder.Close();
-                    client.Disconnect(true);
                 }
             }
             catch (OperationCanceledException)

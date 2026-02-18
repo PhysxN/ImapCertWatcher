@@ -10,7 +10,6 @@ using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
-using static System.Windows.Forms.VisualStyles.VisualStyleElement.Window;
 
 namespace ImapCertWatcher
 {
@@ -176,8 +175,7 @@ namespace ImapCertWatcher
         {
             try
             {
-                using (var key =
-                    Registry.CurrentUser.OpenSubKey(AUTOSTART_REG_PATH, true))
+                using (var key = Registry.CurrentUser.CreateSubKey(AUTOSTART_REG_PATH))
                 {
                     if (key == null) return;
 
@@ -234,7 +232,7 @@ namespace ImapCertWatcher
 
         private async void CheckNow_Click(object sender, RoutedEventArgs e)
         {
-            if (_isChecking)
+            if (_checkCts != null)
                 return;
 
             try
@@ -264,7 +262,7 @@ namespace ImapCertWatcher
 
         private async void CheckAll_Click(object sender, RoutedEventArgs e)
         {
-            if (_isChecking)
+            if (_checkCts != null)
                 return;
 
             try
@@ -276,9 +274,14 @@ namespace ImapCertWatcher
                 AppendLog("ПОЛНАЯ проверка всех писем");
                 SetStatus("Идёт полная проверка почты...");
 
-                await _server.RequestFullCheckAsync();
+                await _server.RequestFullCheckAsync(_checkCts.Token);
 
                 SetStatus("Сервер работает");
+            }
+            catch (Exception ex)
+            {
+                AppendLog("Ошибка полной проверки: " + ex.Message);
+                SetStatus("Ошибка");
             }
             finally
             {
@@ -382,7 +385,7 @@ namespace ImapCertWatcher
 
         protected override void OnClosing(CancelEventArgs e)
         {
-            if (_server.Settings.MinimizeToTrayOnClose)
+            if (_server?.Settings?.MinimizeToTrayOnClose == true)
             {
                 e.Cancel = true;
                 Hide();
@@ -390,7 +393,19 @@ namespace ImapCertWatcher
                 return;
             }
 
+            try
+            {
+                _server?.Dispose();
+            }
+            catch { }
+
             _trayIcon.Visible = false;
+
+            try
+            {
+                _trayIcon?.Dispose();
+            }
+            catch { }
 
             base.OnClosing(e);
         }

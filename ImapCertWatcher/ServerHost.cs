@@ -121,7 +121,7 @@ namespace ImapCertWatcher.Server
                     return "OK";
 
                 case "FULL_CHECK":
-                    _ = RequestFullCheckAsync();
+                    _ = RequestFullCheckAsync(CancellationToken.None);
                     return "OK";
 
                 case "STATUS":
@@ -185,10 +185,16 @@ namespace ImapCertWatcher.Server
 
                 case "MARK_DELETED":
 
-                    var dparts = cmd.Split('|');
+                    var dparts = originalCmd.Split('|');
 
-                    int did = int.Parse(dparts[1]);
-                    bool deleted = bool.Parse(dparts[2]);
+                    if (dparts.Length < 3)
+                        return "ERROR BAD FORMAT\n";
+
+                    if (!int.TryParse(dparts[1], out int did))
+                        return "ERROR BAD ID\n";
+
+                    if (!bool.TryParse(dparts[2], out bool deleted))
+                        return "ERROR BAD FLAG\n";
 
                     _db.MarkAsDeleted(did, deleted);
 
@@ -200,10 +206,26 @@ namespace ImapCertWatcher.Server
                     {
                         try
                         {
-                            var parts = cmd.Split(new[] { '|' }, 3);
+                            var parts = originalCmd.Split(new[] { '|' }, 3);
 
-                            int nid = int.Parse(parts[1]);
-                            string note = parts[2];
+                            if (parts.Length < 3)
+                                return "ERROR BAD FORMAT\n";
+
+                            if (!int.TryParse(parts[1], out int nid))
+                                return "ERROR BAD ID\n";
+
+                            string base64Note = parts[2];
+
+                            string note;
+                            try
+                            {
+                                note = Encoding.UTF8.GetString(
+                                    Convert.FromBase64String(base64Note));
+                            }
+                            catch
+                            {
+                                return "ERROR BAD DATA\n";
+                            }
 
                             _log($"UPDATE_NOTE received: ID={nid}");
 
@@ -224,11 +246,25 @@ namespace ImapCertWatcher.Server
                     {
                         try
                         {
-                            var aparts = cmd.Split(new[] { '|' }, 4);
+                            var aparts = originalCmd.Split(new[] { '|' }, 4);
 
-                            int certId = int.Parse(aparts[1]);
+                            if (aparts.Length < 4)
+                                return "ERROR BAD FORMAT\n";
+
+                            if (!int.TryParse(aparts[1], out int certId))
+                                return "ERROR BAD ID\n";
+
                             string fileName = aparts[2];
-                            byte[] data = Convert.FromBase64String(aparts[3]);
+
+                            byte[] data;
+                            try
+                            {
+                                data = Convert.FromBase64String(aparts[3]);
+                            }
+                            catch
+                            {
+                                return "ERROR BAD DATA\n";
+                            }
 
                             _log($"ADD_ARCHIVE received: ID={certId}, Cert={fileName}, Size={data.Length} bytes");
 
@@ -249,17 +285,26 @@ namespace ImapCertWatcher.Server
 
                 case "GET_ARCHIVE":
                     {
+                        var gparts = originalCmd.Split('|');
 
-                        int gid = int.Parse(cmd.Split('|')[1]);
+                        if (gparts.Length < 2)
+                            return "ARCHIVE EMPTY\n";
+
+                        if (!int.TryParse(gparts[1], out int gid))
+                            return "ARCHIVE EMPTY\n";
 
                         var result = _db.GetArchiveFromDb(gid);
 
-                        if (result.data == null)
+                        if (result.data == null || result.data.Length == 0)
                             return "ARCHIVE EMPTY\n";
+
                         _log($"GET_ARCHIVE request: ID={gid}");
+
                         string fileName = result.fileName;
                         var base64 = Convert.ToBase64String(result.data);
+
                         _log($"GET_ARCHIVE OK: ID={gid}, Size={result.data.Length}");
+
                         return "ARCHIVE|" + fileName + "|" + base64;
                     }
 
@@ -269,8 +314,13 @@ namespace ImapCertWatcher.Server
                         {
                             var bparts = originalCmd.Split('|');
 
-                            int bid = int.Parse(bparts[1]);
-                            string building = bparts[2];
+                            if (bparts.Length < 3)
+                                return "ERROR BAD FORMAT\n";
+
+                            if (!int.TryParse(bparts[1], out int bid))
+                                return "ERROR BAD ID\n";
+
+                            string building = bparts[2] ?? "";
 
                             _log($"SET_BUILDING received: ID={bid}, Building='{building}'");
 
@@ -316,9 +366,16 @@ namespace ImapCertWatcher.Server
                     }
                 case "SET_TOKEN":
                     {
-                        var parts = cmd.Split('|');
-                        int certId = int.Parse(parts[1]);
-                        int tokenId = int.Parse(parts[2]);
+                        var parts = originalCmd.Split('|');
+
+                        if (parts.Length < 3)
+                            return "ERROR BAD FORMAT";
+
+                        if (!int.TryParse(parts[1], out int certId))
+                            return "ERROR BAD CERT";
+
+                        if (!int.TryParse(parts[2], out int tokenId))
+                            return "ERROR BAD TOKEN";
 
                         _db.AssignToken(tokenId, certId);
 
@@ -328,7 +385,7 @@ namespace ImapCertWatcher.Server
                     {
                         try
                         {
-                            var parts = cmd.Split('|');
+                            var parts = originalCmd.Split('|');
 
                             if (parts.Length < 2)
                                 return "ERROR|INVALID_SN";
@@ -360,14 +417,25 @@ namespace ImapCertWatcher.Server
 
                 case "DELETE_TOKEN":
                     {
-                        int id = int.Parse(cmd.Split('|')[1]);
+                        var parts = originalCmd.Split('|');
+
+                        if (parts.Length < 2)
+                            return "ERROR";
+
+                        if (!int.TryParse(parts[1], out int id))
+                            return "ERROR";
                         _db.DeleteToken(id);
                         return "OK";
                     }
                 case "UNASSIGN_TOKEN":
                     {
-                        var parts = cmd.Split('|');
-                        int tokenId = int.Parse(parts[1]);
+                        var parts = originalCmd.Split('|');
+
+                        if (parts.Length < 2)
+                            return "ERROR BAD FORMAT";
+
+                        if (!int.TryParse(parts[1], out int tokenId))
+                            return "ERROR BAD TOKEN";
 
                         _db.UnassignToken(tokenId);
 
@@ -466,7 +534,7 @@ namespace ImapCertWatcher.Server
             }
         }
 
-        public async Task<string> RequestFullCheckAsync()
+        public async Task<string> RequestFullCheckAsync(CancellationToken token)
         {
             if (!await _checkLock.WaitAsync(0))
                 return "BUSY RUNNING";
@@ -481,11 +549,12 @@ namespace ImapCertWatcher.Server
 
                 // просто вызываем синхронные методы
                 using (var timeoutCts = new CancellationTokenSource(TimeSpan.FromMinutes(15)))
+                using (var linked = CancellationTokenSource.CreateLinkedTokenSource(token, timeoutCts.Token))
                 {
                     try
                     {
-                        _newWatcher.ProcessNewCertificates(true, timeoutCts.Token);
-                        _revokeWatcher.ProcessRevocations(true, timeoutCts.Token);
+                        _newWatcher.ProcessNewCertificates(true, linked.Token);
+                        _revokeWatcher.ProcessRevocations(true, linked.Token);
                     }
                     catch (OperationCanceledException)
                     {

@@ -22,7 +22,7 @@ namespace ImapCertWatcher.Client
                     await writer.WriteLineAsync(command);
 
                     // ЧИТАЕМ ВЕСЬ ОТВЕТ ЦЕЛИКОМ
-                    var response = await reader.ReadToEndAsync();
+                    var response = await reader.ReadLineAsync();
 
                     return response;
                 }
@@ -32,11 +32,14 @@ namespace ImapCertWatcher.Client
         {
             string response = await SendAsync(host, port, "GET_ARCHIVE|" + certId);
 
-            if (!response.StartsWith("ARCHIVE "))
+            if (string.IsNullOrEmpty(response) || !response.StartsWith("ARCHIVE|"))
                 return;
 
-            var payload = response.Substring(8);
+            var payload = response.Substring("ARCHIVE|".Length);
             var parts = payload.Split(new[] { '|' }, 2);
+
+            if (parts.Length < 2)
+                return;
 
             string fileName = parts[0];
             byte[] data = Convert.FromBase64String(parts[1]);

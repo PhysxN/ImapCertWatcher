@@ -31,7 +31,11 @@ namespace ImapCertWatcher.Utils
             if (_disposed)
                 throw new ObjectDisposedException(nameof(SafeAsyncTimer));
 
-            _timer = new Timer(async _ => await ExecuteAsync(), null, initialDelay, period);
+            _timer = new Timer(_ =>
+            {
+                // fire-and-forget Ч безопасно, т.к. ExecuteAsync сам ловит исключени€
+                _ = ExecuteAsync();
+            }, null, initialDelay, period);
         }
 
         /// <summary>
@@ -53,8 +57,10 @@ namespace ImapCertWatcher.Utils
 
             try
             {
-                var cts = new CancellationTokenSource(TimeSpan.FromMinutes(10)); // Timeout 10 мин
-                await _asyncCallback(cts.Token);
+                using (var cts = new CancellationTokenSource(TimeSpan.FromMinutes(10))) // Timeout 10 мин
+                {
+                    await _asyncCallback(cts.Token);
+                }
             }
             catch (OperationCanceledException)
             {
@@ -76,6 +82,11 @@ namespace ImapCertWatcher.Utils
         public void Stop()
         {
             _timer?.Change(Timeout.Infinite, Timeout.Infinite);
+
+            lock (_syncLock)
+            {
+                _isExecuting = false;
+            }
         }
 
         public void Dispose()
@@ -84,7 +95,10 @@ namespace ImapCertWatcher.Utils
                 return;
 
             Stop();
+
             _timer?.Dispose();
+            _timer = null;
+
             _disposed = true;
         }
     }

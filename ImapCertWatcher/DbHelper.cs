@@ -34,7 +34,7 @@ namespace ImapCertWatcher.Data
                 Password = string.IsNullOrEmpty(_settings.FbPassword) ? "masterkey" : _settings.FbPassword,
                 DataSource = string.IsNullOrEmpty(_settings.FbServer) ? "127.0.0.1" : _settings.FbServer,
                 Port = 3050,
-                // по умолчанию используем WIN1251 если не указано
+                // по умолчанию используем UTF8 если не указано
                 Charset = string.IsNullOrEmpty(_settings.FbCharset) ? "UTF8" : _settings.FbCharset,
                 Dialect = _settings.FbDialect,
                 ServerType = FbServerType.Default,
@@ -885,7 +885,7 @@ ROWS 1";
                     {
                         // Берём самую "свежую" запись по дате окончания
                         cmd.CommandText = @"
-                                            SELECT
+                                            SELECT FIRST 1
                                                 c.ID,
                                                 c.FIO,
                                                 c.DATE_START,
@@ -905,7 +905,8 @@ ROWS 1";
                                                 (SELECT COUNT(*) FROM CERT_ARCHIVES ca WHERE ca.CERT_ID = c.ID) AS HAS_ARCHIVE
                                             FROM CERTS c
                                             LEFT JOIN TOKENS t ON t.ID = c.TOKEN_ID
-                                            ORDER BY c.DATE_END";
+                                            WHERE UPPER(TRIM(c.FIO)) = @fio
+                                            ORDER BY c.DATE_END DESC";
                         cmd.Parameters.AddWithValue("@fio", fioNorm);
                         using (var rdr = cmd.ExecuteReader())
                         {
@@ -1304,6 +1305,7 @@ MATCHING (FOLDER_PATH)";
                                             (SELECT COUNT(*) FROM CERT_ARCHIVES ca WHERE ca.CERT_ID = c.ID) AS HAS_ARCHIVE
                                         FROM CERTS c
                                         LEFT JOIN TOKENS t ON t.ID = c.TOKEN_ID
+                                        {whereClause}
                                         ORDER BY c.DATE_END";
 
                     using (var rdr = cmd.ExecuteReader())
@@ -1742,15 +1744,14 @@ VALUES (@sn)";
                             using (var upd = conn.CreateCommand())
                             {
                                 upd.CommandText = @"
-                                        UPDATE CERTS
-                                            SET
-                                                IS_DELETED = 1,
-                                                IS_REVOKED = 1,
-                                                REVOKE_DATE = @revDate,
-                                                FOLDER_PATH = @folder
-                                            WHERE ID = @id
-                                              AND IS_REVOKED = 0
-                                        ";
+                                                        UPDATE CERTS
+                                                        SET
+                                                            IS_DELETED = 1,
+                                                            IS_REVOKED = 1,
+                                                            REVOKE_DATE = @revDate,
+                                                            FOLDER_PATH = @folder
+                                                        WHERE UPPER(TRIM(CERT_NUMBER)) = @cert
+                                                          AND IS_REVOKED = 0";
 
                                 DateTime parsedDate = DateTime.Now;
 

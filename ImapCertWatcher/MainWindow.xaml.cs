@@ -105,8 +105,7 @@ namespace ImapCertWatcher
             
             try
             {
-                InitializeComponent();
-                dgTokens.ItemsSource = _filteredTokens;
+                InitializeComponent();                
                 SetServerState(ServerConnectionState.Offline);
 
                 // Инициализация мини-лога
@@ -256,7 +255,8 @@ namespace ImapCertWatcher
                 // Убираем мусор перевода строки
                 response = response.Trim();
 
-                return JsonConvert.DeserializeObject<List<CertRecord>>(response);
+                var result = JsonConvert.DeserializeObject<List<CertRecord>>(response);
+                return result ?? new List<CertRecord>();
             }
 
             public async Task<List<TokenRecord>> GetTokens()
@@ -266,9 +266,11 @@ namespace ImapCertWatcher
                     _settings.ServerPort,
                     "GET_TOKENS");
 
-                response = response.Replace("TOKENS ", "").Trim();
+                if (response.StartsWith("TOKENS "))
+                    response = response.Substring(7);
 
-                return JsonConvert.DeserializeObject<List<TokenRecord>>(response);
+                var result = JsonConvert.DeserializeObject<List<TokenRecord>>(response);
+                return result ?? new List<TokenRecord>();
             }
 
             public async Task<List<TokenRecord>> GetFreeTokens()
@@ -278,9 +280,13 @@ namespace ImapCertWatcher
                     _settings.ServerPort,
                     "GET_FREE_TOKENS");
 
-                response = response.Replace("TOKENS ", "").Trim();
+                if (response.StartsWith("TOKENS "))
+                    response = response.Substring(7);
 
-                return JsonConvert.DeserializeObject<List<TokenRecord>>(response);
+                response = response.Trim();
+
+                var result = JsonConvert.DeserializeObject<List<TokenRecord>>(response);
+                return result ?? new List<TokenRecord>();
             }
 
             public async Task AssignToken(int certId, int tokenId)
@@ -364,7 +370,7 @@ namespace ImapCertWatcher
                 if (string.IsNullOrWhiteSpace(response) ||
                     !response.StartsWith("STATE|"))
                 {
-                    StartReconnectBackoff();
+                    await StartReconnectBackoff();
                     return;
                 }
 
@@ -374,7 +380,7 @@ namespace ImapCertWatcher
             catch
             {
                 // 🔴 TCP ошибка
-                StartReconnectBackoff();
+                await StartReconnectBackoff();
             }
             finally
             {
@@ -601,34 +607,9 @@ namespace ImapCertWatcher
         {
             try
             {
-                // Оптимизация: обновляем только видимые элементы в DataGrid
-                // Это значительно снижает нагрузку при большом количестве записей
-                
-                if (dgCerts != null && dgCerts.ItemsSource is IEnumerable<CertRecord> visibleItems)
+                foreach (var item in _items)
                 {
-                    // Обновляем только видимые элементы
-                    foreach (var item in visibleItems)
-                    {
-                        if (item != null)
-                        {
-                            item.RefreshDaysLeft();
-                        }
-                    }
-                }
-
-                // Также обновляем отфильтрованные элементы в памяти (но не все сразу)
-                // Это гарантирует, что данные будут актуальны для поиска/фильтрации
-                if (_items.Count > 0)
-                {
-                    // Обновляем только первые 100 элементов за раз, чтобы не зависнуть
-                    int updateCount = Math.Min(100, _items.Count);
-                    for (int i = 0; i < updateCount; i++)
-                    {
-                        if (_items[i] != null)
-                        {
-                            _items[i].RefreshDaysLeft();
-                        }
-                    }
+                    item?.RefreshDaysLeft();
                 }
             }
             catch (Exception ex)
@@ -911,7 +892,7 @@ namespace ImapCertWatcher
                 // Генерация файла в фоновом потоке
                 await Task.Run(() =>
                 {
-                    GenerateExcelFile(dataToExport, filePath);
+                    TryGenerateExcelWithClosedXML(dataToExport, filePath);
                 });
 
                 // Сообщение об успехе
@@ -993,14 +974,14 @@ namespace ImapCertWatcher
 
                 // Заголовок отчета
                 worksheet.Cell(1, 1).Value = "Отчет по сертификатам ЭЦП";
-                worksheet.Range(1, 1, 1, 8).Merge();
+                worksheet.Range(1, 1, 1, 9).Merge();
                 worksheet.Cell(1, 1).Style.Font.Bold = true;
                 worksheet.Cell(1, 1).Style.Font.FontSize = 14;
                 worksheet.Cell(1, 1).Style.Alignment.Horizontal = ClosedXML.Excel.XLAlignmentHorizontalValues.Center;
 
                 // Подзаголовок с датой
                 worksheet.Cell(2, 1).Value = $"Сформирован: {DateTime.Now:dd.MM.yyyy HH:mm}";
-                worksheet.Range(2, 1, 2, 8).Merge();
+                worksheet.Range(2, 1, 2, 9).Merge();
                 worksheet.Cell(2, 1).Style.Font.Italic = true;
                 worksheet.Cell(2, 1).Style.Alignment.Horizontal = ClosedXML.Excel.XLAlignmentHorizontalValues.Center;
 
@@ -1029,35 +1010,38 @@ namespace ImapCertWatcher
                 {
                     worksheet.Cell(row, 1).Value = record.Fio ?? "";
                     worksheet.Cell(row, 2).Value = record.CertNumber ?? "";
-                    worksheet.Cell(row, 3).Value = record.DateStart;
-                    worksheet.Cell(row, 3).Style.NumberFormat.Format = "dd.mm.yyyy";
-                    worksheet.Cell(row, 4).Value = record.DateEnd;
-                    worksheet.Cell(row, 4).Style.NumberFormat.Format = "dd.mm.yyyy";
-                    worksheet.Cell(row, 5).Value = record.DaysLeft;
-                    worksheet.Cell(row, 6).Value = record.Building ?? "";
-                    worksheet.Cell(row, 7).Value = record.Note ?? "";
-                    worksheet.Cell(row, 8).Value = record.IsRevoked ? "Аннулирован" : record.IsDeleted ? "Удален" : "Активен";
+                    worksheet.Cell(row, 3).Value = record.TokenSn ?? "";
+                    worksheet.Cell(row, 4).Value = record.DateStart;
+                    worksheet.Cell(row, 4).Style.NumberFormat.Format = "dd.MM.yyyy";
+                    worksheet.Cell(row, 5).Value = record.DateEnd;
+                    worksheet.Cell(row, 5).Style.NumberFormat.Format = "dd.MM.yyyy";
+                    worksheet.Cell(row, 6).Value = record.DaysLeft;
+                    worksheet.Cell(row, 7).Value = record.Building ?? "";
+                    worksheet.Cell(row, 8).Value = record.Note ?? "";
+                    worksheet.Cell(row, 9).Value = record.IsRevoked
+                        ? "Аннулирован"
+                        : record.IsDeleted ? "Удален" : "Активен";
 
                     // Цветовое кодирование по сроку действия
                     if (!record.IsDeleted)
                     {
                         if (record.DaysLeft <= 10)
                         {
-                            worksheet.Range(row, 1, row, 8).Style.Fill.BackgroundColor = ClosedXML.Excel.XLColor.LightCoral;
+                            worksheet.Range(row, 1, row, 9).Style.Fill.BackgroundColor = ClosedXML.Excel.XLColor.LightCoral;
                         }
                         else if (record.DaysLeft <= 30)
                         {
-                            worksheet.Range(row, 1, row, 8).Style.Fill.BackgroundColor = ClosedXML.Excel.XLColor.LightYellow;
+                            worksheet.Range(row, 1, row, 9).Style.Fill.BackgroundColor = ClosedXML.Excel.XLColor.LightYellow;
                         }
                         else
                         {
-                            worksheet.Range(row, 1, row, 8).Style.Fill.BackgroundColor = ClosedXML.Excel.XLColor.LightGreen;
+                            worksheet.Range(row, 1, row, 9).Style.Fill.BackgroundColor = ClosedXML.Excel.XLColor.LightGreen;
                         }
                     }
                     else
                     {
                         // Для удаленных записей - серый цвет
-                        worksheet.Range(row, 1, row, 8).Style.Fill.BackgroundColor = ClosedXML.Excel.XLColor.LightGray;
+                        worksheet.Range(row, 1, row, 9).Style.Fill.BackgroundColor = ClosedXML.Excel.XLColor.LightGray;
                     }
 
                     // Применяем стиль границ ко всем ячейкам строки
@@ -1128,6 +1112,8 @@ namespace ImapCertWatcher
                 if (_api == null)
                 {
                     AddToMiniLog("API ещё не инициализирован");
+                    SetServerState(ServerConnectionState.Offline); // 👈 Добавить сброс состояния
+                    statusText.Text = "Ошибка: API не инициализирован"; // 👈 Добавить сообщение пользователю
                     return;
                 }
 
@@ -1140,12 +1126,13 @@ namespace ImapCertWatcher
 
                 await Task.WhenAll(certTask, tokensTask, freeTask);
 
-                // ✅ если дошли сюда — сервер точно жив
+                // 👇 Дополнительная проверка на случай, если Result всё-таки null
+                // Хотя Tasks уже завершены, Result технически может быть null
                 SetServerState(ServerConnectionState.Online);
 
-                var list = certTask.Result ?? new List<CertRecord>();
-                var tokens = tokensTask.Result ?? new List<TokenRecord>();
-                var freeTokens = freeTask.Result ?? new List<TokenRecord>();
+                var list = (await certTask) ?? new List<CertRecord>(); // 👈 Лучше использовать await вместо .Result
+                var tokens = (await tokensTask) ?? new List<TokenRecord>();
+                var freeTokens = (await freeTask) ?? new List<TokenRecord>();
 
                 await Dispatcher.InvokeAsync(() =>
                 {
@@ -1182,7 +1169,6 @@ namespace ImapCertWatcher
             {
                 AddToMiniLog("Ошибка загрузки: " + ex.Message);
                 SetServerState(ServerConnectionState.Offline);
-
                 statusText.Text = "Ошибка загрузки с сервера";
             }
             finally
@@ -1192,21 +1178,6 @@ namespace ImapCertWatcher
         }
 
 
-        // ★ МЕТОД ДЛЯ РАСПАКОВКИ АРХИВА В ПАПКУ ★
-        private bool ExtractArchiveToFolder(string archivePath, string extractToFolder)
-        {
-            try
-            {
-                // Используем System.IO.Compression для распаковки ZIP
-                System.IO.Compression.ZipFile.ExtractToDirectory(archivePath, extractToFolder);
-                return true;
-            }
-            catch (Exception ex)
-            {
-                Log($"Ошибка распаковки архива {archivePath}: {ex.Message}");
-                return false;
-            }
-        }
 
         // ★ МЕТОД ДЛЯ СОЗДАНИЯ ВАЛИДНОГО ИМЕНИ ПАПКИ ★
         private string MakeValidFolderName(string name)
@@ -1310,7 +1281,10 @@ namespace ImapCertWatcher
                     _clientSettings.ServerPort,
                     "GET_TOKENS");
 
-                response = response.Replace("TOKENS", "").Trim();
+                if (response.StartsWith("TOKENS "))
+                    response = response.Substring(7);
+
+                response = response.Trim();
 
                 List<TokenRecord> tokens;
 
@@ -1594,6 +1568,15 @@ namespace ImapCertWatcher
 
         private async void BuildingComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
+            // Защита от null для API
+            if (_api == null)
+            {
+                MessageBox.Show("Сервер не подключен");
+                return;
+            }
+
+            if (_isApplyingFromServer)
+                return;
             if (_isSavingBuilding)
                 return;
 
@@ -1608,14 +1591,18 @@ namespace ImapCertWatcher
             if (e.AddedItems.Count == 0)
                 return;
 
-            string newValue = e.AddedItems[0] as string;
+            // Защита от null в AddedItems[0]
+            var newValue = e.AddedItems[0] as string;
+            if (newValue == null)
+                return;
 
             // игнорируем пустые значения
             if (string.IsNullOrWhiteSpace(newValue))
                 return;
 
+            // Защита от null в RemovedItems
             string oldValue = e.RemovedItems.Count > 0
-                ? e.RemovedItems[0] as string
+                ? e.RemovedItems[0] as string ?? record.Building
                 : record.Building;
 
             // если реально не изменилось
@@ -1690,7 +1677,8 @@ namespace ImapCertWatcher
                 dgCerts.CommitEdit(DataGridEditingUnit.Row, true);
 
                 // Обновляем токены после выхода из режима редактирования
-                await LoadFromServer();
+                await ReloadTokensOnly();
+                RebuildAvailableTokens();
 
             }
             catch (Exception ex)
@@ -1908,7 +1896,7 @@ namespace ImapCertWatcher
         }
 
 
-        private async void StartReconnectBackoff()
+        private async Task StartReconnectBackoff()
         {
             if (_reconnectInProgress)
                 return;
@@ -1931,26 +1919,23 @@ namespace ImapCertWatcher
         {
             if (dgCerts.SelectedItem is CertRecord record)
             {
-                var menuItems = dgCerts.ContextMenu.Items;
-                var archiveMenuItem = (MenuItem)menuItems[0];
-                var exportMenuItem = (MenuItem)menuItems[2];
-
-                if (!string.IsNullOrEmpty(record.ArchivePath) && File.Exists(record.ArchivePath))
+                if (!string.IsNullOrEmpty(record.ArchivePath) &&
+                    File.Exists(record.ArchivePath))
                 {
-                    archiveMenuItem.IsEnabled = false;
-                    archiveMenuItem.ToolTip = "Архив уже прикреплен";
+                    miAddArchive.IsEnabled = false;
+                    miAddArchive.ToolTip = "Архив уже прикреплен";
                 }
                 else
                 {
-                    archiveMenuItem.IsEnabled = true;
-                    archiveMenuItem.ToolTip = "Добавить архив с подписью";
+                    miAddArchive.IsEnabled = true;
+                    miAddArchive.ToolTip = "Добавить архив с подписью";
                 }
 
-                exportMenuItem.IsEnabled = dgCerts.SelectedItem != null;
+                miExportSelected.IsEnabled = true;
             }
         }
 
-        
+
 
         private string MakeValidFileName(string name)
         {
@@ -2332,10 +2317,16 @@ namespace ImapCertWatcher
                 string base64 = Convert.ToBase64String(bytes);
                 string fileName = Path.GetFileName(dlg.FileName);
 
-                await TcpCommandClient.SendAsync(
-                    _clientSettings.ServerIp,
-                    _clientSettings.ServerPort,
-                    $"ADD_ARCHIVE|{record.Id}|{fileName}|{base64}");
+                var response = await TcpCommandClient.SendAsync(
+                                _clientSettings.ServerIp,
+                                _clientSettings.ServerPort,
+                                $"ADD_ARCHIVE|{record.Id}|{fileName}|{base64}");
+
+                if (!response.StartsWith("OK"))
+                {
+                    MessageBox.Show("Ошибка добавления архива:\n" + response);
+                    return;
+                }
 
                 AddToMiniLog("Архив добавлен");
             }
@@ -2390,16 +2381,11 @@ namespace ImapCertWatcher
                 // ✅ ПРОВЕРКА ЛОКАЛЬНОГО КЭША (ПЕРЕД TCP)
                 // =====================================================
 
-                if (Directory.Exists(certFolder))
+                if (Directory.Exists(certFolder) &&
+                    Directory.EnumerateFileSystemEntries(certFolder).Any())
                 {
-                    var files = Directory.GetFiles(certFolder);
-
-                    if (files.Length > 0)
-                    {
-                        // Уже загружено ранее — просто открываем папку
-                        Process.Start("explorer.exe", certFolder);
-                        return;
-                    }
+                    Process.Start("explorer.exe", certFolder);
+                    return;
                 }
 
                 // =====================================================
@@ -2420,6 +2406,12 @@ namespace ImapCertWatcher
                 // ARCHIVE filename|base64
                 var payload = response.Substring("ARCHIVE|".Length);
                 var parts = payload.Split(new[] { '|' }, 2);
+
+                if (parts.Length < 2)
+                {
+                    MessageBox.Show("Некорректный формат архива");
+                    return;
+                }
 
                 string fileName = parts[0];
                 byte[] fileData = Convert.FromBase64String(parts[1]);
@@ -2506,12 +2498,22 @@ namespace ImapCertWatcher
         {
             if (sender is TextBox tb && tb.DataContext is CertRecord record)
             {
-                await TcpCommandClient.SendAsync(
-                    _clientSettings.ServerIp,
-                    _clientSettings.ServerPort,
-                    $"UPDATE_NOTE|{record.Id}|{tb.Text}");
+                try
+                {
+                    string note = tb.Text ?? "";
+                    string base64Note = Convert.ToBase64String(Encoding.UTF8.GetBytes(note));
 
-                AddToMiniLog("Примечание сохранено");
+                    await TcpCommandClient.SendAsync(
+                        _clientSettings.ServerIp,
+                        _clientSettings.ServerPort,
+                        $"UPDATE_NOTE|{record.Id}|{base64Note}");
+
+                    AddToMiniLog("Примечание сохранено");
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show("Ошибка сохранения примечания:\n" + ex.Message);
+                }
             }
         }
 
