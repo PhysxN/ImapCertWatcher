@@ -7,6 +7,7 @@ using ImapCertWatcher.Services;
 using ImapCertWatcher.UI;
 using ImapCertWatcher.Utils;
 using Microsoft.Win32;
+using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -16,6 +17,7 @@ using System.Data;
 using System.Data.OleDb;
 using System.Diagnostics;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Reflection;
 using System.Security.Authentication;
@@ -25,12 +27,11 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using Forms = System.Windows.Forms;
-using Newtonsoft.Json;
-using System.IO.Compression;
 
 namespace ImapCertWatcher
 {
@@ -58,7 +59,7 @@ namespace ImapCertWatcher
         private bool _isDarkTheme = false;        
         private bool _certsLoadedOnce = false;
         private bool _showBusyTokens = false;
-        private bool _isUpdatingTokensGrid = false;
+        private bool _isAssigningToken = false;
 
 
         private DispatcherTimer _serverMonitorTimer;
@@ -67,7 +68,8 @@ namespace ImapCertWatcher
         private bool _reconnectInProgress = false;
         private bool _isLoadingFromServer = false;
         private bool _isApplyingFromServer = false;
-        private bool _monitorBusy = false;
+        private int _monitorBusyFlag = 0;
+        private int _reconnectBusy = 0;
 
         enum ServerConnectionState
         {
@@ -159,24 +161,6 @@ namespace ImapCertWatcher
             }
         }
 
-        private bool IsWorkingTime()
-        {
-            var now = DateTime.Now;
-
-            // Суббота/воскресенье — не рабочие
-            if (now.DayOfWeek == DayOfWeek.Saturday || now.DayOfWeek == DayOfWeek.Sunday)
-                return false;
-
-            var t = now.TimeOfDay;
-            var start = new TimeSpan(8, 0, 0);   // 08:00
-            var end = new TimeSpan(16, 30, 0); // 16:30
-
-            return t >= start && t <= end;
-        }
-
-
-
-
         private void SetServerState(ServerConnectionState state)
         {
             if (_serverState == state && state != ServerConnectionState.Connecting)
@@ -184,7 +168,7 @@ namespace ImapCertWatcher
 
             if (!Dispatcher.CheckAccess())
             {
-                Dispatcher.Invoke(() => SetServerState(state));
+                Dispatcher.InvokeAsync(() => SetServerState(state));
                 return;
             }
 
@@ -230,100 +214,23 @@ namespace ImapCertWatcher
             AdjustPollingInterval();
         }
 
-        class ServerApiClient
+        
+        private async void ServerMonitorTimer_Tick(object sender, EventArgs e)
         {
-            private ClientSettings _settings;
-
-            public ServerApiClient(ClientSettings settings)
-            {
-                _settings = settings;
-            }
-
-            public async Task<List<CertRecord>> GetCertificates()
-            {
-                var response = await TcpCommandClient.SendAsync(
-                    _settings.ServerIp,
-                    _settings.ServerPort,
-                    "GET_CERTS");
-
-                if (string.IsNullOrWhiteSpace(response))
-                    return new List<CertRecord>();
-
-                if (response.StartsWith("CERTS "))
-                    response = response.Substring(6);
-
-                // Убираем мусор перевода строки
-                response = response.Trim();
-
-                var result = JsonConvert.DeserializeObject<List<CertRecord>>(response);
-                return result ?? new List<CertRecord>();
-            }
-
-            public async Task<List<TokenRecord>> GetTokens()
-            {
-                var response = await TcpCommandClient.SendAsync(
-                    _settings.ServerIp,
-                    _settings.ServerPort,
-                    "GET_TOKENS");
-
-                if (response.StartsWith("TOKENS "))
-                    response = response.Substring(7);
-
-                var result = JsonConvert.DeserializeObject<List<TokenRecord>>(response);
-                return result ?? new List<TokenRecord>();
-            }
-
-            public async Task<List<TokenRecord>> GetFreeTokens()
-            {
-                var response = await TcpCommandClient.SendAsync(
-                    _settings.ServerIp,
-                    _settings.ServerPort,
-                    "GET_FREE_TOKENS");
-
-                if (response.StartsWith("TOKENS "))
-                    response = response.Substring(7);
-
-                response = response.Trim();
-
-                var result = JsonConvert.DeserializeObject<List<TokenRecord>>(response);
-                return result ?? new List<TokenRecord>();
-            }
-
-            public async Task AssignToken(int certId, int tokenId)
-            {
-                await TcpCommandClient.SendAsync(
-                    _settings.ServerIp,
-                    _settings.ServerPort,
-                    $"SET_TOKEN|{certId}|{tokenId}");
-            }
-
-            public async Task UpdateBuilding(int id, string building)
-            {
-                await TcpCommandClient.SendAsync(
-                    _settings.ServerIp,
-                    _settings.ServerPort,
-                    $"SET_BUILDING|{id}|{building}");
-            }
-
-            public async Task MarkDeleted(int id, bool deleted)
-            {
-                await TcpCommandClient.SendAsync(
-                    _settings.ServerIp,
-                    _settings.ServerPort,
-                    $"MARK_DELETED|{id}|{deleted}");
-            }
+            await UpdateServerMonitor();
         }
-        private async void StartServerMonitor()
+
+        private void StartServerMonitor()
         {
+            if (_serverMonitorTimer != null)
+                return;
+
             _serverMonitorTimer = new DispatcherTimer();
             _serverMonitorTimer.Interval = PollConnecting;
-            _serverMonitorTimer.Tick += async (s, e) =>
-            {
-                await UpdateServerMonitor();
-            };
+            _serverMonitorTimer.Tick += ServerMonitorTimer_Tick;
 
             _serverMonitorTimer.Start();
-            await UpdateServerMonitor();
+            _ = UpdateServerMonitor();
         }
 
         private void AdjustPollingInterval()
@@ -354,17 +261,17 @@ namespace ImapCertWatcher
 
         private async Task UpdateServerMonitor()
         {
-            if (_monitorBusy)
+            // ✅ Защита от null API
+            if (_api == null)
                 return;
 
-            _monitorBusy = true;
+            if (Interlocked.Exchange(ref _monitorBusyFlag, 1) == 1)
+                return;
 
             try
             {
-                var response = await TcpCommandClient.SendAsync(
-                    _clientSettings.ServerIp,
-                    _clientSettings.ServerPort,
-                    "STATUS");
+                var response = (await _api.SendCommand("STATUS"))?.Trim();
+                
 
                 // 🔴 Любая некорректность ответа → уходим в backoff
                 if (string.IsNullOrWhiteSpace(response) ||
@@ -384,7 +291,7 @@ namespace ImapCertWatcher
             }
             finally
             {
-                _monitorBusy = false;
+                Interlocked.Exchange(ref _monitorBusyFlag, 0);
             }
         }
 
@@ -392,8 +299,6 @@ namespace ImapCertWatcher
         {
             try
             {
-                // STATE|BUSY=1|PROGRESS=30|STAGE=Checking mail|TIMER=12
-
                 var parts = stateLine.Split('|');
 
                 bool isBusy = false;
@@ -404,49 +309,40 @@ namespace ImapCertWatcher
                 foreach (var part in parts)
                 {
                     if (part.StartsWith("BUSY="))
-                    {
-                        var value = part.Replace("BUSY=", "");
-                        isBusy = value == "1";
-                    }
+                        isBusy = part.Substring(5) == "1";
 
                     else if (part.StartsWith("PROGRESS="))
-                        int.TryParse(part.Replace("PROGRESS=", ""), out progress);
+                        int.TryParse(part.Substring(9), out progress);
 
                     else if (part.StartsWith("TIMER="))
-                        int.TryParse(part.Replace("TIMER=", ""), out timerMinutes);
+                        int.TryParse(part.Substring(6), out timerMinutes);
 
                     else if (part.StartsWith("STAGE="))
-                        stage = part.Replace("STAGE=", "");
+                        stage = part.Substring(6);
                 }
 
-                Dispatcher.Invoke(() =>
+                _reconnectDelaySeconds = 2;
+
+                SetServerState(isBusy
+                    ? ServerConnectionState.Busy
+                    : ServerConnectionState.Online);
+
+                if (isBusy)
                 {
-                    _reconnectDelaySeconds = 2;
-                    if (isBusy)
-                        SetServerState(ServerConnectionState.Busy);
-                    else
-                        SetServerState(ServerConnectionState.Online);
+                    pbServerProgress.Visibility = Visibility.Visible;
+                    pbServerProgress.Value = progress;
+                }
+                else
+                {
+                    pbServerProgress.Visibility = Visibility.Collapsed;
+                }
 
-                    // Прогресс
-                    if (isBusy)
-                    {
-                        pbServerProgress.Visibility = Visibility.Visible;
-                        pbServerProgress.Value = progress;
-                    }
-                    else
-                    {
-                        pbServerProgress.Visibility = Visibility.Collapsed;
-                    }
-
-                    // Таймер
-                    if (!isBusy)
-                    {
-                        if (timerMinutes <= 0)
-                            txtNextCheck.Text = "Следующая проверка: сейчас";
-                        else
-                            txtNextCheck.Text = $"Следующая проверка через {timerMinutes} мин";
-                    }
-                });
+                if (!isBusy)
+                {
+                    txtNextCheck.Text = timerMinutes <= 0
+                        ? "Следующая проверка: сейчас"
+                        : $"Следующая проверка через {timerMinutes} мин";
+                }
             }
             catch
             {
@@ -454,17 +350,14 @@ namespace ImapCertWatcher
             }
         }
 
-             
-
         private void StartConnectingAnimation()
         {
             if (_connectingAnimationTimer == null)
+            {
                 _connectingAnimationTimer = new DispatcherTimer();
-
-            _connectingAnimationTimer.Interval = TimeSpan.FromMilliseconds(400);
-
-            _connectingAnimationTimer.Tick -= ConnectingAnimationTick;
-            _connectingAnimationTimer.Tick += ConnectingAnimationTick;
+                _connectingAnimationTimer.Interval = TimeSpan.FromMilliseconds(400);
+                _connectingAnimationTimer.Tick += ConnectingAnimationTick;
+            }
 
             if (!_connectingAnimationTimer.IsEnabled)
                 _connectingAnimationTimer.Start();
@@ -524,7 +417,10 @@ namespace ImapCertWatcher
                 _api = new ServerApiClient(_clientSettings);
 
                 await ReportProgressStep("Подключение к серверу...", 20);
+
+                // ✅ Загружаем данные сразу при старте
                 await LoadFromServer();
+                _certsLoadedOnce = true; // Помечаем, что сертификаты уже загружены
 
                 System.Diagnostics.Debug.WriteLine("Данные получены");
 
@@ -636,27 +532,20 @@ namespace ImapCertWatcher
 
         private void AddToMiniLog(string message)
         {
-            try
+            void action()
             {
-                Dispatcher.Invoke(() =>
-                {
-                    // Добавляем новое сообщение
-                    _miniLogMessages.Insert(0, $"{DateTime.Now:HH:mm:ss} - {message}");
+                _miniLogMessages.Insert(0, $"{DateTime.Now:HH:mm:ss} - {message}");
 
-                    // Ограничиваем количество строк
-                    while (_miniLogMessages.Count > MAX_MINI_LOG_LINES)
-                    {
-                        _miniLogMessages.RemoveAt(_miniLogMessages.Count - 1);
-                    }
+                while (_miniLogMessages.Count > MAX_MINI_LOG_LINES)
+                    _miniLogMessages.RemoveAt(_miniLogMessages.Count - 1);
 
-                    // Обновляем оба мини-лога
-                    UpdateMiniLogDisplay();
-                });
+                UpdateMiniLogDisplay();
             }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Ошибка в AddToMiniLog: {ex.Message}");
-            }
+
+            if (Dispatcher.CheckAccess())
+                action();
+            else
+                Dispatcher.InvokeAsync(action);
         }
 
         private void UpdateMiniLogDisplay()
@@ -905,7 +794,10 @@ namespace ImapCertWatcher
                 {
                     try
                     {
-                        Process.Start(filePath);
+                        Process.Start(new ProcessStartInfo(filePath)
+                        {
+                            UseShellExecute = true
+                        });
                     }
                     catch (Exception ex)
                     {
@@ -1112,8 +1004,8 @@ namespace ImapCertWatcher
                 if (_api == null)
                 {
                     AddToMiniLog("API ещё не инициализирован");
-                    SetServerState(ServerConnectionState.Offline); // 👈 Добавить сброс состояния
-                    statusText.Text = "Ошибка: API не инициализирован"; // 👈 Добавить сообщение пользователю
+                    SetServerState(ServerConnectionState.Offline);
+                    statusText.Text = "Ошибка: API не инициализирован";
                     return;
                 }
 
@@ -1126,13 +1018,10 @@ namespace ImapCertWatcher
 
                 await Task.WhenAll(certTask, tokensTask, freeTask);
 
-                // 👇 Дополнительная проверка на случай, если Result всё-таки null
-                // Хотя Tasks уже завершены, Result технически может быть null
-                SetServerState(ServerConnectionState.Online);
-
-                var list = (await certTask) ?? new List<CertRecord>(); // 👈 Лучше использовать await вместо .Result
-                var tokens = (await tokensTask) ?? new List<TokenRecord>();
-                var freeTokens = (await freeTask) ?? new List<TokenRecord>();
+                // ✅ После WhenAll используем .Result (задачи уже завершены)
+                var list = certTask.Result ?? new List<CertRecord>();
+                var tokens = tokensTask.Result ?? new List<TokenRecord>();
+                var freeTokens = freeTask.Result ?? new List<TokenRecord>();
 
                 await Dispatcher.InvokeAsync(() =>
                 {
@@ -1156,6 +1045,9 @@ namespace ImapCertWatcher
                         ApplySearchFilter();
 
                         statusText.Text = $"Загружено записей: {_allItems.Count}";
+
+                        // ✅ Сервер считаем доступным только после успешного заполнения коллекций
+                        SetServerState(ServerConnectionState.Online);
                     }
                     finally
                     {
@@ -1179,24 +1071,7 @@ namespace ImapCertWatcher
 
 
 
-        // ★ МЕТОД ДЛЯ СОЗДАНИЯ ВАЛИДНОГО ИМЕНИ ПАПКИ ★
-        private string MakeValidFolderName(string name)
-        {
-            if (string.IsNullOrEmpty(name))
-                return "Unknown";
-
-            var invalidChars = Path.GetInvalidFileNameChars();
-            var validName = new string(name.Where(ch => !invalidChars.Contains(ch)).ToArray());
-
-            // Убираем пробелы в начале и конце, заменяем множественные пробелы на один
-            validName = System.Text.RegularExpressions.Regex.Replace(validName.Trim(), @"\s+", " ");
-
-            // Ограничиваем длину имени папки
-            if (validName.Length > 50)
-                validName = validName.Substring(0, 50);
-
-            return validName;
-        }
+        
 
         private void ApplySearchFilter()
         {
@@ -1267,81 +1142,14 @@ namespace ImapCertWatcher
             AddToMiniLog("Поиск очищен");
         }
 
-        private async Task LoadTokens()
-        {
-            if (_isUpdatingTokensGrid)
-                return;
-
-            _isUpdatingTokensGrid = true;
-
-            try
-            {
-                var response = await TcpCommandClient.SendAsync(
-                    _clientSettings.ServerIp,
-                    _clientSettings.ServerPort,
-                    "GET_TOKENS");
-
-                if (response.StartsWith("TOKENS "))
-                    response = response.Substring(7);
-
-                response = response.Trim();
-
-                List<TokenRecord> tokens;
-
-                try
-                {
-                    tokens = JsonConvert.DeserializeObject<List<TokenRecord>>(response);
-                }
-                catch
-                {
-                    tokens = new List<TokenRecord>();
-                }
-
-                int? selectedId = null;
-                if (dgTokens.SelectedItem is TokenListItem selectedItem &&
-                        !selectedItem.IsHeader &&
-                        selectedItem.Token != null)
-                {
-                    selectedId = selectedItem.Token.Id;
-                }
-
-                _tokens.Clear();
-                foreach (var t in tokens)
-                    _tokens.Add(t);
-
-                ApplyTokenFilter();
-
-                if (selectedId.HasValue)
-                {
-                    var item = _filteredTokens
-    .FirstOrDefault(x => !x.IsHeader &&
-                         x.Token != null &&
-                         x.Token.Id == selectedId.Value);
-                    if (item != null)
-                        dgTokens.SelectedItem = item;
-                }
-            }
-            catch (Exception ex)
-            {
-                AddToMiniLog("Сервер недоступен (LoadTokens): " + ex.Message);
-
-                Dispatcher.Invoke(() =>
-                {
-                    _filteredTokens.Clear();
-                    dgTokens.IsEnabled = false;
-                    tokensStatusText.Text = "Сервер недоступен";
-                });
-
-                SetServerState(ServerConnectionState.Offline);
-            }
-            finally
-            {
-                _isUpdatingTokensGrid = false;
-            }
-        }
 
         private async void BtnAddToken_Click(object sender, RoutedEventArgs e)
         {
+            if (_api == null)
+            {
+                MessageBox.Show("Сервер не подключен");
+                return;
+            }
             var sn = Prompt.ShowDialog(
                 "Введите серийный номер токена",
                 "Добавление токена");
@@ -1351,12 +1159,15 @@ namespace ImapCertWatcher
 
             sn = sn.Trim().ToUpper();
 
-            var response = await TcpCommandClient.SendAsync(
-                _clientSettings.ServerIp,
-                _clientSettings.ServerPort,
-                $"ADD_TOKEN|{sn}");
+            var response = await _api.AddToken(sn);
 
-            if (response.StartsWith("ERROR|TOKEN_ALREADY_EXISTS"))
+            if (string.IsNullOrEmpty(response))
+            {
+                MessageBox.Show("Нет ответа от сервера");
+                return;
+            }
+
+            if (response?.StartsWith("ERROR|TOKEN_ALREADY_EXISTS") == true)
             {
                 MessageBox.Show(
                     "Токен с таким серийным номером уже существует.",
@@ -1377,11 +1188,15 @@ namespace ImapCertWatcher
             }
 
             await ReloadTokensOnly();
-            
         }
 
         private async void BtnUnassignToken_Click(object sender, RoutedEventArgs e)
         {
+            if (_api == null)
+            {
+                MessageBox.Show("Сервер не подключен");
+                return;
+            }
             if (!(dgTokens.SelectedItem is TokenListItem item) ||
                 item.IsHeader ||
                 item.Token == null)
@@ -1404,19 +1219,22 @@ namespace ImapCertWatcher
             if (result != MessageBoxResult.Yes)
                 return;
 
-            var response = await TcpCommandClient.SendAsync(
-                _clientSettings.ServerIp,
-                _clientSettings.ServerPort,
-                $"UNASSIGN_TOKEN|{token.Id}");
+            var response = await _api.UnassignToken(token.Id);
+
+            if (string.IsNullOrEmpty(response))
+            {
+                MessageBox.Show("Нет ответа от сервера");
+                return;
+            }
 
             if (response.StartsWith("OK"))
             {
-                await LoadFromServer();   // Полное обновление данных
+                await ReloadTokensOnly();
                 AddToMiniLog($"Токен {token.Sn} освобожден");
             }
             else
             {
-                MessageBox.Show("Ошибка освобождения токена.");
+                MessageBox.Show("Ошибка освобождения токена:\n" + response);
             }
         }
 
@@ -1430,7 +1248,8 @@ namespace ImapCertWatcher
                     Width = 400,
                     Height = 150,
                     WindowStartupLocation = WindowStartupLocation.CenterOwner,
-                    ResizeMode = ResizeMode.NoResize
+                    ResizeMode = ResizeMode.NoResize,
+                    Owner = Application.Current.MainWindow
                 };
 
                 var panel = new StackPanel { Margin = new Thickness(10) };
@@ -1451,48 +1270,54 @@ namespace ImapCertWatcher
                 panel.Children.Add(btn);
 
                 win.Content = panel;
+                win.Loaded += (_, __) => tb.Focus();
+
                 return win.ShowDialog() == true ? tb.Text : null;
             }
         }
 
         private async void BtnDeleteToken_Click(object sender, RoutedEventArgs e)
         {
+            if (_api == null)
+            {
+                MessageBox.Show("Сервер не подключен");
+                return;
+            }
             if (dgTokens.SelectedItem is TokenListItem item &&
-    !item.IsHeader &&
-    item.Token != null)
+                !item.IsHeader &&
+                item.Token != null)
             {
                 var token = item.Token;
+
+                var result = MessageBox.Show(
+                    $"Удалить токен {token.Sn}?",
+                    "Подтверждение",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Question);
+
+                if (result != MessageBoxResult.Yes)
+                    return;
+
+                var response = await _api.DeleteToken(token.Id);
+
+                if (string.IsNullOrEmpty(response))
                 {
-                    await TcpCommandClient.SendAsync(
-                        _clientSettings.ServerIp,
-                        _clientSettings.ServerPort,
-                        $"DELETE_TOKEN|{token.Id}");
-
-                    await LoadTokens();
+                    MessageBox.Show("Нет ответа от сервера");
+                    return;
                 }
+
+                if (!response.StartsWith("OK"))
+                {
+                    MessageBox.Show($"Ошибка удаления токена:\n{response}");
+                    return;
+                }
+
+                AddToMiniLog($"Токен {token.Sn} удалён");
+                await ReloadTokensOnly();
             }
-            }
-
-        
-
-        private void ShowProgressBar(bool show)
-        {
-            Dispatcher.Invoke(() =>
-            {
-                var visibility = show ? Visibility.Visible : Visibility.Collapsed;
-
-                // Основная вкладка
-                progressMailCheck.Visibility = visibility;
-
-                // Вкладка настроек
-                progressMailCheckSettings.Visibility = visibility;
-
-                // Вкладка логов
-                progressMailCheckLogs.Visibility = visibility;
-            });
         }
-        
-        
+
+
 
         private async void BtnManualCheck_Click(object sender, RoutedEventArgs e)
         {
@@ -1515,33 +1340,41 @@ namespace ImapCertWatcher
 
         private async Task SendServerCommand(string cmd)
         {
+            if (_api == null)
+            {
+                MessageBox.Show("Сервер не подключен");
+                return;
+            }
             try
             {
                 statusText.Text = "Связь с сервером...";
-                Cursor = Cursors.Wait;
+                Mouse.OverrideCursor = Cursors.Wait;
 
-                var response = await TcpCommandClient.SendAsync(
-                    _clientSettings.ServerIp,
-                    _clientSettings.ServerPort,
-                    cmd);
+                var response = await _api.SendCommand(cmd);
+
+                // ✅ Защита от null/пустого ответа
+                if (string.IsNullOrEmpty(response))
+                {
+                    statusText.Text = "Нет ответа от сервера";
+                    AddToMiniLog("SERVER: <пустой ответ>");
+                    MessageBox.Show("Сервер вернул пустой ответ",
+                        "Предупреждение",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Warning);
+                    return;
+                }
 
                 statusText.Text = "Ответ сервера: " + response;
                 AddToMiniLog("SERVER: " + response);
             }
             catch (Exception ex)
             {
-                MessageBox.Show(
-                    $"Ошибка подключения к серверу:\n{ex.Message}",
-                    "TCP ошибка",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Error);
-
+                MessageBox.Show($"Ошибка подключения:\n{ex.Message}");
                 statusText.Text = "Сервер недоступен";
-                AddToMiniLog("SERVER ERROR: " + ex.Message);
             }
             finally
             {
-                Cursor = Cursors.Arrow;
+                Mouse.OverrideCursor = null;
             }
         }
 
@@ -1613,7 +1446,15 @@ namespace ImapCertWatcher
 
             try
             {
-                await _api.UpdateBuilding(record.Id, newValue);
+                var resp = await _api.UpdateBuilding(record.Id, newValue);
+
+                if (string.IsNullOrEmpty(resp) || !resp.StartsWith("OK"))
+                {
+                    record.Building = oldValue;
+                    CollectionViewSource.GetDefaultView(comboBox.ItemsSource)?.Refresh();
+                    MessageBox.Show("Ошибка сохранения здания");
+                    return;
+                }
 
                 AddToMiniLog($"Здание изменено: {record.Fio} → {newValue}");
                 statusText.Text = "Здание сохранено";
@@ -1624,6 +1465,7 @@ namespace ImapCertWatcher
 
                 // rollback UI если сервер не принял
                 record.Building = oldValue;
+                CollectionViewSource.GetDefaultView(comboBox.ItemsSource)?.Refresh();
             }
             finally
             {
@@ -1644,7 +1486,7 @@ namespace ImapCertWatcher
 
                 foreach (var t in _tokens)
                 {
-                    if (t.IsFree || t.OwnerCertId == cert.Id)
+                    if (t != null && (t.IsFree || t.OwnerCertId == cert.Id))
                         target.Add(t);
                 }
             }
@@ -1652,38 +1494,90 @@ namespace ImapCertWatcher
 
         private async void TokenComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
+            if (_api == null)
+                return;
+
             if (_isApplyingFromServer)
                 return;
 
+            if (_isAssigningToken)
+                return;
+
+            if (e.AddedItems.Count == 0)
+                return;
+
             if (!(sender is ComboBox cb)) return;
+
+            // ✅ Защита от фантомных срабатываний - реагируем только когда список действительно открыт
+            if (!cb.IsKeyboardFocusWithin && !cb.IsDropDownOpen)
+                return;
+
             if (!(cb.DataContext is CertRecord cert)) return;
             if (!(cb.SelectedItem is TokenRecord token)) return;
 
             if (cert.TokenId == token.Id)
                 return;
 
+            int? oldTokenId = cert.TokenId;
+            string oldTokenSn = cert.TokenSn;
+
+            _isAssigningToken = true;
+
             try
             {
-                await _api.AssignToken(cert.Id, token.Id);
+                var response = await _api.AssignToken(cert.Id, token.Id);
 
-                // локально обновляем модель
+                if (string.IsNullOrWhiteSpace(response) || !response.StartsWith("OK"))
+                {
+                    MessageBox.Show("Ошибка назначения токена:\n" + (response ?? "Нет ответа от сервера"));
+
+                    cert.TokenId = oldTokenId;
+                    cert.TokenSn = oldTokenSn;
+
+                    // ✅ Сначала фиксируем изменения в DataGrid
+                    dgCerts.CommitEdit(DataGridEditingUnit.Cell, true);
+                    dgCerts.CommitEdit(DataGridEditingUnit.Row, true);
+
+                    // ✅ Потом обновляем представление
+                    CollectionViewSource.GetDefaultView(cb.ItemsSource)?.Refresh();
+
+                    RebuildAvailableTokens();
+                    return;
+                }
+
                 cert.TokenId = token.Id;
                 cert.TokenSn = token.Sn;
 
-                AddToMiniLog($"Назначен токен {token.Sn} → {cert.Fio}");
-
-                // Завершаем редактирование строки
+                // ✅ Сначала фиксируем изменения в DataGrid
                 dgCerts.CommitEdit(DataGridEditingUnit.Cell, true);
                 dgCerts.CommitEdit(DataGridEditingUnit.Row, true);
 
-                // Обновляем токены после выхода из режима редактирования
-                await ReloadTokensOnly();
-                RebuildAvailableTokens();
+                // ✅ Потом обновляем представление
+                CollectionViewSource.GetDefaultView(cb.ItemsSource)?.Refresh();
 
+                AddToMiniLog($"Назначен токен {token.Sn} → {cert.Fio}");
+
+                RebuildAvailableTokens();
             }
             catch (Exception ex)
             {
+                cert.TokenId = oldTokenId;
+                cert.TokenSn = oldTokenSn;
+
+                // ✅ Сначала фиксируем изменения в DataGrid
+                dgCerts.CommitEdit(DataGridEditingUnit.Cell, true);
+                dgCerts.CommitEdit(DataGridEditingUnit.Row, true);
+
+                // ✅ Потом обновляем представление
+                CollectionViewSource.GetDefaultView(cb.ItemsSource)?.Refresh();
+
+                RebuildAvailableTokens();
+
                 MessageBox.Show("Ошибка назначения токена:\n" + ex.Message);
+            }
+            finally
+            {
+                _isAssigningToken = false;
             }
         }
 
@@ -1701,12 +1595,11 @@ namespace ImapCertWatcher
 
             switch (header)
             {
-                case "Токены":
-                    await ReloadTokensOnly();
+                case "Токены":                    
                     break;
 
                 case "Сертификаты":
-                    await ReloadTokensOnly();
+                    RebuildAvailableTokens();
                     break;
             }
         }
@@ -1724,16 +1617,17 @@ namespace ImapCertWatcher
                 await Dispatcher.InvokeAsync(() =>
                 {
                     _tokens.Clear();
-                    foreach (var t in tokens)
+                    // ✅ Защита от null для списка токенов
+                    foreach (var t in tokens ?? Enumerable.Empty<TokenRecord>())
                         _tokens.Add(t);
 
                     _freeTokens.Clear();
-                    foreach (var t in freeTokens)
+                    // ✅ Защита от null для списка свободных токенов
+                    foreach (var t in freeTokens ?? Enumerable.Empty<TokenRecord>())
                         _freeTokens.Add(t);
 
                     RebuildAvailableTokens();
                     ApplyTokenFilter();
-                    
                 });
             }
             catch (Exception ex)
@@ -1769,6 +1663,11 @@ namespace ImapCertWatcher
         {
             if (dgCerts.SelectedItem is CertRecord record)
             {
+                if (_api == null)
+                {
+                    MessageBox.Show("Сервер не подключен");
+                    return;
+                }
                 try
                 {
                     var result = MessageBox.Show(
@@ -1780,9 +1679,14 @@ namespace ImapCertWatcher
                     if (result != MessageBoxResult.Yes)
                         return;
                     Log($"Пометка на удаление: {record.Fio} (ID: {record.Id})");
-                    await _api.MarkDeleted(record.Id, true);
+                    var resp = await _api.MarkDeleted(record.Id, true);
 
-                    // локальное обновление UI
+                    if (string.IsNullOrEmpty(resp) || !resp.StartsWith("OK"))
+                    {
+                        MessageBox.Show("Ошибка удаления");
+                        return;
+                    }
+
                     record.IsDeleted = true;
 
                     // обновляем представление
@@ -1807,6 +1711,11 @@ namespace ImapCertWatcher
 
         private async void BtnResetRevokes_Click(object sender, RoutedEventArgs e)
         {
+            if (_api == null)
+            {
+                MessageBox.Show("Сервер не подключен");
+                return;
+            }
             var r1 = MessageBox.Show(
                 "Эта операция удалит ВСЮ информацию об аннулировании сертификатов.\n\nПродолжить?",
                 "ВНИМАНИЕ",
@@ -1825,25 +1734,18 @@ namespace ImapCertWatcher
             if (r2 != MessageBoxResult.Yes)
                 return;
 
-            try
+            var resp = await _api.ResetRevokes();
+
+            if (string.IsNullOrEmpty(resp))
             {
-                statusText.Text = "Сброс аннулирований...";
-
-                var resp = await TcpCommandClient.SendAsync(
-                    _clientSettings.ServerIp,
-                    _clientSettings.ServerPort,
-                    "RESET_REVOKES");
-
-                AddToMiniLog("RESET_REVOKES: " + resp);
-
-                await LoadFromServer();
-
-                statusText.Text = "Аннулирования сброшены";
+                MessageBox.Show("Нет ответа от сервера");
+                return;
             }
-            catch (Exception ex)
-            {
-                MessageBox.Show("Ошибка сброса:\n" + ex.Message);
-            }
+
+            AddToMiniLog("RESET_REVOKES: " + resp);
+            await LoadFromServer();
+
+            statusText.Text = "Аннулирования сброшены";
         }
 
 
@@ -1898,22 +1800,25 @@ namespace ImapCertWatcher
 
         private async Task StartReconnectBackoff()
         {
-            if (_reconnectInProgress)
+            if (Interlocked.Exchange(ref _reconnectBusy, 1) == 1)
                 return;
 
-            _reconnectInProgress = true;
-
-
-            SetServerState(ServerConnectionState.Offline);
-
+            // Меняем на Offline только если еще не в этом состоянии
+            if (_serverState != ServerConnectionState.Offline)
+                SetServerState(ServerConnectionState.Offline);
 
             await Task.Delay(_reconnectDelaySeconds * 1000);
 
-            _reconnectDelaySeconds =
-                Math.Min(_reconnectDelaySeconds * 2, MAX_RECONNECT_DELAY);
+            if (_serverState == ServerConnectionState.Offline)
+                _reconnectDelaySeconds =
+                    Math.Min(_reconnectDelaySeconds * 2, MAX_RECONNECT_DELAY);
 
-            _reconnectInProgress = false;
-            SetServerState(ServerConnectionState.Connecting);
+            Interlocked.Exchange(ref _reconnectBusy, 0);
+
+            // Переходим в Connecting только если все еще в Offline 
+            // (не были переведены в другое состояние за время ожидания)
+            if (_serverState == ServerConnectionState.Offline && !_reconnectInProgress)
+                SetServerState(ServerConnectionState.Connecting);
         }
         private void DgCerts_ContextMenuOpening(object sender, ContextMenuEventArgs e)
         {
@@ -1935,42 +1840,26 @@ namespace ImapCertWatcher
             }
         }
 
-
-
-        private string MakeValidFileName(string name)
-        {
-            var invalidChars = Path.GetInvalidFileNameChars();
-            return new string(name.Where(ch => !invalidChars.Contains(ch)).ToArray());
-        }
-
         private void LoadLogs()
         {
             try
             {
                 var logBaseDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "LOG");
+
                 if (!Directory.Exists(logBaseDirectory))
                 {
-                    Dispatcher.Invoke(() =>
-                    {
-                        txtLogs.Text = "Папка логов не существует";
-                        logStatusText.Text = "Логи не найдены";
-                    });
+                    UpdateLogsUI("Папка логов не существует", "Логи не найдены");
                     return;
                 }
 
-                // Ищем папку с сегодняшней датой
                 var todayFolder = Path.Combine(logBaseDirectory, DateTime.Now.ToString("yyyy-MM-dd"));
+
                 if (!Directory.Exists(todayFolder))
                 {
-                    Dispatcher.Invoke(() =>
-                    {
-                        txtLogs.Text = "Логи за сегодня не найдены";
-                        logStatusText.Text = "Нет логов за сегодня";
-                    });
+                    UpdateLogsUI("Логи за сегодня не найдены", "Нет логов за сегодня");
                     return;
                 }
 
-                // Ищем самый свежий файл сессии за сегодня
                 var sessionLogs = Directory.GetFiles(todayFolder, "session_*.log")
                     .Select(f => new FileInfo(f))
                     .OrderByDescending(f => f.CreationTime)
@@ -1978,36 +1867,36 @@ namespace ImapCertWatcher
 
                 if (!sessionLogs.Any())
                 {
-                    Dispatcher.Invoke(() =>
-                    {
-                        txtLogs.Text = "Файлы сессий не найдены";
-                        logStatusText.Text = "Нет логов сессий";
-                    });
+                    UpdateLogsUI("Файлы сессий не найдены", "Нет логов сессий");
                     return;
                 }
 
-                // Берем самый свежий файл сессии (текущей сессии)
                 var latestSessionLog = sessionLogs.First();
-                var logContent = File.ReadAllText(latestSessionLog.FullName);
 
-                Dispatcher.Invoke(() =>
-                {
-                    txtLogs.Text = logContent;
-                    logStatusText.Text = $"Логи текущей сессии ({latestSessionLog.CreationTime:dd.MM.yyyy HH:mm})";
-                    txtLogs.ScrollToEnd();
-                });
+                var lines = File.ReadAllLines(latestSessionLog.FullName);
+
+                var lastLines = lines
+                    .Skip(Math.Max(0, lines.Length - 1000));
+
+                txtLogs.Text = string.Join("\n", lastLines);
+                logStatusText.Text = $"Логи текущей сессии ({latestSessionLog.CreationTime:dd.MM.yyyy HH:mm})";
+                txtLogs.ScrollToEnd();
 
                 AddToMiniLog($"Загружены логи текущей сессии");
             }
             catch (Exception ex)
             {
-                Dispatcher.Invoke(() =>
-                {
-                    txtLogs.Text = $"Ошибка загрузки логов: {ex.Message}";
-                    logStatusText.Text = "Ошибка загрузки";
-                });
+                txtLogs.Text = $"Ошибка загрузки логов: {ex.Message}";
+                logStatusText.Text = "Ошибка загрузки";
                 AddToMiniLog($"Ошибка загрузки логов: {ex.Message}");
             }
+        }
+
+        // Вспомогательный метод для обновления UI
+        private void UpdateLogsUI(string logText, string statusText)
+        {
+            txtLogs.Text = logText;
+            logStatusText.Text = statusText;
         }
 
         private void CleanOldLogs()
@@ -2064,15 +1953,16 @@ namespace ImapCertWatcher
 
             if (header == "Сертификаты")
             {
-                if (_certsLoadedOnce)
-                    return;
-
-                _certsLoadedOnce = true;
-                await LoadFromServer();
+                // ✅ Загружаем только если еще не загружали
+                if (!_certsLoadedOnce)
+                {
+                    _certsLoadedOnce = true;
+                    await LoadFromServer();
+                }
             }
             else if (header == "Токены")
             {
-                await LoadTokens(); // только токены
+                await ReloadTokensOnly(); // только токены
             }
         }
 
@@ -2160,7 +2050,10 @@ namespace ImapCertWatcher
                     Directory.CreateDirectory(logBaseDirectory);
 
                 // Открываем основную папку LOG (пользователь сам увидит папки с датами)
-                System.Diagnostics.Process.Start("explorer.exe", logBaseDirectory);
+                Process.Start(new ProcessStartInfo("explorer.exe", logBaseDirectory)
+                {
+                    UseShellExecute = true
+                });
                 AddToMiniLog("Открыта папка логов");
             }
             catch (Exception ex)
@@ -2199,8 +2092,12 @@ namespace ImapCertWatcher
 
         protected override void OnClosed(EventArgs e)
         {
-            
-            _serverMonitorTimer?.Stop();
+
+            if (_serverMonitorTimer != null)
+            {
+                _serverMonitorTimer.Stop();
+                _serverMonitorTimer.Tick -= ServerMonitorTimer_Tick;
+            }
             base.OnClosed(e);
 
             
@@ -2227,12 +2124,12 @@ namespace ImapCertWatcher
             _filteredTokens.Clear();
 
             var free = _tokens
-                .Where(t => t.IsFree)
+            .Where(t => t != null && t.IsFree)
                 .OrderBy(t => t.Sn)
                 .ToList();
 
             var busy = _tokens
-                .Where(t => !t.IsFree)
+            .Where(t => t != null && !t.IsFree)
                 .OrderBy(t => t.OwnerFio ?? "")
                 .ToList();
 
@@ -2269,23 +2166,33 @@ namespace ImapCertWatcher
 
         private async void BtnRestoreSelected_Click(object sender, RoutedEventArgs e)
         {
+            if (_api == null)
+            {
+                MessageBox.Show("Сервер не подключен");
+                return;
+            }
+
             if (dgCerts.SelectedItem is CertRecord record)
             {
                 try
                 {
-                    await _api.MarkDeleted(record.Id, false);
+                    var resp = await _api.MarkDeleted(record.Id, false);
 
-                    // локальное обновление UI
+                    if (string.IsNullOrEmpty(resp) || !resp.StartsWith("OK"))
+                    {
+                        MessageBox.Show("Ошибка восстановления:\n" + (resp ?? "Нет ответа сервера"));
+                        return;
+                    }
+
+                    // ✅ локально обновляем UI только после OK
                     record.IsDeleted = false;
                     record.IsRevoked = false;
                     record.RevokeDate = null;
 
-                    // обновляем таблицу
                     ApplySearchFilter();
 
                     statusText.Text = "Запись восстановлена";
                     AddToMiniLog("Восстановлено: " + record.Fio);
-                   
                 }
                 catch (Exception ex)
                 {
@@ -2313,22 +2220,49 @@ namespace ImapCertWatcher
                 if (dlg.ShowDialog() != true)
                     return;
 
-                byte[] bytes = File.ReadAllBytes(dlg.FileName);
-                string base64 = Convert.ToBase64String(bytes);
-                string fileName = Path.GetFileName(dlg.FileName);
-
-                var response = await TcpCommandClient.SendAsync(
-                                _clientSettings.ServerIp,
-                                _clientSettings.ServerPort,
-                                $"ADD_ARCHIVE|{record.Id}|{fileName}|{base64}");
-
-                if (!response.StartsWith("OK"))
+                try
                 {
-                    MessageBox.Show("Ошибка добавления архива:\n" + response);
-                    return;
-                }
+                    byte[] bytes = File.ReadAllBytes(dlg.FileName);
+                    string base64 = Convert.ToBase64String(bytes);
+                    string fileName = Path.GetFileName(dlg.FileName);
 
-                AddToMiniLog("Архив добавлен");
+                    var response = await _api.AddArchive(record.Id, fileName, base64);
+
+                    if (string.IsNullOrEmpty(response))
+                    {
+                        MessageBox.Show("Нет ответа от сервера");
+                        return;
+                    }
+
+                    if (!response.StartsWith("OK"))
+                    {
+                        MessageBox.Show("Ошибка добавления архива:\n" + response);
+                        return;
+                    }
+
+                    AddToMiniLog($"Архив {fileName} добавлен к записи {record.Fio}");
+                    statusText.Text = "Архив успешно добавлен";
+                }
+                catch (FileNotFoundException)
+                {
+                    MessageBox.Show("Файл не найден. Возможно, он был удален или перемещен.",
+                        "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    MessageBox.Show("Нет прав доступа к файлу.",
+                        "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
+                catch (IOException ex)
+                {
+                    MessageBox.Show($"Ошибка ввода-вывода при чтении файла:\n{ex.Message}",
+                        "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show($"Неожиданная ошибка при чтении файла:\n{ex.Message}",
+                        "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+                }
             }
         }
 
@@ -2359,6 +2293,15 @@ namespace ImapCertWatcher
 
         private async void BtnOpenArchive_Click(object sender, RoutedEventArgs e)
         {
+            if (_api == null)
+            {
+                MessageBox.Show("Сервер не подключен");
+                return;
+            }
+
+            if (Mouse.OverrideCursor == Cursors.Wait)
+                return;
+
             try
             {
                 var record = dgCerts.SelectedItem as CertRecord;
@@ -2368,42 +2311,39 @@ namespace ImapCertWatcher
                 int certId = record.Id;
                 string fio = record.Fio;
 
-                // TEMP\ImapCertWatcher\ФИО
                 string safeName = MakeSafeFolderName(fio);
+                string certFolder = Path.Combine(GetCertsRoot(), safeName);
 
-                string certsRoot = GetCertsRoot();
+                bool hasFiles = false;
 
-                string certFolder = Path.Combine(
-                    certsRoot,
-                    safeName);
-
-                // =====================================================
-                // ✅ ПРОВЕРКА ЛОКАЛЬНОГО КЭША (ПЕРЕД TCP)
-                // =====================================================
-
-                if (Directory.Exists(certFolder) &&
-                    Directory.EnumerateFileSystemEntries(certFolder).Any())
+                try
                 {
-                    Process.Start("explorer.exe", certFolder);
+                    hasFiles = Directory.Exists(certFolder) &&
+                               Directory.EnumerateFiles(certFolder, "*", SearchOption.AllDirectories).Any();
+                }
+                catch { }
+
+                if (hasFiles)
+                {
+                    Process.Start(new ProcessStartInfo("explorer.exe", certFolder)
+                    {
+                        UseShellExecute = true
+                    });
                     return;
                 }
 
-                // =====================================================
-                // 🔽 ЕСЛИ НЕТ КЭША — ИДЁМ НА СЕРВЕР
-                // =====================================================
+                Mouse.OverrideCursor = Cursors.Wait;
+                statusText.Text = "Загрузка архива...";
 
-                var response = await TcpCommandClient.SendAsync(
-                    _clientSettings.ServerIp,
-                    _clientSettings.ServerPort,
-                    $"GET_ARCHIVE|{certId}");
+                var response = await _api.SendCommand($"GET_ARCHIVE|{certId}");
 
                 if (string.IsNullOrWhiteSpace(response) || !response.StartsWith("ARCHIVE|"))
                 {
+                    Mouse.OverrideCursor = null;
                     MessageBox.Show("Архив не найден");
                     return;
                 }
 
-                // ARCHIVE filename|base64
                 var payload = response.Substring("ARCHIVE|".Length);
                 var parts = payload.Split(new[] { '|' }, 2);
 
@@ -2414,35 +2354,95 @@ namespace ImapCertWatcher
                 }
 
                 string fileName = parts[0];
-                byte[] fileData = Convert.FromBase64String(parts[1]);
-
-                // создаем папку
-                Directory.CreateDirectory(certFolder);
-
-                // сохраняем файл
-                string filePath = Path.Combine(certFolder, fileName);
-
-                File.WriteAllBytes(filePath, fileData);
-
-                // ===== РЕШЕНИЕ ПО ТИПУ ФАЙЛА =====
-
-                if (fileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+                byte[] fileData;
+                try
                 {
-                    ZipFile.ExtractToDirectory(filePath, certFolder);
-
-                    File.Delete(filePath);
-
-                    Process.Start("explorer.exe", certFolder);
+                    fileData = await Task.Run(() => Convert.FromBase64String(parts[1]));
                 }
-                else
+                catch
                 {
-                    // CER — просто открываем папку
-                    Process.Start("explorer.exe", certFolder);
+                    MessageBox.Show("Повреждённые данные архива");
+                    return;
+                }
+
+                string tempZip = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".zip");
+
+                try
+                {
+                    await Task.Run(() => File.WriteAllBytes(tempZip, fileData));
+
+                    statusText.Text = "Распаковка архива...";
+
+                    if (fileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string targetFolder = certFolder;
+                        string finalFolder = targetFolder;
+
+                        await Task.Run(() =>
+                        {
+                            if (Directory.Exists(finalFolder))
+                            {
+                                try
+                                {
+                                    Directory.Delete(finalFolder, true);
+                                }
+                                catch
+                                {
+                                    finalFolder = finalFolder + "_" + DateTime.Now.Ticks;
+                                    Directory.CreateDirectory(finalFolder);
+                                }
+                            }
+
+                            Directory.CreateDirectory(finalFolder);
+                            ZipFile.ExtractToDirectory(tempZip, finalFolder);
+                        });
+
+                        certFolder = finalFolder;
+                    }
+                    else
+                    {
+                        // Для одиночных файлов тоже используем тот же подход
+                        if (Directory.Exists(certFolder))
+                        {
+                            try
+                            {
+                                Directory.Delete(certFolder, true);
+                            }
+                            catch
+                            {
+                                certFolder = certFolder + "_" + DateTime.Now.Ticks;
+                            }
+                        }
+
+                        Directory.CreateDirectory(certFolder);
+                        string filePath = Path.Combine(certFolder, fileName);
+                        await Task.Run(() => File.WriteAllBytes(filePath, fileData));
+                    }
+
+                    Process.Start(new ProcessStartInfo("explorer.exe", certFolder)
+                    {
+                        UseShellExecute = true
+                    });
+
+                    AddToMiniLog($"Архив для {fio} загружен и распакован");
+                    statusText.Text = "Архив успешно загружен";
+                }
+                finally
+                {
+                    if (File.Exists(tempZip))
+                    {
+                        try { File.Delete(tempZip); } catch { }
+                    }
                 }
             }
             catch (Exception ex)
             {
                 MessageBox.Show("Ошибка открытия сертификата:\n" + ex.Message);
+            }
+            finally
+            {
+                Mouse.OverrideCursor = null;
+                statusText.Text = "Готово";
             }
         }
 
@@ -2496,6 +2496,8 @@ namespace ImapCertWatcher
 
         private async void NoteTextBox_LostFocus(object sender, RoutedEventArgs e)
         {
+            if (_api == null)
+                return;
             if (sender is TextBox tb && tb.DataContext is CertRecord record)
             {
                 try
@@ -2503,10 +2505,13 @@ namespace ImapCertWatcher
                     string note = tb.Text ?? "";
                     string base64Note = Convert.ToBase64String(Encoding.UTF8.GetBytes(note));
 
-                    await TcpCommandClient.SendAsync(
-                        _clientSettings.ServerIp,
-                        _clientSettings.ServerPort,
-                        $"UPDATE_NOTE|{record.Id}|{base64Note}");
+                    var resp = await _api.UpdateNote(record.Id, base64Note);
+
+                    if (string.IsNullOrEmpty(resp) || !resp.StartsWith("OK"))
+                    {
+                        MessageBox.Show("Ошибка сохранения примечания");
+                        return;
+                    }
 
                     AddToMiniLog("Примечание сохранено");
                 }

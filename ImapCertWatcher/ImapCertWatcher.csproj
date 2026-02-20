@@ -130,6 +130,7 @@
     <Compile Include="CertEntryFactory.cs" />
     <Compile Include="CertRecord.cs" />
     <Compile Include="ClientSettings.cs" />
+    <Compile Include="Client\ServerApiClient.cs" />
     <Compile Include="ConfirmDialog.xaml.cs">
       <DependentUpon>ConfirmDialog.xaml</DependentUpon>
     </Compile>
