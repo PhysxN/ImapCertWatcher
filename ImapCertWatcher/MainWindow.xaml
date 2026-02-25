@@ -1,4 +1,5 @@
 ﻿<Window x:Class="ImapCertWatcher.MainWindow"
+        x:Name="root"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:ImapCertWatcher"
@@ -7,12 +8,11 @@
         Width="1300"
         WindowStartupLocation="CenterScreen"
         Background="{DynamicResource WindowBackgroundBrush}">
-
-    
-
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter"/>
+    </Window.Resources>
     <Grid Margin="8" Background="{DynamicResource WindowBackgroundBrush}">
         <TabControl Style="{StaticResource ModernTabControlStyle}" SelectionChanged="TabControl_SelectionChanged">
-
             <!-- Вкладка с сертификатами -->
             <TabItem Header="Сертификаты" Style="{StaticResource ModernTabItemStyle}">
                 <Grid Margin="8">
@@ -34,7 +34,6 @@
                         <RowDefinition Height="Auto"/>
                         <!-- прогресс -->
                     </Grid.RowDefinitions>
-
                     <!-- Панель управления -->
                     <StackPanel Orientation="Horizontal" Grid.Row="0" Margin="0,0,0,8">
                         <Button x:Name="btnManualCheck" Content="Проверить сейчас" 
@@ -46,7 +45,6 @@
                         <Button x:Name="btnExportExcel" Content="Экспорт в Excel" 
                                 Style="{StaticResource ModernButtonStyle}" 
                                 Click="BtnExportExcel_Click"/>
-
                         <Button x:Name="btnDeleteSelected" Content="Пометить на удаление" 
                                 Style="{StaticResource ModernButtonStyle}" 
                                 Click="BtnDeleteSelected_Click"/>
@@ -70,18 +68,13 @@
         BorderBrush="{DynamicResource BorderColorBrush}"
         BorderThickness="1"
         Background="{DynamicResource ControlBackgroundBrush}">
-
                         <DockPanel>
-
-                            
-
                             <!-- Next check timer -->
                             <TextBlock x:Name="txtNextCheck"
                    Text="Следующая проверка: --:--"
                    Margin="16,0,0,0"
                    DockPanel.Dock="Left"
                    Foreground="{DynamicResource TextColorBrush}"/>
-
                             <!-- Progress -->
                             <ProgressBar x:Name="pbServerProgress"
                      Width="160"
@@ -90,11 +83,8 @@
                      DockPanel.Dock="Right"
                      Visibility="Collapsed"
                      IsIndeterminate="True"/>
-
                         </DockPanel>
-
                     </Border>
-
                     <!-- Поиск по ФИО -->
                     <StackPanel Orientation="Horizontal" Grid.Row="2" Margin="0,0,0,8">
                         <TextBlock Text="Поиск по ФИО:" VerticalAlignment="Center" Margin="0,0,8,0"
@@ -109,7 +99,6 @@
                                 Click="BtnClearSearch_Click"
                                 ToolTip="Очистить поиск"/>
                     </StackPanel>
-
                     <!-- Фильтры -->
                     <StackPanel Orientation="Horizontal" Grid.Row="3" Margin="0,0,0,8">
                         <TextBlock Text="Фильтр по зданию:" VerticalAlignment="Center" Margin="0,0,8,0"
@@ -123,30 +112,24 @@
                         <RadioButton x:Name="rbPionerskaya" Content="Пионерская" GroupName="BuildingFilter" 
                                      Style="{StaticResource ModernRadioButtonStyle}" 
                                      Checked="BuildingFilter_Checked"/>
-
                         <CheckBox x:Name="chkShowDeleted" Content="Показывать удаленные" 
                                   Style="{StaticResource ModernCheckBoxStyle}" 
                                   Checked="ChkShowDeleted_Changed" Unchecked="ChkShowDeleted_Changed"/>
                     </StackPanel>
-
                     <!-- Таблица сертификатов -->
                     <DataGrid x:Name="dgCerts"
           Grid.Row="4"
-
           HeadersVisibility="Column"
           RowDetailsVisibilityMode="Collapsed"
-
           EnableRowVirtualization="True"
           EnableColumnVirtualization="True"
           VirtualizingPanel.IsVirtualizing="True"
           VirtualizingPanel.VirtualizationMode="Recycling"
-
           Style="{StaticResource ModernDataGridStyle}"
           IsReadOnly="False"
           SelectionMode="Single"
           CanUserSortColumns="True"
           CanUserResizeColumns="True"
-
           LoadingRow="DgCerts_LoadingRow"
           ContextMenuOpening="DgCerts_ContextMenuOpening"
           CellEditEnding="DgCerts_CellEditEnding"
@@ -158,9 +141,7 @@
                                 <MenuItem x:Name="miAddArchive"
                                           Header="Добавить архив с подписью"
                                           Click="AddArchiveMenuItem_Click"/>
-
                                 <Separator/>
-
                                 <MenuItem x:Name="miExportSelected"
                                           Header="Экспорт выделенного"
                                           Click="ExportSelectedMenuItem_Click"/>
@@ -171,8 +152,7 @@
                                                 Binding="{Binding Fio, Mode=OneWay}"
                                                 IsReadOnly="True"
                                                 Width="2*"
-                                                ElementStyle="{StaticResource DataGridTextBlockStyle}"/>        
-
+                                                ElementStyle="{StaticResource DataGridTextBlockStyle}"/>
                             <DataGridTextColumn Header="Сертификат"
                                                 Binding="{Binding CertNumber, Mode=OneWay}"
                                                 IsReadOnly="True"
@@ -186,19 +166,17 @@
                                             SelectedValue="{Binding TokenId, Mode=TwoWay}"
                                                   SelectedValuePath="Id"
                                                   DisplayMemberPath="Sn"
-                                                  SelectionChanged="TokenComboBox_SelectionChanged">                                           
-
+                                                  SelectionChanged="TokenComboBox_SelectionChanged"
+                                                  ItemContainerStyle="{StaticResource ComboBoxItemFixStyle}">
                                         </ComboBox>
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-
                             <DataGridTextColumn Header="Начало"
                     Binding="{Binding DateStart, Mode=OneWay, StringFormat=dd.MM.yyyy}"
                     IsReadOnly="True"
                     Width="*"
                     ElementStyle="{StaticResource DataGridTextBlockStyle}"/>
-
                             <DataGridTextColumn Header="Окончание"
                     Binding="{Binding DateEnd, Mode=OneWay, StringFormat=dd.MM.yyyy}"
                     IsReadOnly="True"
@@ -208,8 +186,7 @@
                                             Binding="{Binding DaysLeft, Mode=OneWay}"
                                             IsReadOnly="True"
                                             Width="*"
-                                            ElementStyle="{StaticResource DataGridTextBlockStyle}"/>            
-
+                                            ElementStyle="{StaticResource DataGridTextBlockStyle}"/>
                             <DataGridTemplateColumn Header="Архив с ЭЦП" Width="*">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
@@ -223,7 +200,6 @@
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-
                             <!-- Столбец для здания -->
                             <DataGridTemplateColumn Header="Здание">
                                 <DataGridTemplateColumn.CellTemplate>
@@ -231,17 +207,16 @@
                                         <TextBlock Text="{Binding Building}" />
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
-
                                 <DataGridTemplateColumn.CellEditingTemplate>
                                     <DataTemplate>
                                         <ComboBox
     ItemsSource="{Binding AvailableBuildings, RelativeSource={RelativeSource AncestorType=Window}}"
     SelectedItem="{Binding Building, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+    ItemContainerStyle="{StaticResource ComboBoxItemFixStyle}"
     SelectionChanged="BuildingComboBox_SelectionChanged"/>
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellEditingTemplate>
                             </DataGridTemplateColumn>
-
                             <DataGridTemplateColumn Header="Примечание" Width="2*">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
@@ -256,12 +231,10 @@
                             IsReadOnly="True"
                             Width="*"
                             ElementStyle="{StaticResource DataGridTextBlockStyle}"/>
-
                             <DataGridCheckBoxColumn Header="Удален" Binding="{Binding IsDeleted}" Width="*" IsReadOnly="True"
                                                     ElementStyle="{StaticResource DataGridCheckBoxStyle}"/>
                         </DataGrid.Columns>
                     </DataGrid>
-
                     <!-- Статус бар -->
                     <StatusBar Grid.Row="5" Margin="0,8,0,4" Style="{StaticResource ModernStatusBarStyle}">
                         <StatusBarItem>
@@ -276,7 +249,6 @@
                                          Visibility="Collapsed"/>
                         </StatusBarItem>
                     </StatusBar>
-
                     <!-- Мини-лог -->
                     <Border Grid.Row="6"
         Margin="0,4,0,4"
@@ -284,7 +256,6 @@
         BorderThickness="1"
         Background="{DynamicResource ControlBackgroundBrush}"
         CornerRadius="4">
-
                         <TextBox x:Name="txtMiniLog"
              MaxHeight="60"
              Margin="4,2"
@@ -301,7 +272,6 @@
              ToolTip="Последние действия"
              Text="Мини-лог готов"/>
                     </Border>
-
                     <!-- Прогресс-бар проверки почты -->
                     <ProgressBar x:Name="progressMailCheck" Grid.Row="7" 
                                  Height="6" Margin="0,4,0,2"
@@ -312,29 +282,18 @@
                 </Grid>
             </TabItem>
             <!-- Вкладка токенов -->
-            <TabItem Header="Токены" Style="{StaticResource ModernTabItemStyle}">
+            <TabItem Header="Токены" Style="{StaticResource ModernTabItemStyle}" HorizontalAlignment="Left" Width="71">
                 <Grid Margin="8">
-
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
-
                     <!-- Панель управления -->
                     <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-
                         <Button Content="Добавить токен"
                     Style="{StaticResource ModernButtonStyle}"
-                    Click="BtnAddToken_Click"/>
-
-                        <Button Content="Удалить токен"
-                    Style="{StaticResource ModernButtonStyle}"
-                    Click="BtnDeleteToken_Click"/>
-
-                        <Button Content="Освободить токен"
-                    Style="{StaticResource ModernButtonStyle}"
-                    Click="BtnUnassignToken_Click"
+                    Click="BtnAddToken_Click"                       
                     />
                         <CheckBox x:Name="chkShowBusyTokens"
           Content="Показать занятые"
@@ -343,118 +302,131 @@
           VerticalAlignment="Center"
           Checked="ChkShowBusyTokens_Changed"
           Unchecked="ChkShowBusyTokens_Changed"/>
-
                     </StackPanel>
-
                     <!-- Таблица токенов -->
-                    <ListBox x:Name="dgTokens"
-                             Grid.Row="1"
-                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                             ScrollViewer.CanContentScroll="False"
-                             Style="{StaticResource ModernListBoxStyle}"
-                             ItemsSource="{Binding FilteredTokens, RelativeSource={RelativeSource AncestorType=Window}}"
-                             ItemContainerStyle="{StaticResource ModernListBoxItemStyle}"
-                             Background="{DynamicResource ControlBackgroundBrush}"
-                             BorderBrush="{DynamicResource BorderColorBrush}"
-                             BorderThickness="1">     
+                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                        <StackPanel>
+                            <TextBlock Text="Свободные"
+                   FontSize="15"
+                   FontWeight="Bold"
+                   Margin="6,12,0,6"
+                   Foreground="{DynamicResource AccentColorBrush}"/>
+                            <ItemsControl ItemsSource="{Binding FreeTokens, ElementName=root}">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <WrapPanel/>
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Style="{StaticResource TokenCardHoverStyle}"
+        Margin="6"
+        Padding="10"
+        Width="220"
+        CornerRadius="10"
+        Background="{DynamicResource FreeTokenBrush}"
+        Cursor="Hand">
+                                            
+                                            <Border.Effect>
+                                                <DropShadowEffect BlurRadius="10" ShadowDepth="2" Opacity="0.25"/>
+                                            </Border.Effect>
+                                            <StackPanel>
+                                                <TextBlock Text="{Binding Sn}"
+                   FontWeight="SemiBold"
+                   Foreground="{DynamicResource TextColorBrush}"/>
+                                                <Button Content="Удалить"
+        Tag="{Binding}"
+        Style="{StaticResource ModernButtonStyle}"
+        FontSize="11"
+        Padding="6,2"
+        Margin="0,6,0,0"
+        Click="BtnDeleteToken_Click"/>
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <TextBlock Text="Занятые"
+           FontSize="15"
+           FontWeight="Bold"
+           Margin="6,12,0,6"
+           Foreground="{DynamicResource AccentColorBrush}"
+           Visibility="{Binding IsChecked, ElementName=chkShowBusyTokens,
+                                Converter={StaticResource BooleanToVisibilityConverter}}"/>
+                            <ItemsControl ItemsSource="{Binding BusyTokens, ElementName=root}"
+              Visibility="{Binding IsChecked, ElementName=chkShowBusyTokens,
+                                   Converter={StaticResource BooleanToVisibilityConverter}}">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <WrapPanel/>
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Style="{StaticResource TokenCardHoverStyle}"
+        Margin="6"
+        Padding="10"
+        Width="220"
+        CornerRadius="10"
+        Background="{DynamicResource BusyTokenBrush}"
+        Cursor="Hand">
+                                            
 
-                        <ListBox.ItemsPanel>
-                            <ItemsPanelTemplate>
-                                <WrapPanel />
-                            </ItemsPanelTemplate>
-                        </ListBox.ItemsPanel>
+                                            <Border.Effect>
+                                                <DropShadowEffect BlurRadius="10" ShadowDepth="2" Opacity="0.25"/>
+                                            </Border.Effect>
+                                            <StackPanel>
+                                                <TextBlock Text="{Binding Sn}"
+                   FontWeight="SemiBold"
+                   Foreground="{DynamicResource TextColorBrush}"/>
+                                                <TextBlock Text="{Binding OwnerFioFormatted}"
+                   FontSize="12"
+                   Opacity="0.85"
+                   Foreground="{DynamicResource TextColorBrush}"/>
+                                                <Grid Margin="0,6,0,0">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="*"/>
+                                                    </Grid.ColumnDefinitions>
 
-                        <ListBox.ItemTemplate>
-                            <DataTemplate>
-                                <ContentControl Content="{Binding}">
-                                    <ContentControl.Style>
-                                        <Style TargetType="ContentControl">
+                                                    <Button Grid.Column="0"
+            Content="Освободить"
+            Tag="{Binding}"
+            Style="{StaticResource ModernButtonStyle}"
+            FontSize="11"
+            Padding="6,2"
+            Margin="0,0,3,0"
+            Click="BtnUnassignToken_Click"/>
 
-                                            <!-- 🔹 БАЗОВЫЙ шаблон (обычный токен) -->
-                                            <Setter Property="ContentTemplate">
-                                                <Setter.Value>
-                                                    <DataTemplate>
-                                                        <Border Margin="5"
-                                        Padding="8"
-                                        Width="220"
-                                        CornerRadius="8">
-
-                                                            <Border.Style>
-                                                                <Style TargetType="Border">
-                                                                    <Setter Property="Background"
-                                                    Value="{DynamicResource ControlBackgroundBrush}"/>
-
-                                                                    <Style.Triggers>
-                                                                        <DataTrigger Binding="{Binding Token.IsFree}" Value="True">
-                                                                            <Setter Property="Background"
-                                                            Value="{DynamicResource FreeTokenBrush}"/>
-                                                                        </DataTrigger>
-
-                                                                        <DataTrigger Binding="{Binding Token.IsFree}" Value="False">
-                                                                            <Setter Property="Background"
-                                                            Value="{DynamicResource BusyTokenBrush}"/>
-                                                                        </DataTrigger>
-                                                                    </Style.Triggers>
-                                                                </Style>
-                                                            </Border.Style>
-
-                                                            <StackPanel>
-                                                                <TextBlock Text="{Binding Token.Sn}"
-                                                   FontWeight="SemiBold"
-                                                   Foreground="{DynamicResource TextColorBrush}"/>
-
-                                                                <TextBlock Text="{Binding Token.OwnerFioFormatted}"
-                                                   FontSize="12"
-                                                   Opacity="0.85"
-                                                   Foreground="{DynamicResource TextColorBrush}"/>
-                                                            </StackPanel>
-                                                        </Border>
-                                                    </DataTemplate>
-                                                </Setter.Value>
-                                            </Setter>
-
-                                            <!-- 🔹 Если это заголовок -->
-                                            <Style.Triggers>
-                                                <DataTrigger Binding="{Binding IsHeader}" Value="True">
-                                                    <Setter Property="ContentTemplate">
-                                                        <Setter.Value>
-                                                            <DataTemplate>
-                                                                <Border  HorizontalAlignment="Stretch" Margin="0,10,0,4">
-                                                                    <TextBlock Text="{Binding HeaderText}"
-                                                                   FontSize="14"
-                                                                   FontWeight="Bold"
-                                                                   Margin="10,0,0,0"
-                                                                   Foreground="{DynamicResource AccentColorBrush}"/>        
-                                                                </Border>
-                                                            </DataTemplate>
-                                                        </Setter.Value>
-                                                    </Setter>
-                                                </DataTrigger>
-                                            </Style.Triggers>
-
-                                        </Style>
-                                    </ContentControl.Style>
-                                </ContentControl>
-                            </DataTemplate>
-                        </ListBox.ItemTemplate>
-                    </ListBox>
+                                                    <Button Grid.Column="1"
+            Content="Удалить"
+            Tag="{Binding}"
+            Style="{StaticResource ModernButtonStyle}"
+            FontSize="11"
+            Padding="6,2"
+            Margin="3,0,0,0"
+            Click="BtnDeleteToken_Click"/>
+                                                </Grid>
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </ScrollViewer>
                     <!-- статус -->
                     <StatusBar Grid.Row="2"
            Margin="0,8,0,4"
            Style="{StaticResource ModernStatusBarStyle}">
-
                         <StatusBarItem>
                             <TextBlock x:Name="tokensStatusText"
                    Foreground="{DynamicResource TextColorBrush}"
                    VerticalAlignment="Center"
                    Text="Токены загружены"/>
                         </StatusBarItem>
-
                     </StatusBar>
-
                 </Grid>
             </TabItem>
-
             <!-- Настройки -->
             <TabItem Header="Настройки" Style="{StaticResource ModernTabItemStyle}">
                 <Grid Margin="12">
@@ -466,7 +438,6 @@
                         <!-- Прогресс-бар -->
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
-
                     <!-- Основное содержимое настроек -->
                     <ScrollViewer Grid.Row="0" VerticalScrollBarVisibility="Auto">
                         <Grid>
@@ -475,81 +446,61 @@
                                 <ColumnDefinition Width="10"/>
                                 <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
-
                             <!-- Левая колонка -->
                             <StackPanel Grid.Column="0">
-
                                 <GroupBox Header="Подключение к серверу"
                               Style="{StaticResource ModernGroupBoxStyle}"
                               Margin="0,12,0,0">
-
                                     <StackPanel Margin="6">
-
                                         <TextBlock Text="IP сервера:"
                                        Foreground="{DynamicResource TextColorBrush}"/>
-
                                         <TextBox Text="{Binding ServerIp}"
                                      Style="{StaticResource ModernTextBoxStyle}"
                                      Height="26"
                                      ToolTip="IP компьютера где запущен сервер"/>
-
                                         <TextBlock Text="Порт:"
                                        Margin="0,8,0,2"
                                        Foreground="{DynamicResource TextColorBrush}"/>
-
                                         <TextBox Text="{Binding ServerPort}"
                                      Style="{StaticResource ModernTextBoxStyle}"
                                      Height="26"/>
-
                                         <!-- 🔽 НОВАЯ КНОПКА -->
                                         <Button Content="Сохранить настройки"
                                     Style="{StaticResource ModernButtonStyle}"
                                     Margin="0,12,0,0"
                                     Height="30"
                                     Click="BtnSaveSettings_Click"/>
-
                                     </StackPanel>
                                 </GroupBox>
-
                             </StackPanel>
-
                             <!-- Разделитель -->
                             <Rectangle Grid.Column="1"
                            Fill="{DynamicResource BorderColorBrush}"
                            Width="1"
                            VerticalAlignment="Stretch"
                            Margin="0,20"/>
-
                             <!-- Правая колонка -->
                             <StackPanel Grid.Column="2">
-
                                 <GroupBox Header="Поведение приложения"
                               Style="{StaticResource ModernGroupBoxStyle}"
                               Margin="0,12,0,0">
-
                                     <StackPanel Margin="6">
-
                                         <Button Content="⚠ Сбросить аннулирования"
                                     Style="{StaticResource ModernButtonStyle}"
                                     Margin="0,10,0,0"
                                     Click="BtnResetRevokes_Click"
                                     ToolTip="Удаляет отметки аннулирования и историю REVOKE"/>
-
                                         <CheckBox x:Name="chkDarkTheme"
                                       Content="Темная тема"
                                       Style="{StaticResource ModernCheckBoxStyle}"
                                       Margin="0,8,0,0"
                                       Checked="ChkDarkTheme_Changed"
                                       Unchecked="ChkDarkTheme_Changed"/>
-
                                     </StackPanel>
                                 </GroupBox>
-
                             </StackPanel>
-
                         </Grid>
                     </ScrollViewer>
-
                     <!-- Мини-лог -->
                     <Border Grid.Row="2"
                 Margin="0,12,0,4"
@@ -557,7 +508,6 @@
                 BorderThickness="1"
                 Background="{DynamicResource ControlBackgroundBrush}"
                 CornerRadius="4">
-
                         <TextBlock x:Name="txtMiniLogSettings"
                        Margin="4,2"
                        FontSize="10"
@@ -567,7 +517,6 @@
                        ToolTip="Последние действия"
                        Text="Мини-лог готов"/>
                     </Border>
-
                     <!-- Прогресс -->
                     <ProgressBar x:Name="progressMailCheckSettings"
                      Grid.Row="3"
@@ -577,10 +526,8 @@
                      IsIndeterminate="True"
                      Background="{DynamicResource ControlBackgroundBrush}"
                      Foreground="{DynamicResource AccentColorBrush}"/>
-
                 </Grid>
             </TabItem>
-
             <!-- Логи -->
             <TabItem Header="Логи" Style="{StaticResource ModernTabItemStyle}">
                 <Grid Margin="8">
@@ -591,7 +538,6 @@
                         <!-- Прогресс-бар -->
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
-
                     <StackPanel Orientation="Horizontal" Grid.Row="0" Margin="0,0,0,8">
                         <Button x:Name="btnRefreshLogs" Content="Обновить логи" 
                                 Style="{StaticResource ModernButtonStyle}" 
@@ -603,7 +549,6 @@
                                 Style="{StaticResource ModernButtonStyle}" 
                                 Click="BtnOpenLogFolder_Click"/>
                     </StackPanel>
-
                     <TextBox x:Name="txtLogs" Grid.Row="1" 
                              Style="{StaticResource ModernTextBoxStyle}"
                              IsReadOnly="True" 
@@ -611,27 +556,22 @@
                              HorizontalScrollBarVisibility="Auto"
                              FontFamily="Consolas" FontSize="10"
                              TextWrapping="Wrap"/>
-
                     <StatusBar Grid.Row="2"
            Margin="0,8,0,0"
            Background="{DynamicResource ControlBackgroundBrush}">
-
                         <StatusBar.ItemContainerStyle>
                             <Style TargetType="StatusBarItem">
                                 <Setter Property="Focusable" Value="False"/>
                                 <Setter Property="Background" Value="Transparent"/>
                             </Style>
                         </StatusBar.ItemContainerStyle>
-
                         <StatusBarItem>
                             <TextBlock x:Name="logStatusText"
                    Foreground="{DynamicResource TextColorBrush}">
             Логи загружены
                             </TextBlock>
                         </StatusBarItem>
-
                     </StatusBar>
-
                     <!-- Прогресс-бар на вкладке логов -->
                     <ProgressBar x:Name="progressMailCheckLogs" Grid.Row="3" 
                                  Height="6" Margin="0,4,0,2"
@@ -639,7 +579,6 @@
                                  IsIndeterminate="True"
                                  Background="{DynamicResource ControlBackgroundBrush}"
                                  Foreground="{DynamicResource AccentColorBrush}"/>
-
                 </Grid>
             </TabItem>
         </TabControl>

@@ -336,7 +336,7 @@
         <Setter Property="Foreground" Value="{DynamicResource TextColorBrush}"/>
         <Setter Property="Margin" Value="4"/>
         <Setter Property="Padding" Value="6"/>
-        <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+        <Setter Property="HorizontalContentAlignment" Value="Left"/>
         <Setter Property="VerticalContentAlignment" Value="Center"/>
 
         <Style.Triggers>
@@ -414,7 +414,47 @@
 
         </Style.Triggers>
     </Style>
+    <!-- ================= TOKEN CARD ================= -->
 
+    <Style x:Key="TokenCardHoverStyle" TargetType="Border">
+        <Setter Property="RenderTransformOrigin" Value="0.5,0.5"/>
+
+        <Setter Property="RenderTransform">
+            <Setter.Value>
+                <ScaleTransform ScaleX="1" ScaleY="1"/>
+            </Setter.Value>
+        </Setter>
+
+        <Setter Property="Effect">
+            <Setter.Value>
+                <DropShadowEffect BlurRadius="10"
+                                  ShadowDepth="2"
+                                  Opacity="0.25"/>
+            </Setter.Value>
+        </Setter>
+
+        <Style.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="RenderTransform">
+                    <Setter.Value>
+                        <ScaleTransform ScaleX="1.03" ScaleY="1.03"/>
+                    </Setter.Value>
+                </Setter>
+
+                <Setter Property="Effect">
+                    <Setter.Value>
+                        <DropShadowEffect BlurRadius="16"
+                                          ShadowDepth="4"
+                                          Opacity="0.35"/>
+                    </Setter.Value>
+                </Setter>
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+    <Style x:Key="ComboBoxItemFixStyle" TargetType="ComboBoxItem">
+        <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
+    </Style>
 
 
 </ResourceDictionary>

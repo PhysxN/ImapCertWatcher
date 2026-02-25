@@ -37,26 +37,25 @@ namespace ImapCertWatcher
 {
     public partial class MainWindow : Window
     {
-        private ClientSettings _clientSettings;  
+        private ClientSettings _clientSettings;
         private HashSet<int> _knownCertIds = new HashSet<int>();
         private ServerApiClient _api;
         private ObservableCollection<CertRecord> _items = new ObservableCollection<CertRecord>();
         private ObservableCollection<CertRecord> _allItems = new ObservableCollection<CertRecord>();
         private ObservableCollection<TokenRecord> _tokens = new ObservableCollection<TokenRecord>();
         private ObservableCollection<TokenRecord> _freeTokens = new ObservableCollection<TokenRecord>();
-        public ObservableCollection<TokenRecord> Tokens => _tokens;
-        private ObservableCollection<TokenListItem> _filteredTokens
-    = new ObservableCollection<TokenListItem>();
-        public ObservableCollection<TokenListItem> FilteredTokens => _filteredTokens;
 
+        public ObservableCollection<TokenRecord> Tokens => _tokens;
         public ObservableCollection<TokenRecord> FreeTokens => _freeTokens;
+        private ObservableCollection<TokenRecord> _busyTokens = new ObservableCollection<TokenRecord>();
+        public ObservableCollection<TokenRecord> BusyTokens => _busyTokens;
         private DispatcherTimer _refreshTimer;
         private ObservableCollection<string> _miniLogMessages = new ObservableCollection<string>();
-        private const int MAX_MINI_LOG_LINES = 3; 
+        private const int MAX_MINI_LOG_LINES = 3;
         private string _currentBuildingFilter = "Все";
         private bool _showDeleted = false;
         private string _searchText = "";
-        private bool _isDarkTheme = false;        
+        private bool _isDarkTheme = false;
         private bool _certsLoadedOnce = false;
         private bool _showBusyTokens = false;
         private bool _isAssigningToken = false;
@@ -70,6 +69,7 @@ namespace ImapCertWatcher
         private bool _isApplyingFromServer = false;
         private int _monitorBusyFlag = 0;
         private int _reconnectBusy = 0;
+
 
         enum ServerConnectionState
         {
@@ -87,6 +87,7 @@ namespace ImapCertWatcher
 
 
 
+
         // Список доступных зданий
         public ObservableCollection<string> AvailableBuildings { get; } =
                 new ObservableCollection<string>
@@ -94,7 +95,7 @@ namespace ImapCertWatcher
                     "", "Краснофлотская", "Пионерская"
                 };
 
-        
+
 
         // Флаг для предотвращения множественного сохранения
         private bool _isSavingBuilding = false;
@@ -104,10 +105,10 @@ namespace ImapCertWatcher
 
         public MainWindow()
         {
-            
+
             try
             {
-                InitializeComponent();                
+                InitializeComponent();
                 SetServerState(ServerConnectionState.Offline);
 
                 // Инициализация мини-лога
@@ -126,7 +127,7 @@ namespace ImapCertWatcher
 
 
                 this.DataContext = _clientSettings;
-                
+
 
                 // Загрузка темы
                 LoadThemeSettings();
@@ -214,7 +215,7 @@ namespace ImapCertWatcher
             AdjustPollingInterval();
         }
 
-        
+
         private async void ServerMonitorTimer_Tick(object sender, EventArgs e)
         {
             await UpdateServerMonitor();
@@ -271,7 +272,7 @@ namespace ImapCertWatcher
             try
             {
                 var response = (await _api.SendCommand("STATUS"))?.Trim();
-                
+
 
                 // 🔴 Любая некорректность ответа → уходим в backoff
                 if (string.IsNullOrWhiteSpace(response) ||
@@ -1071,7 +1072,7 @@ namespace ImapCertWatcher
 
 
 
-        
+
 
         private void ApplySearchFilter()
         {
@@ -1197,12 +1198,9 @@ namespace ImapCertWatcher
                 MessageBox.Show("Сервер не подключен");
                 return;
             }
-            if (!(dgTokens.SelectedItem is TokenListItem item) ||
-                item.IsHeader ||
-                item.Token == null)
-                return;
 
-            var token = item.Token;
+            if (!TryGetToken(sender, out var token))
+                return;
 
             if (token.IsFree)
             {
@@ -1210,32 +1208,33 @@ namespace ImapCertWatcher
                 return;
             }
 
-            var result = MessageBox.Show(
+            if (MessageBox.Show(
                 $"Освободить токен {token.Sn}?",
                 "Подтверждение",
                 MessageBoxButton.YesNo,
-                MessageBoxImage.Question);
-
-            if (result != MessageBoxResult.Yes)
+                MessageBoxImage.Question) != MessageBoxResult.Yes)
                 return;
 
             var response = await _api.UnassignToken(token.Id);
 
-            if (string.IsNullOrEmpty(response))
+            if (response?.StartsWith("OK") != true)
             {
-                MessageBox.Show("Нет ответа от сервера");
+                MessageBox.Show("Ошибка освобождения токена:\n" + response);
                 return;
             }
 
-            if (response.StartsWith("OK"))
+            await ReloadTokensOnly();
+
+            // ⭐ НАДЁЖНАЯ ПРОВЕРКА
+            var updated = _tokens.FirstOrDefault(t => t.Id == token.Id);
+
+            if (updated != null && !updated.IsFree)
             {
-                await ReloadTokensOnly();
-                AddToMiniLog($"Токен {token.Sn} освобожден");
+                MessageBox.Show("Сервер ответил OK, но токен всё ещё занят.");
+                return;
             }
-            else
-            {
-                MessageBox.Show("Ошибка освобождения токена:\n" + response);
-            }
+
+            AddToMiniLog($"Токен {token.Sn} освобожден");
         }
 
         public static class Prompt
@@ -1283,41 +1282,42 @@ namespace ImapCertWatcher
                 MessageBox.Show("Сервер не подключен");
                 return;
             }
-            if (dgTokens.SelectedItem is TokenListItem item &&
-                !item.IsHeader &&
-                item.Token != null)
+
+            if (!TryGetToken(sender, out var token))
+                return;
+
+            if (MessageBox.Show(
+                $"Удалить токен {token.Sn}?",
+                "Подтверждение",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question) != MessageBoxResult.Yes)
+                return;
+
+            var response = await _api.DeleteToken(token.Id);
+
+            if (response?.StartsWith("OK") != true)
             {
-                var token = item.Token;
-
-                var result = MessageBox.Show(
-                    $"Удалить токен {token.Sn}?",
-                    "Подтверждение",
-                    MessageBoxButton.YesNo,
-                    MessageBoxImage.Question);
-
-                if (result != MessageBoxResult.Yes)
-                    return;
-
-                var response = await _api.DeleteToken(token.Id);
-
-                if (string.IsNullOrEmpty(response))
-                {
-                    MessageBox.Show("Нет ответа от сервера");
-                    return;
-                }
-
-                if (!response.StartsWith("OK"))
-                {
-                    MessageBox.Show($"Ошибка удаления токена:\n{response}");
-                    return;
-                }
-
-                AddToMiniLog($"Токен {token.Sn} удалён");
-                await ReloadTokensOnly();
+                MessageBox.Show("Ошибка удаления токена:\n" + response);
+                return;
             }
+
+            await ReloadTokensOnly();
+
+            // ⭐ НАДЁЖНАЯ ПРОВЕРКА
+            if (_tokens.Any(t => t.Id == token.Id))
+            {
+                MessageBox.Show("Сервер ответил OK, но токен остался в списке.");
+                return;
+            }
+
+            AddToMiniLog($"Токен {token.Sn} удалён");
         }
 
-
+        private bool TryGetToken(object sender, out TokenRecord token)
+        {
+            token = (sender as FrameworkElement)?.DataContext as TokenRecord;
+            return token != null;
+        }
 
         private async void BtnManualCheck_Click(object sender, RoutedEventArgs e)
         {
@@ -1595,7 +1595,7 @@ namespace ImapCertWatcher
 
             switch (header)
             {
-                case "Токены":                    
+                case "Токены":
                     break;
 
                 case "Сертификаты":
@@ -1622,9 +1622,13 @@ namespace ImapCertWatcher
                         _tokens.Add(t);
 
                     _freeTokens.Clear();
-                    // ✅ Защита от null для списка свободных токенов
-                    foreach (var t in freeTokens ?? Enumerable.Empty<TokenRecord>())
+                    _busyTokens.Clear();
+
+                    foreach (var t in _tokens.Where(x => x.IsFree))
                         _freeTokens.Add(t);
+
+                    foreach (var t in _tokens.Where(x => !x.IsFree))
+                        _busyTokens.Add(t);
 
                     RebuildAvailableTokens();
                     ApplyTokenFilter();
@@ -1638,7 +1642,7 @@ namespace ImapCertWatcher
 
         private void DgCerts_PreparingCellForEdit(object sender, DataGridPreparingCellForEditEventArgs e)
         {
-            
+
         }
 
         private void DgCerts_BeginningEdit(object sender, DataGridBeginningEditEventArgs e)
@@ -1658,7 +1662,7 @@ namespace ImapCertWatcher
             }
         }
 
-        
+
         private async void BtnDeleteSelected_Click(object sender, RoutedEventArgs e)
         {
             if (dgCerts.SelectedItem is CertRecord record)
@@ -2064,7 +2068,7 @@ namespace ImapCertWatcher
             }
         }
 
-        
+
 
         private void Log(string message)
         {
@@ -2100,12 +2104,12 @@ namespace ImapCertWatcher
             }
             base.OnClosed(e);
 
-            
+
             _refreshTimer?.Stop();
             if (_refreshTimer != null)
                 _refreshTimer.Tick -= RefreshDaysLeft;
 
-            
+
         }
 
         // ================= TEMP STUBS =================
@@ -2121,47 +2125,18 @@ namespace ImapCertWatcher
             if (_tokens == null)
                 return;
 
-            _filteredTokens.Clear();
+            _freeTokens.Clear();
+            _busyTokens.Clear();
 
-            var free = _tokens
-            .Where(t => t != null && t.IsFree)
-                .OrderBy(t => t.Sn)
-                .ToList();
+            foreach (var t in _tokens.Where(x => x.IsFree).OrderBy(x => x.Sn))
+                _freeTokens.Add(t);
 
-            var busy = _tokens
-            .Where(t => t != null && !t.IsFree)
-                .OrderBy(t => t.OwnerFio ?? "")
-                .ToList();
+            if (_showBusyTokens)
+                foreach (var t in _tokens.Where(x => !x.IsFree).OrderBy(x => x.OwnerFio))
+                    _busyTokens.Add(t);
 
-            if (!_showBusyTokens)
-                busy.Clear();
-
-            if (free.Any())
-            {
-                _filteredTokens.Add(new TokenListItem
-                {
-                    IsHeader = true,
-                    HeaderText = "Свободные"
-                });
-
-                foreach (var t in free)
-                    _filteredTokens.Add(new TokenListItem { Token = t });
-            }
-
-            if (busy.Any())
-            {
-                _filteredTokens.Add(new TokenListItem
-                {
-                    IsHeader = true,
-                    HeaderText = "Занятые"
-                });
-
-                foreach (var t in busy)
-                    _filteredTokens.Add(new TokenListItem { Token = t });
-            }
-
-            tokensStatusText.Text = $"Показано токенов: {free.Count + busy.Count}";
-            Debug.WriteLine(_filteredTokens.Count);
+            tokensStatusText.Text =
+                $"Свободные: {_freeTokens.Count}  |  Занятые: {_busyTokens.Count}";
         }
 
         private async void BtnRestoreSelected_Click(object sender, RoutedEventArgs e)
@@ -2484,7 +2459,7 @@ namespace ImapCertWatcher
                 {
                 }
             });
-        }        
+        }
 
         private string MakeSafeFolderName(string name)
         {

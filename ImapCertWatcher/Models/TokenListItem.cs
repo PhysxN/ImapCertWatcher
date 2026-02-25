@@ -11,5 +11,8 @@ namespace ImapCertWatcher.Models
         public bool IsHeader { get; set; }
         public string HeaderText { get; set; }
         public TokenRecord Token { get; set; }
+
+        public string GroupName => Token.IsFree ? "Свободные" : "Занятые";
+
     }
 }
