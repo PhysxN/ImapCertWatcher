@@ -5,20 +5,17 @@ namespace ImapCertWatcher.UI
 {
     public class RelayCommand : ICommand
     {
-        private readonly Action _execute;
+        private readonly Action<object> _execute;
 
-        public RelayCommand(Action execute)
+        public RelayCommand(Action<object> execute)
         {
-            _execute = execute ?? throw new ArgumentNullException(nameof(execute));
+            _execute = execute;
         }
 
         public bool CanExecute(object parameter) => true;
 
-        public void Execute(object parameter) => _execute();
+        public void Execute(object parameter) => _execute(parameter);
 
-        // ✔ Обязательное событие ICommand
-        // ✔ Реализовано корректно
-        // ✔ Без warning CS0067
         public event EventHandler CanExecuteChanged
         {
             add { }

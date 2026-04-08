@@ -18,13 +18,13 @@ namespace ImapCertWatcher.UI
             TitleText = title;
             Message = message;
 
-            OkCommand = new RelayCommand(() =>
+            OkCommand = new RelayCommand(_ =>
             {
                 DialogResult = true;
                 Close();
             });
 
-            CancelCommand = new RelayCommand(() =>
+            CancelCommand = new RelayCommand(_ =>
             {
                 DialogResult = false;
                 Close();

@@ -8,50 +8,95 @@ namespace ImapCertWatcher.Client
 {
     public static class TcpCommandClient
     {
+        private const int ConnectTimeoutMs = 5000;
+        private const int ReadTimeoutMs = 15000;
+        private const int MaxResponseLength = 20_000_000; // защита от мусорной длины
+        private static readonly Encoding Utf8NoBom = new UTF8Encoding(false);
+
         public static async Task<string> SendAsync(string host, int port, string command)
         {
+            if (string.IsNullOrWhiteSpace(host))
+                throw new ArgumentException("Не задан адрес сервера.", nameof(host));
+
+            if (port <= 0 || port > 65535)
+                throw new ArgumentOutOfRangeException(nameof(port), "Некорректный порт сервера.");
+
             using (var client = new TcpClient())
             {
-                await client.ConnectAsync(host, port);
+                var connectTask = client.ConnectAsync(host.Trim(), port);
+                var connectCompleted = await Task.WhenAny(
+                    connectTask,
+                    Task.Delay(ConnectTimeoutMs));
+
+                if (connectCompleted != connectTask)
+                    throw new TimeoutException("Таймаут подключения к серверу.");
+
+                await connectTask;
+
+                client.ReceiveTimeout = ReadTimeoutMs;
+                client.SendTimeout = ReadTimeoutMs;
 
                 using (var stream = client.GetStream())
-                using (var reader = new StreamReader(stream, Encoding.UTF8))
-                using (var writer = new StreamWriter(stream, Encoding.UTF8) { AutoFlush = true })
+                using (var reader = new StreamReader(stream, Utf8NoBom, false, 4096, true))
+                using (var writer = new StreamWriter(stream, Utf8NoBom, 4096, true)
                 {
-                    // отправляем команду
-                    await writer.WriteLineAsync(command);
+                    AutoFlush = true,
+                    NewLine = "\n"
+                })
+                {
+                    await writer.WriteLineAsync(command ?? string.Empty);
 
-                    // ЧИТАЕМ ВЕСЬ ОТВЕТ ЦЕЛИКОМ
-                    var response = await reader.ReadLineAsync();
+                    var lengthLineTask = reader.ReadLineAsync();
+                    var lengthLineCompleted = await Task.WhenAny(
+                        lengthLineTask,
+                        Task.Delay(ReadTimeoutMs));
 
-                    return response;
+                    if (lengthLineCompleted != lengthLineTask)
+                        throw new TimeoutException("Таймаут ожидания длины ответа от сервера.");
+
+                    var lengthLine = await lengthLineTask;
+
+                    if (string.IsNullOrWhiteSpace(lengthLine))
+                        throw new IOException("Сервер не прислал длину ответа.");
+
+                    if (!int.TryParse(lengthLine, out int length) || length < 0)
+                        throw new IOException("Некорректная длина ответа сервера: " + lengthLine);
+
+                    if (length > MaxResponseLength)
+                        throw new IOException("Слишком большой ответ сервера: " + length);
+
+                    if (length == 0)
+                        return string.Empty;
+
+                    var readTask = ReadExactAsync(reader, length);
+                    var readCompleted = await Task.WhenAny(
+                        readTask,
+                        Task.Delay(ReadTimeoutMs));
+
+                    if (readCompleted != readTask)
+                        throw new TimeoutException("Таймаут чтения ответа от сервера.");
+
+                    return await readTask;
                 }
             }
         }
-        public static async Task DownloadAndOpenArchive(string host, int port, int certId)
+
+        private static async Task<string> ReadExactAsync(StreamReader reader, int length)
         {
-            string response = await SendAsync(host, port, "GET_ARCHIVE|" + certId);
+            var buffer = new char[length];
+            int offset = 0;
 
-            if (string.IsNullOrEmpty(response) || !response.StartsWith("ARCHIVE|"))
-                return;
+            while (offset < length)
+            {
+                int read = await reader.ReadAsync(buffer, offset, length - offset);
 
-            var payload = response.Substring("ARCHIVE|".Length);
-            var parts = payload.Split(new[] { '|' }, 2);
+                if (read <= 0)
+                    throw new EndOfStreamException("Соединение закрыто до получения полного ответа.");
 
-            if (parts.Length < 2)
-                return;
+                offset += read;
+            }
 
-            string fileName = parts[0];
-            byte[] data = Convert.FromBase64String(parts[1]);
-
-            string tempPath = Path.Combine(Path.GetTempPath(), fileName);
-
-            File.WriteAllBytes(tempPath, data);
-
-            System.Diagnostics.Process.Start(tempPath);
+            return new string(buffer);
         }
-
     }
-
-
 }

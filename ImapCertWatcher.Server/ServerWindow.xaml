@@ -1,0 +1,142 @@
+﻿<Window x:Class="ImapCertWatcher.Server.ServerWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="ImapCertWatcher Server"
+        Width="760"
+        Height="300"
+        MinWidth="720"
+        MinHeight="300"
+        ResizeMode="CanMinimize"
+        WindowStartupLocation="CenterScreen"
+        Background="{DynamicResource WindowBackgroundBrush}">
+
+    <Grid Margin="12" Background="{DynamicResource WindowBackgroundBrush}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Верхняя панель -->
+        <Border Grid.Row="0"
+                Margin="0,0,0,8"
+                Padding="10"
+                Background="{DynamicResource ControlBackgroundBrush}"
+                BorderBrush="{DynamicResource BorderColorBrush}"
+                BorderThickness="1"
+                CornerRadius="6">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <TextBlock x:Name="StatusText"
+                           Grid.Column="0"
+                           Text="Сервер запущен"
+                           FontWeight="Bold"
+                           FontSize="14"
+                           VerticalAlignment="Center"
+                           Foreground="{DynamicResource TextColorBrush}"/>
+
+                <Button Grid.Column="1"
+                        x:Name="SettingsButton"
+                        Content="⚙ Настройки"
+                        Width="120"
+                        Margin="12,0,0,0"
+                        Click="Settings_Click"
+                        Style="{StaticResource ModernButtonStyle}"
+                        ToolTip="Открыть настройки сервера"/>
+            </Grid>
+        </Border>
+
+        <!-- Прогресс -->
+        <ProgressBar x:Name="Progress"
+                     Grid.Row="1"
+                     Height="6"
+                     Margin="0,0,0,8"
+                     IsIndeterminate="True"
+                     Visibility="Collapsed"
+                     Background="{DynamicResource ControlBackgroundBrush}"
+                     Foreground="{DynamicResource AccentColorBrush}"/>
+
+        <!-- Лог -->
+        <Border Grid.Row="2"
+                Background="{DynamicResource ControlBackgroundBrush}"
+                BorderBrush="{DynamicResource BorderColorBrush}"
+                BorderThickness="1"
+                CornerRadius="6"
+                Padding="2">
+            <RichTextBox x:Name="LogBox"
+                         IsReadOnly="True"
+                         VerticalScrollBarVisibility="Auto"
+                         BorderThickness="0"
+                         Padding="8"
+                         Background="Transparent"
+                         Foreground="{DynamicResource TextColorBrush}"
+                         FontFamily="Consolas"
+                         FontSize="12"/>
+        </Border>
+
+        <!-- Нижние кнопки -->
+        <Grid Grid.Row="3" Margin="0,10,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <Button Grid.Column="0"
+                    x:Name="CheckNewCertsButton"
+                    Content="Новые сертификаты"
+                    Margin="4"
+                    MinHeight="34"
+                    FontWeight="Bold"
+                    Click="CheckNewCerts_Click"
+                    Style="{StaticResource ModernButtonStyle}"
+                    ToolTip="Быстрая проверка только папки новых сертификатов"/>
+
+            <Button Grid.Column="1"
+                    x:Name="CheckNewRevokesButton"
+                    Content="Новые аннулирования"
+                    Margin="4"
+                    MinHeight="34"
+                    FontWeight="Bold"
+                    Click="CheckNewRevokes_Click"
+                    Style="{StaticResource ModernButtonStyle}"
+                    ToolTip="Быстрая проверка только папки аннулирований"/>
+
+            <Button Grid.Column="0"
+                    Grid.ColumnSpan="2"
+                    x:Name="CancelButton"
+                    Content="Отмена"
+                    Margin="4"
+                    MinHeight="34"
+                    FontWeight="Bold"
+                    Visibility="Collapsed"
+                    Click="Cancel_Click"
+                    Style="{StaticResource ModernButtonStyle}"
+                    ToolTip="Отменить текущую операцию"/>
+
+            <Button Grid.Column="2"
+                    x:Name="RestartButton"
+                    Content="Перезапуск"
+                    Margin="4"
+                    MinHeight="34"
+                    Click="Restart_Click"
+                    Style="{StaticResource ModernButtonStyle}"
+                    Background="#FFF5C2C2"
+                    ToolTip="Перезапуск сервера с перечитыванием server.settings.txt"/>
+
+            <Button Grid.Column="3"
+                    Content="Закрыть"
+                    Margin="4"
+                    MinHeight="34"
+                    Click="Close_Click"
+                    Style="{StaticResource ModernButtonStyle}"
+                    ToolTip="Закрыть окно сервера"/>
+        </Grid>
+    </Grid>
+</Window>

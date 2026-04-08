@@ -1,0 +1,557 @@
+﻿<Window x:Class="ImapCertWatcher.ServerSettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Настройки сервера"
+        Width="1120"
+        Height="960"
+        MinWidth="1120"
+        MinHeight="960"
+        WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource WindowBackgroundBrush}">
+
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter"/>
+    </Window.Resources>
+
+    <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <Grid Grid.Row="0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="16"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- ================= LEFT COLUMN ================= -->
+            <ScrollViewer Grid.Column="0"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled">
+                <StackPanel>
+
+                    <!-- Почта -->
+                    <GroupBox Header="Почта"
+                              Style="{StaticResource ModernGroupBoxStyle}"
+                              Margin="0,0,0,12">
+                        <Grid Margin="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="160"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <TextBlock Grid.Row="0"
+                                       Text="IMAP сервер"
+                                       Margin="0,0,8,8"
+                                       VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextColorBrush}"/>
+                            <TextBox Grid.Row="0"
+                                     Grid.Column="1"
+                                     Margin="0,0,0,8"
+                                     Text="{Binding MailHost, Mode=TwoWay}"
+                                     Style="{StaticResource ModernTextBoxStyle}"
+                                     ToolTip="Адрес IMAP-сервера, например: imap.yandex.ru"/>
+
+                            <TextBlock Grid.Row="1"
+                                       Text="Порт"
+                                       Margin="0,0,8,8"
+                                       VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextColorBrush}"/>
+                            <TextBox Grid.Row="1"
+                                     Grid.Column="1"
+                                     Margin="0,0,0,8"
+                                     Text="{Binding MailPort, Mode=TwoWay}"
+                                     Style="{StaticResource ModernTextBoxStyle}"
+                                     ToolTip="Порт IMAP-сервера. Обычно 993 для SSL"/>
+
+                            <TextBlock Grid.Row="2"
+                                       Text="SSL"
+                                       Margin="0,0,8,8"
+                                       VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextColorBrush}"/>
+                            <CheckBox Grid.Row="2"
+                                      Grid.Column="1"
+                                      Margin="0,0,0,8"
+                                      IsChecked="{Binding MailUseSsl, Mode=TwoWay}"
+                                      Style="{StaticResource ModernCheckBoxStyle}"
+                                      ToolTip="Использовать защищённое IMAP-подключение"/>
+
+                            <TextBlock Grid.Row="3"
+                                       Text="Логин"
+                                       Margin="0,0,8,8"
+                                       VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextColorBrush}"/>
+                            <TextBox Grid.Row="3"
+                                     Grid.Column="1"
+                                     Margin="0,0,0,8"
+                                     Text="{Binding MailLogin, Mode=TwoWay}"
+                                     Style="{StaticResource ModernTextBoxStyle}"
+                                     ToolTip="Логин почтового ящика для чтения писем"/>
+
+                            <TextBlock Grid.Row="4"
+                                       Text="Пароль"
+                                       Margin="0,0,8,8"
+                                       VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextColorBrush}"/>
+                            <PasswordBox Grid.Row="4"
+                                         Grid.Column="1"
+                                         Margin="0,0,0,8"
+                                         x:Name="MailPasswordBox"
+                                         Style="{StaticResource ModernPasswordBoxStyle}"
+                                         ToolTip="Пароль почтового ящика"/>
+
+                            <Button Grid.Row="5"
+                                    Grid.Column="1"
+                                    Content="Проверить почту"
+                                    Width="150"
+                                    HorizontalAlignment="Right"
+                                    Click="TestMail_Click"
+                                    Style="{StaticResource ModernButtonStyle}"
+                                    ToolTip="Проверить подключение к почте с текущими настройками"/>
+                        </Grid>
+                    </GroupBox>
+
+                    <!-- IMAP папки -->
+                    <GroupBox Header="IMAP папки"
+                              Style="{StaticResource ModernGroupBoxStyle}"
+                              Margin="0,0,0,12">
+                        <Grid Margin="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="160"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <TextBlock Grid.Row="0"
+                                       Text="Новые сертификаты"
+                                       Margin="0,0,8,8"
+                                       VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextColorBrush}"/>
+                            <ComboBox Grid.Row="0"
+                                      Grid.Column="1"
+                                      Margin="0,0,0,8"
+                                      x:Name="cmbNewCertsFolder"
+                                      ItemsSource="{Binding RelativeSource={RelativeSource AncestorType=Window}, Path=ImapFolders}"
+                                      SelectedItem="{Binding ImapNewCertificatesFolder}"
+                                      IsEditable="True"
+                                      IsEnabled="{Binding RelativeSource={RelativeSource AncestorType=Window}, Path=IsFoldersLoaded}"
+                                      Style="{StaticResource EditableImapComboBoxStyle}"
+                                      ToolTip="IMAP-папка, где лежат письма с новыми сертификатами"/>
+
+                            <TextBlock Grid.Row="1"
+                                       Text="Аннулирования"
+                                       Margin="0,0,8,8"
+                                       VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextColorBrush}"/>
+                            <ComboBox Grid.Row="1"
+                                      Grid.Column="1"
+                                      Margin="0,0,0,8"
+                                      x:Name="cmbRevocationsFolder"
+                                      ItemsSource="{Binding RelativeSource={RelativeSource AncestorType=Window}, Path=ImapFolders}"
+                                      SelectedItem="{Binding ImapRevocationsFolder}"
+                                      IsEditable="True"
+                                      IsEnabled="{Binding RelativeSource={RelativeSource AncestorType=Window}, Path=IsFoldersLoaded}"
+                                      Style="{StaticResource EditableImapComboBoxStyle}"
+                                      ToolTip="IMAP-папка, где лежат письма об аннулировании сертификатов"/>
+
+                            <ProgressBar Grid.Row="2"
+                                         Grid.ColumnSpan="2"
+                                         Height="6"
+                                         Margin="0,4,0,0"
+                                         IsIndeterminate="True"
+                                         Visibility="{Binding RelativeSource={RelativeSource AncestorType=Window},
+                                                              Path=IsFoldersLoading,
+                                                              Converter={StaticResource BooleanToVisibilityConverter}}"
+                                         Background="{DynamicResource ControlBackgroundBrush}"
+                                         Foreground="{DynamicResource AccentColorBrush}"
+                                         ToolTip="Идёт загрузка списка IMAP-папок"/>
+                        </Grid>
+                    </GroupBox>
+
+                    <!-- Сервер -->
+                    <GroupBox Header="Сервер"
+                              Style="{StaticResource ModernGroupBoxStyle}"
+                              Margin="0,0,0,12">
+                        <StackPanel Margin="8">
+
+                            <Grid Margin="0,0,0,8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="160"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+
+                                <TextBlock Grid.Row="0"
+                                           Text="Интервал (мин)"
+                                           Margin="0,0,8,8"
+                                           VerticalAlignment="Center"
+                                           Foreground="{DynamicResource TextColorBrush}"/>
+                                <TextBox Grid.Row="0"
+                                         Grid.Column="1"
+                                         Margin="0,0,0,8"
+                                         Text="{Binding CheckIntervalMinutes}"
+                                         Style="{StaticResource ModernTextBoxStyle}"
+                                         ToolTip="Через сколько минут сервер будет автоматически проверять почту"/>
+
+                                <TextBlock Grid.Row="1"
+                                           Text="Уведомлять за (дней)"
+                                           Margin="0,0,8,0"
+                                           VerticalAlignment="Center"
+                                           Foreground="{DynamicResource TextColorBrush}"/>
+                                <TextBox Grid.Row="1"
+                                         Grid.Column="1"
+                                         Text="{Binding NotifyDaysThreshold}"
+                                         Style="{StaticResource ModernTextBoxStyle}"
+                                         ToolTip="За сколько дней до окончания сертификата отправлять уведомление"/>
+                            </Grid>
+
+                            <TextBlock Text="{Binding RelativeSource={RelativeSource AncestorType=Window}, Path=AutoStartStatusText}"
+                                       Margin="0,8,0,6"
+                                       FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TextColorBrush}"/>
+
+                            <WrapPanel Margin="0,0,0,8">
+                                <Button Content="Добавить в автозагрузку"
+                                        Width="190"
+                                        Margin="0,0,8,8"
+                                        Click="AddToAutoStart_Click"
+                                        Style="{StaticResource ModernButtonStyle}"
+                                        ToolTip="Добавить сервер в автозагрузку Windows для текущего пользователя"/>
+
+                                <Button Content="Удалить из автозагрузки"
+                                        Width="190"
+                                        Margin="0,0,0,8"
+                                        Click="RemoveFromAutoStart_Click"
+                                        Style="{StaticResource ModernButtonStyle}"
+                                        ToolTip="Убрать сервер из автозагрузки Windows"/>
+                            </WrapPanel>
+
+                            <CheckBox Content="Рабочее время"
+                                      IsChecked="{Binding NotifyOnlyInWorkHours, Mode=TwoWay}"
+                                      Margin="0,0,0,6"
+                                      Style="{StaticResource ModernCheckBoxStyle}"
+                                      ToolTip="Если включено — уведомления будут отправляться только в рабочее время"/>
+
+                            <CheckBox Content="Сворачивать в трей при закрытии"
+                                      IsChecked="{Binding MinimizeToTrayOnClose, Mode=TwoWay}"
+                                      Margin="0,0,0,6"
+                                      Style="{StaticResource ModernCheckBoxStyle}"
+                                      ToolTip="Если включено — окно будет скрываться в трей вместо закрытия"/>
+                        </StackPanel>
+                    </GroupBox>
+
+                    <!-- Обслуживание -->
+                    <GroupBox Header="Обслуживание"
+                              Style="{StaticResource ModernGroupBoxStyle}"
+                              Margin="0,0,0,12">
+                        <StackPanel Margin="8">
+                            <Button Content="Перечитать все сертификаты"
+                                    Margin="0,0,0,8"
+                                    Click="BtnFullCertsRecheck_Click"
+                                    ToolTip="Полный обход всей папки новых сертификатов"
+                                    Style="{StaticResource ModernButtonStyle}"/>
+
+                            <Button Content="Перечитать все аннулирования"
+                                    Click="BtnFullRevokesRecheck_Click"
+                                    ToolTip="Полный обход всей папки аннулирований"
+                                    Style="{StaticResource ModernButtonStyle}"/>
+                        </StackPanel>
+                    </GroupBox>
+
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- ================= RIGHT COLUMN ================= -->
+            <ScrollViewer Grid.Column="2"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled">
+                <StackPanel>
+
+                    <!-- Firebird -->
+                    <GroupBox Header="Firebird"
+                              Style="{StaticResource ModernGroupBoxStyle}"
+                              Margin="0,0,0,12">
+                        <Grid Margin="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="160"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <TextBlock Grid.Row="0"
+                                       Text="Сервер"
+                                       Margin="0,0,8,8"
+                                       VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextColorBrush}"/>
+                            <TextBox Grid.Row="0"
+                                     Grid.Column="1"
+                                     Margin="0,0,0,8"
+                                     Text="{Binding FbServer}"
+                                     Style="{StaticResource ModernTextBoxStyle}"
+                                     ToolTip="IP или имя сервера Firebird"/>
+
+                            <TextBlock Grid.Row="1"
+                                       Text="Путь к БД"
+                                       Margin="0,0,8,8"
+                                       VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextColorBrush}"/>
+                            <TextBox Grid.Row="1"
+                                     Grid.Column="1"
+                                     Margin="0,0,0,8"
+                                     Text="{Binding FirebirdDbPath}"
+                                     Style="{StaticResource ModernTextBoxStyle}"
+                                     ToolTip="Полный путь к файлу базы данных Firebird"/>
+
+                            <TextBlock Grid.Row="2"
+                                       Text="Логин"
+                                       Margin="0,0,8,8"
+                                       VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextColorBrush}"/>
+                            <TextBox Grid.Row="2"
+                                     Grid.Column="1"
+                                     Margin="0,0,0,8"
+                                     Text="{Binding FbUser}"
+                                     Style="{StaticResource ModernTextBoxStyle}"
+                                     ToolTip="Пользователь Firebird, обычно SYSDBA"/>
+
+                            <TextBlock Grid.Row="3"
+                                       Text="Пароль"
+                                       Margin="0,0,8,8"
+                                       VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextColorBrush}"/>
+                            <PasswordBox Grid.Row="3"
+                                         Grid.Column="1"
+                                         Margin="0,0,0,8"
+                                         x:Name="DbPasswordBox"
+                                         Style="{StaticResource ModernPasswordBoxStyle}"
+                                         ToolTip="Пароль пользователя Firebird"/>
+
+                            <TextBlock Grid.Row="4"
+                                       Text="Диалект"
+                                       Margin="0,0,8,8"
+                                       VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextColorBrush}"/>
+                            <TextBox Grid.Row="4"
+                                     Grid.Column="1"
+                                     Margin="0,0,0,8"
+                                     Text="{Binding FbDialect}"
+                                     Style="{StaticResource ModernTextBoxStyle}"
+                                     ToolTip="Диалект Firebird. Обычно 3"/>
+
+                            <Button Grid.Row="5"
+                                    Grid.Column="1"
+                                    Content="Проверить Firebird"
+                                    Width="160"
+                                    HorizontalAlignment="Right"
+                                    Click="TestDb_Click"
+                                    Style="{StaticResource ModernButtonStyle}"
+                                    ToolTip="Проверить подключение к базе Firebird с текущими настройками"/>
+                        </Grid>
+                    </GroupBox>
+
+                    <!-- Bimoid -->
+                    <GroupBox Header="Bimoid"
+                              Style="{StaticResource ModernGroupBoxStyle}"
+                              Margin="0,0,0,12">
+                        <Grid Margin="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="160"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <TextBlock Grid.Row="0"
+                                       Text="Путь к EXE"
+                                       Margin="0,0,8,8"
+                                       VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextColorBrush}"/>
+                            <TextBox Grid.Row="0"
+                                     Grid.Column="1"
+                                     Margin="0,0,0,8"
+                                     Text="{Binding BimoidSenderExePath}"
+                                     Style="{StaticResource ModernTextBoxStyle}"
+                                     ToolTip="Полный путь к BimoidBroadcastSender.exe"/>
+
+                            <TextBlock Grid.Row="1"
+                                       Text="Папка JSON jobs"
+                                       Margin="0,0,8,8"
+                                       VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextColorBrush}"/>
+                            <TextBox Grid.Row="1"
+                                     Grid.Column="1"
+                                     Margin="0,0,0,8"
+                                     Text="{Binding BimoidJobDirectory}"
+                                     Style="{StaticResource ModernTextBoxStyle}"
+                                     ToolTip="Папка, куда будут складываться JSON-задания для отправки"/>
+
+                            <TextBlock Grid.Row="2"
+                                       Text="Сервер Bimoid"
+                                       Margin="0,0,8,8"
+                                       VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextColorBrush}"/>
+                            <TextBox Grid.Row="2"
+                                     Grid.Column="1"
+                                     Margin="0,0,0,8"
+                                     Text="{Binding BimoidServer}"
+                                     Style="{StaticResource ModernTextBoxStyle}"
+                                     ToolTip="IP или имя сервера Bimoid"/>
+
+                            <TextBlock Grid.Row="3"
+                                       Text="Порт Bimoid"
+                                       Margin="0,0,8,8"
+                                       VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextColorBrush}"/>
+                            <TextBox Grid.Row="3"
+                                     Grid.Column="1"
+                                     Margin="0,0,0,8"
+                                     Text="{Binding BimoidPort}"
+                                     Style="{StaticResource ModernTextBoxStyle}"
+                                     ToolTip="Порт сервера Bimoid, например 7023"/>
+
+                            <TextBlock Grid.Row="4"
+                                       Text="Логин Bimoid"
+                                       Margin="0,0,8,8"
+                                       VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextColorBrush}"/>
+                            <TextBox Grid.Row="4"
+                                     Grid.Column="1"
+                                     Margin="0,0,0,8"
+                                     Text="{Binding BimoidLogin}"
+                                     Style="{StaticResource ModernTextBoxStyle}"
+                                     ToolTip="Логин для подключения к Bimoid"/>
+
+                            <TextBlock Grid.Row="5"
+                                       Text="Пароль Bimoid"
+                                       Margin="0,0,8,8"
+                                       VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextColorBrush}"/>
+                            <PasswordBox Grid.Row="5"
+                                         Grid.Column="1"
+                                         Margin="0,0,0,8"
+                                         x:Name="BimoidPasswordBox"
+                                         Style="{StaticResource ModernPasswordBoxStyle}"
+                                         ToolTip="Пароль для подключения к Bimoid"/>
+
+                            <TextBlock Grid.Row="6"
+                                       Text="Задержка (мс)"
+                                       Margin="0,0,8,8"
+                                       VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextColorBrush}"/>
+                            <TextBox Grid.Row="6"
+                                     Grid.Column="1"
+                                     Margin="0,0,0,8"
+                                     Text="{Binding BimoidDelayBetweenMessagesMs}"
+                                     Style="{StaticResource ModernTextBoxStyle}"
+                                     ToolTip="Пауза между отправкой сообщений в миллисекундах"/>
+
+                            <TextBlock Grid.Row="7"
+                                       Text="Краснофлотская"
+                                       Margin="0,0,8,8"
+                                       VerticalAlignment="Top"
+                                       Foreground="{DynamicResource TextColorBrush}"/>
+                            <TextBox Grid.Row="7"
+                                     Grid.Column="1"
+                                     Margin="0,0,0,8"
+                                     Height="70"
+                                     AcceptsReturn="True"
+                                     VerticalScrollBarVisibility="Auto"
+                                     Text="{Binding BimoidAccountsKrasnoflotskaya}"
+                                     Style="{StaticResource ModernTextBoxStyle}"
+                                     ToolTip="Список получателей для Краснофлотской. Можно указывать по одному логину в строке"/>
+
+                            <TextBlock Grid.Row="8"
+                                       Text="Пионерская"
+                                       Margin="0,0,8,0"
+                                       VerticalAlignment="Top"
+                                       Foreground="{DynamicResource TextColorBrush}"/>
+                            <TextBox Grid.Row="8"
+                                     Grid.Column="1"
+                                     Height="70"
+                                     AcceptsReturn="True"
+                                     VerticalScrollBarVisibility="Auto"
+                                     Text="{Binding BimoidAccountsPionerskaya}"
+                                     Style="{StaticResource ModernTextBoxStyle}"
+                                     ToolTip="Список получателей для Пионерской. Можно указывать по одному логину в строке"/>
+                        </Grid>
+                    </GroupBox>
+
+                    <GroupBox Header="Тест Bimoid"
+                              Style="{StaticResource ModernGroupBoxStyle}"
+                              Margin="0,0,0,12">
+                        <Grid Margin="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="12"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <Button Grid.Column="0"
+                                    Content="Тестовое сообщение"
+                                    Height="32"
+                                    Click="BtnTestBimoid_Click"
+                                    Style="{StaticResource ModernButtonStyle}"
+                                    ToolTip="Отправить обычное тестовое сообщение через Bimoid"/>
+
+                            <Button Grid.Column="2"
+                                    Content="Тест нового пользователя"
+                                    Height="32"
+                                    Click="BtnTestNewUserNotify_Click"
+                                    Style="{StaticResource ModernButtonStyle}"
+                                    ToolTip="Отправить тестовое уведомление о новом сертификате"/>
+                        </Grid>
+                    </GroupBox>
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+
+        <!-- Нижняя панель -->
+        <Border Grid.Row="1"
+                Margin="0,12,0,0"
+                Padding="0,8,0,0"
+                BorderBrush="{DynamicResource BorderColorBrush}"
+                BorderThickness="0,1,0,0">
+            <DockPanel LastChildFill="False">
+                <Button Content="Сохранить"
+                        Width="140"
+                        DockPanel.Dock="Right"
+                        Click="Save_Click"
+                        Style="{StaticResource ModernButtonStyle}"
+                        ToolTip="Сохранить настройки в server.settings.txt"/>
+            </DockPanel>
+        </Border>
+    </Grid>
+</Window>

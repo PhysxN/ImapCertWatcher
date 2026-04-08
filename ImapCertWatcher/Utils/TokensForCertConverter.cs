@@ -18,10 +18,10 @@ namespace ImapCertWatcher
                 return null;
 
             if (cert == null)
-                return allTokens.Where(t => t.IsFree);
+                return allTokens.Where(t => t.OwnerCertId == null);
 
             // свободные + уже привязанный к сертификату
-            return allTokens.Where(t => t.IsFree || t.Id == cert.TokenId).ToList();
+            return allTokens.Where(t => t.OwnerCertId == null || t.Id == cert.TokenId).ToList();
         }
 
         public object[] ConvertBack(object value, Type[] targetTypes, object parameter, CultureInfo culture)

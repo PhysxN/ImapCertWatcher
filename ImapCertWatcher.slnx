@@ -1,3 +1,5 @@
 <Solution>
-  <Project Path="ImapCertWatcher/ImapCertWatcher.csproj" Id="87c02190-b0b2-4a0f-b9ff-1c9ea74aea28" />
+  <Project Path="ImapCertWatcher.Core/ImapCertWatcher.Core.csproj" Id="427ad32f-70df-46f7-b614-87bd119616ad" />
+  <Project Path="ImapCertWatcher.Server/ImapCertWatcher.Server.csproj" Id="f9811b8c-36a7-464a-b9b5-46758f1d473c" />
+  <Project Path="ImapCertWatcher/ImapCertWatcher.client.csproj" Id="87c02190-b0b2-4a0f-b9ff-1c9ea74aea28" />
 </Solution>

@@ -1,0 +1,38 @@
+﻿# ===== MAIL =====
+MailHost=imap.yandex.ru
+MailPort=993
+MailUseSsl=True
+MailLogin=blag-gs.amr@sudrf.ru
+MailPassword=AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAA0E+oO88JdUeZ+qS4VYwM0AAAAAACAAAAAAAQZgAAAAEAACAAAACKditIMYwj1d1T/x78VKNqaTn5/r9nRGGBl4MuFmWk0wAAAAAOgAAAAAIAACAAAAB4dF2ObsTVQZnRWRuFZTf+Bl2K+iXtLlKfxFjk+0RNISAAAAAbODjqPv58fsEtVdUm945y0iq44NynHhRT+/7IuvWZMkAAAACEuKbRWUWO0dqrKo878QSqVnAIRBt3IaD1FJHEalyYg+g4FRiOCCmONM9FZfqqvGLRmaSrNqO8Vdp0kI1stQ3h
+
+# ===== IMAP =====
+ImapNewCertificatesFolder=Казначейство для ЭЦП|Сертификаты Казначейства
+ImapRevocationsFolder=Казначейство для ЭЦП|Аннулированные
+
+# ===== FIREBIRD =====
+FirebirdDbPath=C:\DB_PHYSXN\certs.fdb
+FbServer=127.0.0.1
+FbUser=SYSDBA
+FbPassword=masterkey
+FbDialect=3
+FbCharset=UTF8
+IsDevelopment=False
+
+# ===== SERVER =====
+ServerPort=5050
+CheckIntervalMinutes=20
+NotifyDaysThreshold=12
+NotifyOnlyInWorkHours=True
+AutoStartServer=True
+MinimizeToTrayOnClose=True
+
+# ===== BIMOID =====
+BimoidSenderExePath=D:\!Read\!PhysxN_Progs\BimoidBroadcastSender\BimoidBroadcastSender.exe
+BimoidJobDirectory=C:\ProgramData\CaseRemainderMonitor\BimoidJobs
+BimoidServer=192.168.0.2
+BimoidPort=7023
+BimoidLogin=admin
+BimoidPassword=111
+BimoidDelayBetweenMessagesMs=300
+BimoidAccountsKrasnoflotskaya=leonid
+BimoidAccountsPionerskaya=
