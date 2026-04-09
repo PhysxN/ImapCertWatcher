@@ -13,7 +13,7 @@
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter"/>
     </Window.Resources>
-
+    
     <Grid Margin="8" Background="{DynamicResource WindowBackgroundBrush}">
         <TabControl Style="{StaticResource ModernTabControlStyle}"
                     SelectionChanged="TabControl_SelectionChanged">
@@ -208,16 +208,29 @@
                             <DataGridTemplateColumn Header="Токен" Width="*">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
-                                        <ComboBox Style="{StaticResource DataGridComboBoxStyle}"
-                                                  ItemsSource="{Binding AvailableTokens}"
-                                                  SelectedValue="{Binding TokenId, Mode=TwoWay}"
-                                                  SelectedValuePath="Id"
-                                                  DisplayMemberPath="Sn"
-                                                  SelectionChanged="TokenComboBox_SelectionChanged"/>
+                                        <TextBlock Text="{Binding TokenSn}"
+                       Style="{StaticResource DataGridTextBlockStyle}"/>
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
-                            </DataGridTemplateColumn>
 
+                                <DataGridTemplateColumn.CellEditingTemplate>
+                                    <DataTemplate>
+                                        <ComboBox ItemsSource="{Binding AvailableTokens}"
+                  ItemContainerStyle="{StaticResource DataGridComboBoxItemStyle}"
+                  SelectedValue="{Binding TokenId, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                  SelectedValuePath="Id"
+                  DisplayMemberPath="Sn"
+                  IsEditable="True"
+                  StaysOpenOnEdit="True"
+                  IsTextSearchEnabled="False"
+                  IsEnabled="{Binding CanEditToken}"
+                  Loaded="TokenComboBox_Loaded"
+                  GotKeyboardFocus="TokenComboBox_GotKeyboardFocus"
+                  DropDownClosed="TokenComboBox_DropDownClosed"
+                  SelectionChanged="TokenComboBox_SelectionChanged"/>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellEditingTemplate>
+                            </DataGridTemplateColumn>
                             <DataGridTextColumn Header="Начало"
                                                 Width="*"
                                                 IsReadOnly="True"
@@ -254,19 +267,19 @@
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
                                         <TextBlock Text="{Binding Building}"
-                                                   Style="{StaticResource DataGridTextBlockStyle}"/>
+                       Style="{StaticResource DataGridTextBlockStyle}"/>
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
+
                                 <DataGridTemplateColumn.CellEditingTemplate>
                                     <DataTemplate>
                                         <ComboBox Style="{StaticResource DataGridComboBoxStyle}"
-                                                  ItemsSource="{Binding AvailableBuildings, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                  SelectedItem="{Binding Building, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                                  SelectionChanged="BuildingComboBox_SelectionChanged"/>
+                      ItemsSource="{Binding AvailableBuildings, RelativeSource={RelativeSource AncestorType=Window}}"
+                      SelectedItem="{Binding Building, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                      SelectionChanged="BuildingComboBox_SelectionChanged"/>
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellEditingTemplate>
                             </DataGridTemplateColumn>
-
                             <DataGridTemplateColumn Header="Примечание" Width="2*">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>

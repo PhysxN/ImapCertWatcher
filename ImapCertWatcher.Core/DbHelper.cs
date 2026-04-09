@@ -60,12 +60,39 @@ namespace ImapCertWatcher.Data
 
         #region Initialization: tables, sequences, indices
 
+        private bool IsLocalFirebirdServer()
+        {
+            var server = (_settings.FbServer ?? "").Trim();
+
+            if (string.IsNullOrWhiteSpace(server))
+                return false;
+
+            return server.Equals("127.0.0.1", StringComparison.OrdinalIgnoreCase)
+                || server.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+                || server.Equals(".", StringComparison.OrdinalIgnoreCase)
+                || server.Equals(Environment.MachineName, StringComparison.OrdinalIgnoreCase);
+        }
+
         private void NormalizeFirebirdPath()
         {
             if (string.IsNullOrWhiteSpace(_settings.FirebirdDbPath))
                 throw new InvalidOperationException("FirebirdDbPath не задан.");
 
-            // если относительный путь — делаем абсолютный
+            // Для удалённого Firebird локальные папки на машине приложения
+            // создавать нельзя. Путь должен быть уже корректным путём
+            // на стороне Firebird-сервера.
+            if (!IsLocalFirebirdServer())
+            {
+                if (!Path.IsPathRooted(_settings.FirebirdDbPath))
+                {
+                    throw new InvalidOperationException(
+                        "Для удалённого сервера Firebird путь к базе должен быть абсолютным.");
+                }
+
+                return;
+            }
+
+            // Для локального Firebird допускаем относительный путь рядом с exe
             if (!Path.IsPathRooted(_settings.FirebirdDbPath))
             {
                 _settings.FirebirdDbPath = Path.Combine(
@@ -88,32 +115,16 @@ namespace ImapCertWatcher.Data
         {
             try
             {
-                // ===== НОРМАЛИЗАЦИЯ ПУТИ К БД =====
-                if (string.IsNullOrWhiteSpace(_settings.FirebirdDbPath))
-                {
-                    throw new InvalidOperationException(
-                        "FirebirdDbPath не задан. Проверь AppSettings / конфиг.");
-                }
-
-                // если путь относительный — делаем абсолютный
-                if (!Path.IsPathRooted(_settings.FirebirdDbPath))
-                {
-                    _settings.FirebirdDbPath = Path.Combine(
-                        AppDomain.CurrentDomain.BaseDirectory,
-                        _settings.FirebirdDbPath);
-                }
-                
                 using (var conn = new FbConnection(_connectionString))
                 {
                     conn.Open();
 
-                    // Создаем последовательности, таблицы и индексы, если необходимо
                     EnsureSequences(conn);
+
                     if (!CheckTableExists(conn, "CERTS"))
                         CreateCertsAndArchivesTables(conn);
                     else
                     {
-                        // Таблица есть — создаём недостающие таблицы/индексы
                         if (!CheckTableExists(conn, "CERT_ARCHIVES"))
                             CreateArchivesTableOnly(conn);
 
@@ -121,11 +132,9 @@ namespace ImapCertWatcher.Data
                         AddMissingColumns(conn);
                     }
 
-                    // --- НОВОЕ: таблица PROCESSED_MAILS ---
                     if (!CheckTableExists(conn, "PROCESSED_MAILS"))
                         CreateProcessedMailsTable(conn);
 
-                    // --- НОВОЕ: таблица IMAP_LAST_UID ---
                     if (!CheckTableExists(conn, "IMAP_LAST_UID"))
                         CreateImapLastUidTable(conn);
 
@@ -133,7 +142,6 @@ namespace ImapCertWatcher.Data
                         CreateTokensTable(conn);
                     else
                         CreateIndexIfNotExists(conn, "UQ_TOKENS_SN", "TOKENS", "SN", true);
-
                 }
             }
             catch (Exception ex)
@@ -142,7 +150,6 @@ namespace ImapCertWatcher.Data
                 throw;
             }
         }
-
 
         private void EnsureSequences(FbConnection conn)
         {
@@ -226,12 +233,29 @@ namespace ImapCertWatcher.Data
                 throw new InvalidOperationException(
                     "Создание базы запрещено вне режима разработки");
 
-            if (_settings.FbServer != "127.0.0.1" &&
-                !_settings.FbServer.Equals("localhost", StringComparison.OrdinalIgnoreCase))
+            if (string.IsNullOrWhiteSpace(_settings.FirebirdDbPath))
+                throw new InvalidOperationException(
+                    "Не задан путь к базе Firebird (FirebirdDbPath).");
+
+            if (string.IsNullOrWhiteSpace(_settings.FbServer))
+                throw new InvalidOperationException(
+                    "Не задан сервер Firebird (FbServer).");
+
+            if (string.IsNullOrWhiteSpace(_settings.FbUser))
+                throw new InvalidOperationException(
+                    "Не задан пользователь Firebird (FbUser).");
+
+            if (string.IsNullOrWhiteSpace(_settings.FbPassword))
+                throw new InvalidOperationException(
+                    "Не задан пароль Firebird (FbPassword).");
+
+            if (!IsLocalFirebirdServer())
             {
                 throw new InvalidOperationException(
-                    "Создание базы разрешено только на локальном сервере");
+                    "Автоматическое создание БД разрешено только для локального сервера Firebird (127.0.0.1, localhost, ., имя текущего компьютера).");
             }
+
+            NormalizeFirebirdPath();
 
             var csb = new FbConnectionStringBuilder
             {
@@ -240,7 +264,7 @@ namespace ImapCertWatcher.Data
                 Password = _settings.FbPassword,
                 DataSource = _settings.FbServer,
                 Port = 3050,
-                Charset = _settings.FbCharset,
+                Charset = string.IsNullOrWhiteSpace(_settings.FbCharset) ? "UTF8" : _settings.FbCharset,
                 Dialect = _settings.FbDialect,
                 ServerType = FbServerType.Default
             };
@@ -508,11 +532,10 @@ ON TOKENS (SN)";
             }
             catch (Exception ex)
             {
-                // Игнорируем ошибки создания индексов/триггеров, но логируем
-                Log($"TryExecuteNoThrow: {ex.Message}");
+                Log($"DDL error: {ex.Message}");
+                throw;
             }
         }
-
         /// <summary>
         /// Проверяет существование индекса по имени (RDB$INDICES)
         /// </summary>
@@ -532,29 +555,17 @@ ON TOKENS (SN)";
         /// </summary>
         private void CreateIndexIfNotExists(FbConnection conn, string indexName, string tableName, string columns, bool unique)
         {
-            try
-            {
-                if (IndexExists(conn, indexName))
-                {
-                    //Log($"Индекс {indexName} уже существует — пропускаем создание.");
-                    return;
-                }
+            if (IndexExists(conn, indexName))
+                return;
 
-                using (var cmd = conn.CreateCommand())
-                {
-                    string uniq = unique ? "UNIQUE " : "";
-                    cmd.CommandText = $"CREATE {uniq}INDEX {indexName} ON {tableName} ({columns})";
-                    cmd.ExecuteNonQuery();
-                    Log($"Создан индекс {indexName} ON {tableName} ({columns})");
-                }
-            }
-            catch (Exception ex)
+            using (var cmd = conn.CreateCommand())
             {
-                // Если индекс не удалось создать — логируем, но не даём падать и остальному коду
-                Log($"CreateIndexIfNotExists: не удалось создать индекс {indexName}: {ex.Message}");
+                string uniq = unique ? "UNIQUE " : "";
+                cmd.CommandText = $"CREATE {uniq}INDEX {indexName} ON {tableName} ({columns})";
+                cmd.ExecuteNonQuery();
+                Log($"Создан индекс {indexName} ON {tableName} ({columns})");
             }
         }
-
         #endregion
 
         #region Normalization utilities
@@ -577,9 +588,13 @@ ON TOKENS (SN)";
                 return string.Empty;
 
             var s = cert.Trim();
-            s = s.Replace("№", "");
-            s = s.Replace("N", "");
-            s = s.Replace("n", "");
+
+            s = Regex.Replace(
+                s,
+                @"^\s*(?:СЕРТИФИКАТ\s*)?(?:№|N)\s*",
+                "",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
             s = Regex.Replace(s, @"[\s\-]+", "");
             s = s.ToUpperInvariant();
 
@@ -855,13 +870,42 @@ ROWS 1";
                 using (var conn = new FbConnection(_connectionString))
                 {
                     conn.Open();
-                    using (var cmd = conn.CreateCommand())
+
+                    using (var tr = conn.BeginTransaction())
                     {
-                        cmd.CommandText = "DELETE FROM CERT_ARCHIVES WHERE CERT_ID = @certId";
-                        cmd.Parameters.AddWithValue("@certId", certId);
-                        int r = cmd.ExecuteNonQuery();
-                        Log($"DeleteArchiveFromDb: удалено записей={r} для CertID={certId}");
-                        return r > 0;
+                        try
+                        {
+                            int deletedRows;
+
+                            using (var cmd = conn.CreateCommand())
+                            {
+                                cmd.Transaction = tr;
+                                cmd.CommandText = "DELETE FROM CERT_ARCHIVES WHERE CERT_ID = @certId";
+                                cmd.Parameters.AddWithValue("@certId", certId);
+                                deletedRows = cmd.ExecuteNonQuery();
+                            }
+
+                            using (var cmd = conn.CreateCommand())
+                            {
+                                cmd.Transaction = tr;
+                                cmd.CommandText = @"
+UPDATE CERTS
+SET ARCHIVE_PATH = NULL
+WHERE ID = @certId";
+                                cmd.Parameters.AddWithValue("@certId", certId);
+                                cmd.ExecuteNonQuery();
+                            }
+
+                            tr.Commit();
+
+                            Log($"DeleteArchiveFromDb: удалено архивов={deletedRows} для CertID={certId}");
+                            return deletedRows > 0;
+                        }
+                        catch
+                        {
+                            try { tr.Rollback(); } catch { }
+                            throw;
+                        }
                     }
                 }
             }
@@ -906,7 +950,8 @@ ROWS 1";
         /// 
         public (bool wasUpdated, bool wasAdded, int certId) InsertOrUpdateAndGetId(CertEntry entry)
         {
-            if (entry == null) throw new ArgumentNullException(nameof(entry));
+            if (entry == null)
+                throw new ArgumentNullException(nameof(entry));
 
             bool wasUpdated = false;
             bool wasAdded = false;
@@ -928,16 +973,15 @@ ROWS 1";
                             int existingId = -1;
                             DateTime existingDateEnd = DateTime.MinValue;
                             string existingCertNumber = null;
+                            string existingFromAddress = null;
                             bool existingIsDeleted = false;
                             bool existingIsRevoked = false;
 
-                            // Ищем только по ФИО.
-                            // Если вдруг в базе уже есть дубли по ФИО - берём самую свежую запись.
                             using (var cmd = conn.CreateCommand())
                             {
                                 cmd.Transaction = tx;
                                 cmd.CommandText = @"
-SELECT ID, FIO, DATE_END, CERT_NUMBER, IS_DELETED, IS_REVOKED
+SELECT ID, FIO, DATE_END, CERT_NUMBER, FROM_ADDRESS, IS_DELETED, IS_REVOKED
 FROM CERTS
 ORDER BY DATE_END DESC";
 
@@ -953,8 +997,9 @@ ORDER BY DATE_END DESC";
                                         existingId = r.GetInt32(0);
                                         existingDateEnd = r.IsDBNull(2) ? DateTime.MinValue : r.GetDateTime(2);
                                         existingCertNumber = r.IsDBNull(3) ? "" : r.GetString(3);
-                                        existingIsDeleted = !r.IsDBNull(4) && Convert.ToInt32(r[4]) == 1;
-                                        existingIsRevoked = !r.IsDBNull(5) && Convert.ToInt32(r[5]) == 1;
+                                        existingFromAddress = r.IsDBNull(4) ? "" : r.GetString(4);
+                                        existingIsDeleted = !r.IsDBNull(5) && Convert.ToInt32(r[5]) == 1;
+                                        existingIsRevoked = !r.IsDBNull(6) && Convert.ToInt32(r[6]) == 1;
                                         break;
                                     }
                                 }
@@ -969,8 +1014,6 @@ ORDER BY DATE_END DESC";
 
                                 certId = existingId;
 
-                                // 1) Тот же самый сертификат:
-                                //    ничего не восстанавливаем и не считаем новым изменением
                                 if (sameCert)
                                 {
                                     if (existingIsRevoked || existingIsDeleted)
@@ -983,10 +1026,12 @@ ORDER BY DATE_END DESC";
                                         Log($"InsertOrUpdateAndGetId: тот же сертификат для FIO='{entry.Fio}', номер={entry.CertNumber} уже есть в БД. Запись не изменена.");
                                     }
                                 }
-                                // 2) Новый сертификат не старее текущего:
-                                //    обновляем запись и делаем её активной
                                 else if (sameOrNewer)
                                 {
+                                    string fromAddressToSave = string.IsNullOrWhiteSpace(entry.FromAddress)
+                                        ? (existingFromAddress ?? "")
+                                        : entry.FromAddress;
+
                                     using (var upd = conn.CreateCommand())
                                     {
                                         upd.Transaction = tx;
@@ -1012,13 +1057,16 @@ WHERE ID = @id";
                                             entry.DateStart == DateTime.MinValue ? (object)DBNull.Value : entry.DateStart);
                                         upd.Parameters.AddWithValue("@dateEnd",
                                             entry.DateEnd == DateTime.MinValue ? (object)DBNull.Value : entry.DateEnd);
-                                        upd.Parameters.AddWithValue("@fromAddress", (object)entry.FromAddress ?? "");
+                                        upd.Parameters.AddWithValue("@fromAddress", fromAddressToSave);
                                         upd.Parameters.AddWithValue("@folderPath", (object)entry.FolderPath ?? "");
                                         upd.Parameters.AddWithValue("@msgDate",
                                             entry.MessageDate == DateTime.MinValue ? (object)DBNull.Value : entry.MessageDate);
                                         upd.Parameters.AddWithValue("@id", existingId);
 
-                                        upd.ExecuteNonQuery();
+                                        int affected = upd.ExecuteNonQuery();
+
+                                        if (affected <= 0)
+                                            throw new InvalidOperationException("Не удалось обновить существующий сертификат.");
                                     }
 
                                     wasUpdated = true;
@@ -1035,7 +1083,6 @@ WHERE ID = @id";
                                 }
                                 else
                                 {
-                                    // 3) Пришёл более старый сертификат - ничего не меняем
                                     Log($"InsertOrUpdateAndGetId: найден более старый сертификат для FIO='{entry.Fio}', " +
                                         $"номер={entry.CertNumber}, DATE_END={entry.DateEnd:dd.MM.yyyy HH:mm:ss}. " +
                                         $"В БД уже есть более новый до {existingDateEnd:dd.MM.yyyy HH:mm:ss}. Запись не изменена.");
@@ -1069,12 +1116,14 @@ RETURNING ID";
                                         entry.MessageDate == DateTime.MinValue ? (object)DBNull.Value : entry.MessageDate);
 
                                     var insertedIdObj = ins.ExecuteScalar();
-                                    if (insertedIdObj != null && insertedIdObj != DBNull.Value)
-                                    {
-                                        certId = Convert.ToInt32(insertedIdObj);
-                                        wasAdded = true;
-                                        Log($"InsertOrUpdateAndGetId: добавлен новый сертификат ID={certId} для FIO='{entry.Fio}', номер={entry.CertNumber}");
-                                    }
+
+                                    if (insertedIdObj == null || insertedIdObj == DBNull.Value)
+                                        throw new InvalidOperationException("Не удалось получить ID новой записи сертификата.");
+
+                                    certId = Convert.ToInt32(insertedIdObj);
+                                    wasAdded = true;
+
+                                    Log($"InsertOrUpdateAndGetId: добавлен новый сертификат ID={certId} для FIO='{entry.Fio}', номер={entry.CertNumber}");
                                 }
                             }
 
@@ -1091,7 +1140,7 @@ RETURNING ID";
             catch (Exception ex)
             {
                 try { Log($"InsertOrUpdateAndGetId error: {ex.Message}"); } catch { }
-                return (false, false, -1);
+                throw;
             }
 
             return (wasUpdated, wasAdded, certId);
@@ -1264,14 +1313,20 @@ MATCHING (FOLDER_PATH)";
             using (var conn = new FbConnection(_connectionString))
             {
                 conn.Open();
+
                 using (var cmd = conn.CreateCommand())
                 {
                     cmd.CommandText = "UPDATE CERTS SET NOTE = @note WHERE ID = @id";
                     cmd.Parameters.AddWithValue("@note", note ?? "");
                     cmd.Parameters.AddWithValue("@id", id);
-                    cmd.ExecuteNonQuery();
+
+                    int affected = cmd.ExecuteNonQuery();
+
+                    if (affected <= 0)
+                        throw new InvalidOperationException("Сертификат не найден.");
                 }
             }
+
             Log($"UpdateNote: ID={id}");
         }
 
@@ -1280,14 +1335,20 @@ MATCHING (FOLDER_PATH)";
             using (var conn = new FbConnection(_connectionString))
             {
                 conn.Open();
+
                 using (var cmd = conn.CreateCommand())
                 {
                     cmd.CommandText = "UPDATE CERTS SET BUILDING = @b WHERE ID = @id";
                     cmd.Parameters.AddWithValue("@b", building ?? "");
                     cmd.Parameters.AddWithValue("@id", id);
-                    cmd.ExecuteNonQuery();
+
+                    int affected = cmd.ExecuteNonQuery();
+
+                    if (affected <= 0)
+                        throw new InvalidOperationException("Сертификат не найден.");
                 }
             }
+
             Log($"UpdateBuilding: ID={id}, building={building}");
         }
 
@@ -1297,41 +1358,75 @@ MATCHING (FOLDER_PATH)";
             {
                 conn.Open();
 
-                if (!isDeleted)
+                using (var tr = conn.BeginTransaction())
                 {
-                    using (var check = conn.CreateCommand())
+                    try
                     {
-                        check.CommandText = @"
+                        if (!isDeleted)
+                        {
+                            using (var check = conn.CreateCommand())
+                            {
+                                check.Transaction = tr;
+                                check.CommandText = @"
 SELECT COALESCE(IS_REVOKED, 0)
 FROM CERTS
 WHERE ID = @id";
-                        check.Parameters.AddWithValue("@id", id);
+                                check.Parameters.AddWithValue("@id", id);
 
-                        var value = check.ExecuteScalar();
-                        bool isRevoked = value != null && value != DBNull.Value && Convert.ToInt32(value) == 1;
+                                var value = check.ExecuteScalar();
 
-                        if (isRevoked)
-                        {
-                            throw new InvalidOperationException(
-                                "Нельзя восстанавливать аннулированный сертификат обычным восстановлением. Используйте сброс аннулирований.");
+                                if (value == null || value == DBNull.Value)
+                                    throw new InvalidOperationException("Сертификат не найден.");
+
+                                bool isRevoked = Convert.ToInt32(value) == 1;
+
+                                if (isRevoked)
+                                {
+                                    throw new InvalidOperationException(
+                                        "Нельзя восстанавливать аннулированный сертификат обычным восстановлением. Используйте сброс аннулирований.");
+                                }
+                            }
                         }
-                    }
-                }
 
-                using (var cmd = conn.CreateCommand())
-                {
-                    cmd.CommandText = @"
+                        using (var cmd = conn.CreateCommand())
+                        {
+                            cmd.Transaction = tr;
+
+                            if (isDeleted)
+                            {
+                                cmd.CommandText = @"
 UPDATE CERTS
 SET
-    IS_DELETED = @d,
-    MANUAL_DELETED = @md
+    IS_DELETED = 1,
+    MANUAL_DELETED = 1
 WHERE ID = @id";
+                            }
+                            else
+                            {
+                                cmd.CommandText = @"
+UPDATE CERTS
+SET
+    IS_DELETED = 0,
+    MANUAL_DELETED = 0
+WHERE ID = @id
+  AND COALESCE(IS_REVOKED, 0) = 0";
+                            }
 
-                    cmd.Parameters.AddWithValue("@d", isDeleted ? 1 : 0);
-                    cmd.Parameters.AddWithValue("@md", isDeleted ? 1 : 0);
-                    cmd.Parameters.AddWithValue("@id", id);
+                            cmd.Parameters.AddWithValue("@id", id);
 
-                    cmd.ExecuteNonQuery();
+                            int affected = cmd.ExecuteNonQuery();
+
+                            if (affected <= 0)
+                                throw new InvalidOperationException("Не удалось изменить состояние записи.");
+                        }
+
+                        tr.Commit();
+                    }
+                    catch
+                    {
+                        try { tr.Rollback(); } catch { }
+                        throw;
+                    }
                 }
             }
 
@@ -1343,14 +1438,20 @@ WHERE ID = @id";
             using (var conn = new FbConnection(_connectionString))
             {
                 conn.Open();
+
                 using (var cmd = conn.CreateCommand())
                 {
                     cmd.CommandText = "UPDATE CERTS SET ARCHIVE_PATH = @p WHERE ID = @id";
                     cmd.Parameters.AddWithValue("@p", archivePath ?? "");
                     cmd.Parameters.AddWithValue("@id", id);
-                    cmd.ExecuteNonQuery();
+
+                    int affected = cmd.ExecuteNonQuery();
+
+                    if (affected <= 0)
+                        throw new InvalidOperationException("Сертификат не найден.");
                 }
             }
+
             Log($"UpdateArchivePath: ID={id}, path={archivePath}");
         }
 
@@ -1525,55 +1626,79 @@ MATCHING (FOLDER_PATH, MAIL_UID, KIND)";
 
                 using (var tr = conn.BeginTransaction())
                 {
-                    using (var checkCert = conn.CreateCommand())
+                    try
                     {
-                        checkCert.Transaction = tr;
-                        checkCert.CommandText = "SELECT COUNT(*) FROM CERTS WHERE ID = @certId";
-                        checkCert.Parameters.AddWithValue("@certId", certId);
+                        using (var checkCert = conn.CreateCommand())
+                        {
+                            checkCert.Transaction = tr;
+                            checkCert.CommandText = @"
+SELECT
+    COALESCE(IS_DELETED, 0),
+    COALESCE(IS_REVOKED, 0)
+FROM CERTS
+WHERE ID = @certId";
+                            checkCert.Parameters.AddWithValue("@certId", certId);
 
-                        var certExists = Convert.ToInt32(checkCert.ExecuteScalar()) > 0;
-                        if (!certExists)
-                            throw new InvalidOperationException("Сертификат не найден.");
-                    }
+                            using (var rdr = checkCert.ExecuteReader())
+                            {
+                                if (!rdr.Read())
+                                    throw new InvalidOperationException("Сертификат не найден.");
 
-                    using (var checkToken = conn.CreateCommand())
-                    {
-                        checkToken.Transaction = tr;
-                        checkToken.CommandText = "SELECT COUNT(*) FROM TOKENS WHERE ID = @tokenId";
-                        checkToken.Parameters.AddWithValue("@tokenId", tokenId);
+                                bool isDeleted = Convert.ToInt32(rdr[0]) == 1;
+                                bool isRevoked = Convert.ToInt32(rdr[1]) == 1;
 
-                        var tokenExists = Convert.ToInt32(checkToken.ExecuteScalar()) > 0;
-                        if (!tokenExists)
-                            throw new InvalidOperationException("Токен не найден.");
-                    }
+                                if (isDeleted)
+                                    throw new InvalidOperationException("Нельзя назначить токен удалённому сертификату.");
 
-                    using (var cmd = conn.CreateCommand())
-                    {
-                        cmd.Transaction = tr;
-                        cmd.CommandText = @"
+                                if (isRevoked)
+                                    throw new InvalidOperationException("Нельзя назначить токен аннулированному сертификату.");
+                            }
+                        }
+
+                        using (var checkToken = conn.CreateCommand())
+                        {
+                            checkToken.Transaction = tr;
+                            checkToken.CommandText = "SELECT COUNT(*) FROM TOKENS WHERE ID = @tokenId";
+                            checkToken.Parameters.AddWithValue("@tokenId", tokenId);
+
+                            var tokenExists = Convert.ToInt32(checkToken.ExecuteScalar()) > 0;
+                            if (!tokenExists)
+                                throw new InvalidOperationException("Токен не найден.");
+                        }
+
+                        using (var cmd = conn.CreateCommand())
+                        {
+                            cmd.Transaction = tr;
+                            cmd.CommandText = @"
 UPDATE CERTS
 SET TOKEN_ID = NULL
 WHERE TOKEN_ID = @tokenId";
-                        cmd.Parameters.AddWithValue("@tokenId", tokenId);
-                        cmd.ExecuteNonQuery();
-                    }
+                            cmd.Parameters.AddWithValue("@tokenId", tokenId);
+                            cmd.ExecuteNonQuery();
+                        }
 
-                    using (var cmd = conn.CreateCommand())
-                    {
-                        cmd.Transaction = tr;
-                        cmd.CommandText = @"
+                        using (var cmd = conn.CreateCommand())
+                        {
+                            cmd.Transaction = tr;
+                            cmd.CommandText = @"
 UPDATE CERTS
 SET TOKEN_ID = @tokenId
 WHERE ID = @certId";
-                        cmd.Parameters.AddWithValue("@tokenId", tokenId);
-                        cmd.Parameters.AddWithValue("@certId", certId);
+                            cmd.Parameters.AddWithValue("@tokenId", tokenId);
+                            cmd.Parameters.AddWithValue("@certId", certId);
 
-                        int affected = cmd.ExecuteNonQuery();
-                        if (affected <= 0)
-                            throw new InvalidOperationException("Не удалось назначить токен сертификату.");
+                            int affected = cmd.ExecuteNonQuery();
+                            if (affected <= 0)
+                                throw new InvalidOperationException("Не удалось назначить токен сертификату.");
+                        }
+
+                        tr.Commit();
                     }
-
-                    tr.Commit();
+                    catch
+                    {
+                        try { tr.Rollback(); } catch { }
+                        throw;
+                    }
                 }
             }
 
@@ -1720,14 +1845,10 @@ WHERE KIND = 'REVOKE'";
 
                     int mails = cmd.ExecuteNonQuery();
 
-                    string revokeFolderKey = ((_settings.ImapRevocationsFolder ?? "").Trim()) + "_REVOKE";
-
                     cmd.Parameters.Clear();
                     cmd.CommandText = @"
 DELETE FROM IMAP_LAST_UID
-WHERE FOLDER_PATH = @folderPath";
-
-                    cmd.Parameters.AddWithValue("@folderPath", revokeFolderKey);
+WHERE RIGHT(FOLDER_PATH, 7) = '_REVOKE'";
 
                     int uids = cmd.ExecuteNonQuery();
 
@@ -1763,11 +1884,14 @@ WHERE FOLDER_PATH = @folderPath";
                 {
                     conn.Open();
 
-                    var candidates = new List<(int Id, string CertNumber, string Fio, int IsRevoked, int IsDeleted)>();
-
-                    using (var cmd = conn.CreateCommand())
+                    using (var tx = conn.BeginTransaction())
                     {
-                        cmd.CommandText = @"
+                        var candidates = new List<(int Id, string CertNumber, string Fio, int IsRevoked, int IsDeleted)>();
+
+                        using (var cmd = conn.CreateCommand())
+                        {
+                            cmd.Transaction = tx;
+                            cmd.CommandText = @"
 SELECT
     ID,
     CERT_NUMBER,
@@ -1778,139 +1902,156 @@ FROM CERTS
 WHERE CERT_NUMBER IS NOT NULL
 ORDER BY ID DESC";
 
-                        using (var rdr = cmd.ExecuteReader())
-                        {
-                            while (rdr.Read())
+                            using (var rdr = cmd.ExecuteReader())
                             {
-                                string dbCertNumber = rdr["CERT_NUMBER"] == DBNull.Value
-                                    ? ""
-                                    : rdr["CERT_NUMBER"].ToString();
+                                while (rdr.Read())
+                                {
+                                    string dbCertNumber = rdr["CERT_NUMBER"] == DBNull.Value
+                                        ? ""
+                                        : rdr["CERT_NUMBER"].ToString();
 
-                                if (NormalizeCertNumber(dbCertNumber) != certNorm)
-                                    continue;
+                                    if (NormalizeCertNumber(dbCertNumber) != certNorm)
+                                        continue;
 
-                                candidates.Add((
-                                    Convert.ToInt32(rdr["ID"]),
-                                    dbCertNumber,
-                                    rdr["FIO"] == DBNull.Value ? "" : rdr["FIO"].ToString(),
-                                    Convert.ToInt32(rdr["IS_REVOKED"]),
-                                    Convert.ToInt32(rdr["IS_DELETED"])
-                                ));
-                            }
-                        }
-                    }
-
-                    if (candidates.Count == 0)
-                    {
-                        resultMessage = "номер не найден в текущей БД, вероятно сертификат уже заменён";
-                        Log($"FindAndMarkAsRevokedByCertAndFio: {resultMessage}. certNorm={certNorm}");
-                        return false;
-                    }
-
-                    (int Id, string CertNumber, string Fio, int IsRevoked, int IsDeleted)? selected = null;
-
-                    if (!string.IsNullOrWhiteSpace(fioNorm))
-                    {
-                        foreach (var candidate in candidates)
-                        {
-                            if (NormalizeFio(candidate.Fio) == fioNorm)
-                            {
-                                selected = candidate;
-                                break;
+                                    candidates.Add((
+                                        Convert.ToInt32(rdr["ID"]),
+                                        dbCertNumber,
+                                        rdr["FIO"] == DBNull.Value ? "" : rdr["FIO"].ToString(),
+                                        Convert.ToInt32(rdr["IS_REVOKED"]),
+                                        Convert.ToInt32(rdr["IS_DELETED"])
+                                    ));
+                                }
                             }
                         }
 
-                        if (selected == null)
+                        if (candidates.Count == 0)
                         {
-                            var dbFios = string.Join(" | ", candidates.Select(x => x.Fio).Distinct().Take(5));
-                            resultMessage = "номер найден, но ФИО не совпало с текущей БД";
-                            Log($"FindAndMarkAsRevokedByCertAndFio: {resultMessage}. certNorm={certNorm}, fioNorm={fioNorm}, dbFios={dbFios}");
+                            resultMessage = "номер не найден в текущей БД, вероятно сертификат уже заменён";
+                            Log($"FindAndMarkAsRevokedByCertAndFio: {resultMessage}. certNorm={certNorm}");
                             return false;
                         }
-                    }
-                    else
-                    {
-                        if (candidates.Count == 1)
+
+                        (int Id, string CertNumber, string Fio, int IsRevoked, int IsDeleted)? selected = null;
+
+                        if (!string.IsNullOrWhiteSpace(fioNorm))
                         {
-                            selected = candidates[0];
-                            Log($"FindAndMarkAsRevokedByCertAndFio: ФИО не извлечено, но по номеру найден ровно один кандидат. ID={selected.Value.Id}");
+                            var fioMatches = candidates
+                                .Where(x => NormalizeFio(x.Fio) == fioNorm)
+                                .ToList();
+
+                            if (fioMatches.Count == 0)
+                            {
+                                var dbFios = string.Join(" | ", candidates.Select(x => x.Fio).Distinct().Take(5));
+                                resultMessage = "номер найден, но ФИО не совпало с текущей БД";
+                                Log($"FindAndMarkAsRevokedByCertAndFio: {resultMessage}. certNorm={certNorm}, fioNorm={fioNorm}, dbFios={dbFios}");
+                                return false;
+                            }
+
+                            selected = fioMatches
+                                .OrderBy(x => x.IsRevoked)
+                                .ThenBy(x => x.IsDeleted)
+                                .ThenByDescending(x => x.Id)
+                                .First();
                         }
                         else
                         {
-                            resultMessage = "ФИО не извлечено, а по номеру найдено несколько кандидатов";
-                            Log($"FindAndMarkAsRevokedByCertAndFio: {resultMessage}. certNorm={certNorm}, count={candidates.Count}");
+                            if (candidates.Count == 1)
+                            {
+                                selected = candidates[0];
+                                Log($"FindAndMarkAsRevokedByCertAndFio: ФИО не извлечено, но по номеру найден ровно один кандидат. ID={selected.Value.Id}");
+                            }
+                            else
+                            {
+                                var activeCandidates = candidates
+                                    .Where(x => x.IsRevoked == 0)
+                                    .OrderBy(x => x.IsDeleted)
+                                    .ThenByDescending(x => x.Id)
+                                    .ToList();
+
+                                if (activeCandidates.Count == 1)
+                                {
+                                    selected = activeCandidates[0];
+                                    Log($"FindAndMarkAsRevokedByCertAndFio: ФИО не извлечено, выбран единственный активный кандидат. ID={selected.Value.Id}");
+                                }
+                                else
+                                {
+                                    resultMessage = "ФИО не извлечено, а по номеру найдено несколько кандидатов";
+                                    Log($"FindAndMarkAsRevokedByCertAndFio: {resultMessage}. certNorm={certNorm}, count={candidates.Count}");
+                                    return false;
+                                }
+                            }
+                        }
+
+                        var row = selected.Value;
+
+                        if (row.IsRevoked == 1)
+                        {
+                            resultMessage = "номер найден, запись уже аннулирована";
+                            Log($"FindAndMarkAsRevokedByCertAndFio: {resultMessage}. ID={row.Id}, CERT_NUMBER={row.CertNumber}, FIO={row.Fio}");
                             return false;
                         }
-                    }
 
-                    var row = selected.Value;
+                        DateTime parsedDate = DateTime.Now;
 
-                    if (row.IsRevoked == 1)
-                    {
-                        resultMessage = "номер найден, запись уже аннулирована";
-                        Log($"FindAndMarkAsRevokedByCertAndFio: {resultMessage}. ID={row.Id}, CERT_NUMBER={row.CertNumber}, FIO={row.Fio}");
-                        return false;
-                    }
-
-                    DateTime parsedDate = DateTime.Now;
-
-                    if (!string.IsNullOrWhiteSpace(revokeDateShort))
-                    {
-                        DateTime dt;
-
-                        if (DateTime.TryParseExact(
-                                revokeDateShort,
-                                "dd.MM.yyyy HH:mm:ss",
-                                System.Globalization.CultureInfo.InvariantCulture,
-                                System.Globalization.DateTimeStyles.None,
-                                out dt))
+                        if (!string.IsNullOrWhiteSpace(revokeDateShort))
                         {
-                            parsedDate = dt;
-                        }
-                        else if (DateTime.TryParseExact(
-                                revokeDateShort,
-                                "dd.MM.yyyy",
-                                System.Globalization.CultureInfo.InvariantCulture,
-                                System.Globalization.DateTimeStyles.None,
-                                out dt))
-                        {
-                            parsedDate = dt;
-                        }
-                        else if (DateTime.TryParse(revokeDateShort, out dt))
-                        {
-                            parsedDate = dt;
-                        }
-                    }
+                            DateTime dt;
 
-                    using (var upd = conn.CreateCommand())
-                    {
-                        upd.CommandText = @"
+                            if (DateTime.TryParseExact(
+                                    revokeDateShort,
+                                    "dd.MM.yyyy HH:mm:ss",
+                                    System.Globalization.CultureInfo.InvariantCulture,
+                                    System.Globalization.DateTimeStyles.None,
+                                    out dt))
+                            {
+                                parsedDate = dt;
+                            }
+                            else if (DateTime.TryParseExact(
+                                    revokeDateShort,
+                                    "dd.MM.yyyy",
+                                    System.Globalization.CultureInfo.InvariantCulture,
+                                    System.Globalization.DateTimeStyles.None,
+                                    out dt))
+                            {
+                                parsedDate = dt;
+                            }
+                            else if (DateTime.TryParse(revokeDateShort, out dt))
+                            {
+                                parsedDate = dt;
+                            }
+                        }
+
+                        using (var upd = conn.CreateCommand())
+                        {
+                            upd.Transaction = tx;
+                            upd.CommandText = @"
 UPDATE CERTS
 SET
     IS_DELETED = 1,
     IS_REVOKED = 1,
-    REVOKE_DATE = @revDate,
-    FOLDER_PATH = @folder
+    REVOKE_DATE = @revDate
 WHERE ID = @id
   AND COALESCE(IS_REVOKED, 0) = 0";
 
-                        upd.Parameters.AddWithValue("@revDate", parsedDate);
-                        upd.Parameters.AddWithValue("@folder", folderPath ?? "");
-                        upd.Parameters.AddWithValue("@id", row.Id);
+                            upd.Parameters.AddWithValue("@revDate", parsedDate);
+                            upd.Parameters.AddWithValue("@id", row.Id);
 
-                        int rows = upd.ExecuteNonQuery();
+                            int rows = upd.ExecuteNonQuery();
 
-                        if (rows == 0)
-                        {
-                            resultMessage = "номер найден, но обновление не выполнилось";
-                            Log($"FindAndMarkAsRevokedByCertAndFio: {resultMessage}. ID={row.Id}, CERT_NUMBER={row.CertNumber}, FIO={row.Fio}, IS_REVOKED={row.IsRevoked}, IS_DELETED={row.IsDeleted}");
-                            return false;
+                            if (rows == 0)
+                            {
+                                resultMessage = "номер найден, но обновление не выполнилось";
+                                Log($"FindAndMarkAsRevokedByCertAndFio: {resultMessage}. ID={row.Id}, CERT_NUMBER={row.CertNumber}, FIO={row.Fio}, IS_REVOKED={row.IsRevoked}, IS_DELETED={row.IsDeleted}");
+                                return false;
+                            }
                         }
-                    }
 
-                    resultMessage = "номер найден и аннулирован";
-                    Log($"FindAndMarkAsRevokedByCertAndFio: {resultMessage}. ID={row.Id}, CERT_NUMBER={row.CertNumber}, FIO={row.Fio}, revokeDate={parsedDate:dd.MM.yyyy HH:mm:ss}");
-                    return true;
+                        tx.Commit();
+
+                        resultMessage = "номер найден и аннулирован";
+                        Log($"FindAndMarkAsRevokedByCertAndFio: {resultMessage}. ID={row.Id}, CERT_NUMBER={row.CertNumber}, FIO={row.Fio}, revokeDate={parsedDate:dd.MM.yyyy HH:mm:ss}");
+                        return true;
+                    }
                 }
             }
             catch (Exception ex)

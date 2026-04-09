@@ -16,9 +16,11 @@ namespace ImapCertWatcher.Models
         private bool _hasArchiveInDb;
         private bool _hasArchive;
         private bool _isRevoked;
+        public bool CanEditToken => !IsDeleted && !IsRevoked;
         private bool _isUpdatingFromServer;
         private DateTime? _revokeDate;
         private int? _tokenId;
+        private TokenRecord _selectedToken;
         private string _tokenSn;
         private string _note;
         private string _building;
@@ -140,6 +142,7 @@ namespace ImapCertWatcher.Models
 
                 _isDeleted = value;
                 OnPropertyChanged(nameof(IsDeleted));
+                OnPropertyChanged(nameof(CanEditToken));
             }
         }
 
@@ -180,6 +183,7 @@ namespace ImapCertWatcher.Models
                 _isRevoked = value;
                 OnPropertyChanged(nameof(IsRevoked));
                 OnPropertyChanged(nameof(RevokedDisplay));
+                OnPropertyChanged(nameof(CanEditToken));
             }
         }
 
@@ -207,6 +211,49 @@ namespace ImapCertWatcher.Models
                 _revokeDate = value;
                 OnPropertyChanged(nameof(RevokeDate));
                 OnPropertyChanged(nameof(RevokedDisplay));
+            }
+        }
+
+        public TokenRecord SelectedToken
+        {
+            get => _selectedToken;
+            set
+            {
+                if (ReferenceEquals(_selectedToken, value))
+                    return;
+
+                _selectedToken = value;
+
+                if (value != null)
+                {
+                    if (_tokenId != value.Id)
+                    {
+                        _tokenId = value.Id;
+                        OnPropertyChanged(nameof(TokenId));
+                    }
+
+                    if (_tokenSn != value.Sn)
+                    {
+                        _tokenSn = value.Sn;
+                        OnPropertyChanged(nameof(TokenSn));
+                    }
+                }
+                else
+                {
+                    if (_tokenId != null)
+                    {
+                        _tokenId = null;
+                        OnPropertyChanged(nameof(TokenId));
+                    }
+
+                    if (_tokenSn != null)
+                    {
+                        _tokenSn = null;
+                        OnPropertyChanged(nameof(TokenSn));
+                    }
+                }
+
+                OnPropertyChanged(nameof(SelectedToken));
             }
         }
 

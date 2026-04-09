@@ -699,12 +699,16 @@ namespace ImapCertWatcher.Server
                 if (newCerts.Count > 0)
                     _notifications.NotifyNewUsers(newCerts);
 
+                _lastCheckTime = DateTime.Now;
+
+                if (_settings.CheckIntervalMinutes > 0)
+                    _nextTimerRun = DateTime.Now.AddMinutes(_settings.CheckIntervalMinutes);
+
                 lock (_stateLock)
                 {
                     _progressPercent = 100;
                     _currentStage = "IDLE";
                 }
-
 
                 _log("FAST CERTS CHECK finished");
 
@@ -759,12 +763,16 @@ namespace ImapCertWatcher.Server
                     await Task.Run(() => _revokeWatcher.ProcessRevocations(false, linkedCts.Token), linkedCts.Token);
                 }
 
+                _lastCheckTime = DateTime.Now;
+
+                if (_settings.CheckIntervalMinutes > 0)
+                    _nextTimerRun = DateTime.Now.AddMinutes(_settings.CheckIntervalMinutes);
+
                 lock (_stateLock)
                 {
                     _progressPercent = 100;
                     _currentStage = "IDLE";
                 }
-
 
                 _log("FAST REVOKES CHECK finished");
 
@@ -830,6 +838,10 @@ namespace ImapCertWatcher.Server
                 if (newCerts.Count > 0)
                     _notifications.NotifyNewUsers(newCerts);
 
+                _lastCheckTime = DateTime.Now;
+
+                if (_settings.CheckIntervalMinutes > 0)
+                    _nextTimerRun = DateTime.Now.AddMinutes(_settings.CheckIntervalMinutes);
 
                 lock (_stateLock)
                 {
@@ -888,6 +900,11 @@ namespace ImapCertWatcher.Server
                     await Task.Run(() => _revokeWatcher.ProcessRevocations(true, linked.Token), linked.Token);
                 }
 
+
+                _lastCheckTime = DateTime.Now;
+
+                if (_settings.CheckIntervalMinutes > 0)
+                    _nextTimerRun = DateTime.Now.AddMinutes(_settings.CheckIntervalMinutes);
 
                 lock (_stateLock)
                 {

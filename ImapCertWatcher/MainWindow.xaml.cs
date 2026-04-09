@@ -201,20 +201,16 @@ namespace ImapCertWatcher
         {
             try
             {
-                var themeFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "theme.txt");
-                if (File.Exists(themeFile))
-                {
-                    var theme = File.ReadAllText(themeFile).Trim();
-                    _isDarkTheme = theme.Equals("dark", StringComparison.OrdinalIgnoreCase);
-                    chkDarkTheme.Checked -= ChkDarkTheme_Changed;
-                    chkDarkTheme.Unchecked -= ChkDarkTheme_Changed;
+                _isDarkTheme = _clientSettings?.DarkTheme == true;
 
-                    chkDarkTheme.IsChecked = _isDarkTheme;
-                    ApplyTheme(_isDarkTheme);
+                chkDarkTheme.Checked -= ChkDarkTheme_Changed;
+                chkDarkTheme.Unchecked -= ChkDarkTheme_Changed;
 
-                    chkDarkTheme.Checked += ChkDarkTheme_Changed;
-                    chkDarkTheme.Unchecked += ChkDarkTheme_Changed;
-                }
+                chkDarkTheme.IsChecked = _isDarkTheme;
+                ApplyTheme(_isDarkTheme);
+
+                chkDarkTheme.Checked += ChkDarkTheme_Changed;
+                chkDarkTheme.Unchecked += ChkDarkTheme_Changed;
             }
             catch (Exception ex)
             {
@@ -226,8 +222,16 @@ namespace ImapCertWatcher
         {
             try
             {
-                var themeFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "theme.txt");
-                File.WriteAllText(themeFile, _isDarkTheme ? "dark" : "light");
+                if (_clientSettings == null)
+                    return;
+
+                _clientSettings.DarkTheme = _isDarkTheme;
+
+                var clientPath = Path.Combine(
+                    AppDomain.CurrentDomain.BaseDirectory,
+                    "client.settings.txt");
+
+                SettingsSaver.SaveClient(clientPath, _clientSettings);
             }
             catch (Exception ex)
             {
@@ -258,6 +262,9 @@ namespace ImapCertWatcher
         private void ChkDarkTheme_Changed(object sender, RoutedEventArgs e)
         {
             _isDarkTheme = chkDarkTheme.IsChecked == true;
+
+            if (_clientSettings != null)
+                _clientSettings.DarkTheme = _isDarkTheme;
 
             ApplyTheme(_isDarkTheme);
             SaveThemeSettings();
@@ -540,7 +547,31 @@ namespace ImapCertWatcher
             }
         }
 
-        private void BtnSaveSettings_Click(object sender, RoutedEventArgs e)
+        private async Task RecreateApiAndTokenServicesAsync()
+        {
+            if (_tokenService != null)
+                _tokenService.TokensChanged -= RebuildAvailableTokens;
+
+            _api = new ServerApiClient(_clientSettings);
+
+            _tokenService = new TokenService(_api);
+            TokensVm = new TokensViewModel(_tokenService);
+
+            _tokenService.TokensChanged += RebuildAvailableTokens;
+
+            try
+            {
+                await _tokenService.Reload();
+            }
+            catch (Exception ex)
+            {
+                AddToMiniLog("Не удалось обновить токены после смены настроек: " + ex.Message);
+            }
+
+            RebuildAvailableTokens();
+        }
+
+        private async void BtnSaveSettings_Click(object sender, RoutedEventArgs e)
         {
             try
             {
@@ -550,14 +581,26 @@ namespace ImapCertWatcher
 
                 SettingsSaver.SaveClient(clientPath, _clientSettings);
 
+                await RecreateApiAndTokenServicesAsync();
+                var loaded = await LoadFromServer(showErrorDialog: false);
+
                 AddToMiniLog("Клиентские настройки сохранены");
 
-                MessageBox.Show("Настройки сохранены.",
-                    "Сохранено",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Information);
-
-                _api = new ServerApiClient(_clientSettings);
+                if (loaded)
+                {
+                    MessageBox.Show("Настройки сохранены.",
+                        "Сохранено",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Information);
+                }
+                else
+                {
+                    MessageBox.Show(
+                        "Настройки сохранены, но подключиться к серверу не удалось.\nПроверьте IP и порт.",
+                        "Сохранено с предупреждением",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Warning);
+                }
             }
             catch (Exception ex)
             {

@@ -424,7 +424,8 @@ namespace ImapCertWatcher.Services
 
                 try
                 {
-                    var zipResult = ProcessZip(zipPath, folderPath, uidStr);
+                    string fromAddress = message.From.Mailboxes.FirstOrDefault()?.Address ?? "";
+                    var zipResult = ProcessZip(zipPath, folderPath, uidStr, fromAddress);
 
                     if (zipResult.savedAny)
                         anySaved = true;
@@ -474,7 +475,7 @@ namespace ImapCertWatcher.Services
         // ZIP → CER → DB
         // =====================================================================
 
-        private (bool savedAny, bool hadErrors) ProcessZip(string zipPath, string folderPath, string uidStr)
+        private (bool savedAny, bool hadErrors) ProcessZip(string zipPath, string folderPath, string uidStr, string fromAddress)
         {
             bool savedAny = false;
             bool hadErrors = false;
@@ -513,12 +514,26 @@ namespace ImapCertWatcher.Services
                         CertNumber = certInfo.CertNumber,
                         DateStart = certInfo.DateStart,
                         DateEnd = certInfo.DateEnd,
+                        FromAddress = fromAddress,
                         FolderPath = folderPath,
                         MailUid = uidStr,
                         MessageDate = DateTime.UtcNow
                     };
 
-                    var (wasUpdated, wasAdded, certId) = _db.InsertOrUpdateAndGetId(entry);
+                    bool wasUpdated;
+                    bool wasAdded;
+                    int certId;
+
+                    try
+                    {
+                        (wasUpdated, wasAdded, certId) = _db.InsertOrUpdateAndGetId(entry);
+                    }
+                    catch (Exception ex)
+                    {
+                        hadErrors = true;
+                        Log($"CER '{Path.GetFileName(cerPath)}': ошибка записи в БД: {ex.Message}");
+                        continue;
+                    }
 
                     if (certId <= 0)
                     {

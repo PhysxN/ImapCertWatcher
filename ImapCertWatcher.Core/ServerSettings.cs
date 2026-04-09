@@ -17,10 +17,10 @@
         public string ImapRevocationsFolder { get; set; } = "";
         // ===== DATABASE =====
 
-        public string FirebirdDbPath { get; set; } = @"C:\DB_PHYSXN\CERTS.FDB";
-        public string FbServer { get; set; } = "127.0.0.1";
-        public string FbUser { get; set; } = "SYSDBA";
-        public string FbPassword { get; set; } = "masterkey";
+        public string FirebirdDbPath { get; set; } = "";
+        public string FbServer { get; set; } = "";
+        public string FbUser { get; set; } = "";
+        public string FbPassword { get; set; } = "";
         public int FbDialect { get; set; } = 3;
         public string FbCharset { get; set; } = "UTF8";
         public bool IsDevelopment { get; set; } = false;

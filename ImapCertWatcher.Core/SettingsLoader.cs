@@ -27,9 +27,9 @@ namespace ImapCertWatcher.Utils
             s.ImapRevocationsFolder = Get(all, "ImapRevocationsFolder", "");
 
             // ===== FIREBIRD =====
-            s.FirebirdDbPath = Get(all, "FirebirdDbPath");
-            s.FbServer = Get(all, "FbServer", "127.0.0.1");
-            s.FbUser = Get(all, "FbUser", "SYSDBA");
+            s.FirebirdDbPath = Get(all, "FirebirdDbPath", "");
+            s.FbServer = Get(all, "FbServer", "");
+            s.FbUser = Get(all, "FbUser", "");
             s.FbPassword = Get(all, "FbPassword", "");
             s.FbDialect = GetInt(all, "FbDialect", 3);
             s.FbCharset = Get(all, "FbCharset", "UTF8");

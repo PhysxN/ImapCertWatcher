@@ -99,10 +99,10 @@ namespace ImapCertWatcher
             }
         }
 
-        private async Task LoadFromServer()
+        private async Task<bool> LoadFromServer(bool showErrorDialog = false)
         {
             if (_isLoadingFromServer)
-                return;
+                return false;
 
             _isLoadingFromServer = true;
             SetServerState(ServerConnectionState.Connecting);
@@ -114,7 +114,17 @@ namespace ImapCertWatcher
                     AddToMiniLog("API ещё не инициализирован");
                     SetServerState(ServerConnectionState.Offline);
                     statusText.Text = "Ошибка: API не инициализирован";
-                    return;
+
+                    if (showErrorDialog)
+                    {
+                        MessageBox.Show(
+                            "Не удалось получить список сертификатов с сервера.\n\nAPI не инициализирован.",
+                            "GET_CERTS",
+                            MessageBoxButton.OK,
+                            MessageBoxImage.Error);
+                    }
+
+                    return false;
                 }
 
                 statusText.Text = "Загрузка данных с сервера...";
@@ -140,13 +150,56 @@ namespace ImapCertWatcher
 
                     try
                     {
+                        var freeTokens = TokensVm?.FreeTokens?.ToList() ?? new List<TokenRecord>();
+                        var busyTokens = TokensVm?.BusyTokens?.ToList() ?? new List<TokenRecord>();
+
+                        var allTokens = freeTokens
+                            .Concat(busyTokens)
+                            .GroupBy(t => t.Id)
+                            .Select(g => g.First())
+                            .OrderBy(t => t.Sn)
+                            .ToList();
+
                         _allItems.Clear();
 
                         foreach (var item in list)
-                            _allItems.Add(item);
+                        {
+                            var allowedTokens = allTokens
+                                .Where(t => !t.OwnerCertId.HasValue || t.OwnerCertId.Value == item.Id)
+                                .Select(t => new TokenRecord
+                                {
+                                    Id = t.Id,
+                                    Sn = t.Sn,
+                                    OwnerCertId = t.OwnerCertId,
+                                    OwnerFio = t.OwnerFio
+                                })
+                                .ToList();
 
-                        RebuildAvailableTokens();
+                            item.AvailableTokens = new ObservableCollection<TokenRecord>(allowedTokens);
+
+                            if (item.TokenId.HasValue)
+                            {
+                                var selectedToken = item.AvailableTokens.FirstOrDefault(t => t.Id == item.TokenId.Value);
+
+                                if (selectedToken != null)
+                                {
+                                    item.SelectedToken = selectedToken;
+                                }
+                                else
+                                {
+                                    item.SelectedToken = null;
+                                }
+                            }
+                            else
+                            {
+                                item.SelectedToken = null;
+                            }
+
+                            _allItems.Add(item);
+                        }
+
                         ApplySearchFilter();
+                        dgCerts.Items.Refresh();
 
                         statusText.Text = $"Загружено записей: {_allItems.Count}";
                         SetServerState(ServerConnectionState.Online);
@@ -158,6 +211,7 @@ namespace ImapCertWatcher
                 });
 
                 AddToMiniLog($"Получено с сервера: {list.Count} записей");
+                return true;
             }
             catch (Exception ex)
             {
@@ -165,11 +219,16 @@ namespace ImapCertWatcher
                 SetServerState(ServerConnectionState.Offline);
                 statusText.Text = "Ошибка загрузки с сервера: " + ex.Message;
 
-                MessageBox.Show(
-                    "Не удалось получить список сертификатов с сервера.\n\n" + ex.Message,
-                    "GET_CERTS",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Error);
+                if (showErrorDialog)
+                {
+                    MessageBox.Show(
+                        "Не удалось получить список сертификатов с сервера.\n\n" + ex.Message,
+                        "GET_CERTS",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Error);
+                }
+
+                return false;
             }
             finally
             {

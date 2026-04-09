@@ -150,14 +150,19 @@
                             </Grid.ColumnDefinitions>
 
                             <ContentPresenter x:Name="ContentSite"
-                                              Grid.Column="0"
-                                              Margin="8,0,4,0"
-                                              VerticalAlignment="Center"
-                                              HorizontalAlignment="Left"
-                                              IsHitTestVisible="False"
-                                              Content="{TemplateBinding SelectionBoxItem}"
-                                              ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"/>
-
+                  Grid.Column="0"
+                  Margin="8,0,4,0"
+                  VerticalAlignment="Center"
+                  HorizontalAlignment="Left"
+                  IsHitTestVisible="False"
+                  RecognizesAccessKey="True"
+                  SnapsToDevicePixels="{TemplateBinding SnapsToDevicePixels}"
+                  TextElement.Foreground="{TemplateBinding Foreground}"
+                  Content="{TemplateBinding SelectionBoxItem}"
+                  ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
+                  ContentTemplateSelector="{TemplateBinding ItemTemplateSelector}"
+                  ContentStringFormat="{TemplateBinding SelectionBoxItemStringFormat}"/>
+                            
                             <ToggleButton x:Name="DropDownToggle"
                                           Grid.Column="1"
                                           Focusable="False"
@@ -295,22 +300,32 @@
         </Setter>
     </Style>
 
-    <Style x:Key="DataGridComboBoxStyle"
-           TargetType="ComboBox"
-           BasedOn="{StaticResource ModernComboBoxStyle}">
-        <Setter Property="Background" Value="Transparent"/>
+    <Style x:Key="DataGridComboBoxItemStyle" TargetType="{x:Type ComboBoxItem}">
+        <Setter Property="Foreground" Value="{DynamicResource TextColorBrush}"/>
+        <Setter Property="Background" Value="{DynamicResource PopupBackgroundBrush}"/>
+        <Setter Property="HorizontalContentAlignment" Value="Left"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
+        <Setter Property="Padding" Value="6,2"/>
+    </Style>
+    
+    <Style x:Key="DataGridComboBoxStyle" TargetType="{x:Type ComboBox}">
+        <Setter Property="Foreground" Value="{DynamicResource TextColorBrush}"/>
+        <Setter Property="Background" Value="{DynamicResource WindowBackgroundBrush}"/>
         <Setter Property="BorderBrush" Value="{DynamicResource BorderColorBrush}"/>
         <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="Padding" Value="4,2"/>
+        <Setter Property="MinHeight" Value="24"/>
+        <Setter Property="ItemContainerStyle" Value="{StaticResource DataGridComboBoxItemStyle}"/>
         <Style.Triggers>
             <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=DataGridCell}}" Value="True">
-                <Setter Property="Foreground" Value="White"/>
+                <Setter Property="Foreground" Value="{DynamicResource SelectionForegroundBrush}"/>
             </DataTrigger>
             <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=DataGridRow}}" Value="True">
-                <Setter Property="Foreground" Value="White"/>
+                <Setter Property="Foreground" Value="{DynamicResource SelectionForegroundBrush}"/>
             </DataTrigger>
         </Style.Triggers>
     </Style>
-
+    
     <!-- ==================== CHECK / RADIO ==================== -->
 
     <Style x:Key="ModernCheckBoxStyle" TargetType="CheckBox">

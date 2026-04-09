@@ -18,7 +18,6 @@ namespace ImapCertWatcher.Server
         private readonly Server.ServerHost _server;
         private CancellationTokenSource _checkCts;
         private bool _forceExit;
-        private bool _isChecking;
 
 
         private System.Windows.Forms.NotifyIcon _trayIcon;
@@ -86,19 +85,45 @@ namespace ImapCertWatcher.Server
             }
             else
             {
-                db.EnsureDatabaseAndTable();
+                try
+                {
+                    db.EnsureDatabaseAndTable();
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(
+                        "Ошибка подготовки базы данных:\n\n" + ex.Message,
+                        "Ошибка БД",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Error);
+                    Close();
+                    return;
+                }
             }
 
-            _server = new Server.ServerHost(
-                settings,
-                db,
-                AppendLog);
+            try
+            {
+                _server = new Server.ServerHost(
+                    settings,
+                    db,
+                    AppendLog);
 
-            _server.Start();
-            InitTray();
+                _server.Start();
+                InitTray();
 
-            SetStatus("Сервер работает");
-            AppendLog("ServerHost запущен");
+                SetStatus("Сервер работает");
+                AppendLog("ServerHost запущен");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    "Ошибка запуска сервера:\n\n" + ex.Message,
+                    "Ошибка",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+                Close();
+                return;
+            }
         }
 
         private void InitTray()
@@ -168,7 +193,6 @@ namespace ImapCertWatcher.Server
 
         private void SetCheckingState(bool checking)
         {
-            _isChecking = checking;
 
             CheckNewCertsButton.IsEnabled = !checking;
             CheckNewRevokesButton.IsEnabled = !checking;
@@ -432,19 +456,58 @@ namespace ImapCertWatcher.Server
             }
         }
 
+        private void CopySettings(ServerSettings target, ServerSettings source)
+        {
+            target.MailHost = source.MailHost;
+            target.MailPort = source.MailPort;
+            target.MailUseSsl = source.MailUseSsl;
+            target.MailLogin = source.MailLogin;
+            target.MailPassword = source.MailPassword;
+
+            target.ImapNewCertificatesFolder = source.ImapNewCertificatesFolder;
+            target.ImapRevocationsFolder = source.ImapRevocationsFolder;
+
+            target.FirebirdDbPath = source.FirebirdDbPath;
+            target.FbServer = source.FbServer;
+            target.FbUser = source.FbUser;
+            target.FbPassword = source.FbPassword;
+            target.FbDialect = source.FbDialect;
+            target.FbCharset = source.FbCharset;
+            target.IsDevelopment = source.IsDevelopment;
+
+            target.ServerPort = source.ServerPort;
+            target.CheckIntervalMinutes = source.CheckIntervalMinutes;
+            target.NotifyDaysThreshold = source.NotifyDaysThreshold;
+            target.NotifyOnlyInWorkHours = source.NotifyOnlyInWorkHours;
+            target.AutoStartServer = source.AutoStartServer;
+            target.MinimizeToTrayOnClose = source.MinimizeToTrayOnClose;
+
+            target.BimoidAccountsKrasnoflotskaya = source.BimoidAccountsKrasnoflotskaya;
+            target.BimoidAccountsPionerskaya = source.BimoidAccountsPionerskaya;
+            target.BimoidSenderExePath = source.BimoidSenderExePath;
+            target.BimoidJobDirectory = source.BimoidJobDirectory;
+            target.BimoidServer = source.BimoidServer;
+            target.BimoidPort = source.BimoidPort;
+            target.BimoidLogin = source.BimoidLogin;
+            target.BimoidPassword = source.BimoidPassword;
+            target.BimoidDelayBetweenMessagesMs = source.BimoidDelayBetweenMessagesMs;
+        }
 
         private void Settings_Click(object sender, RoutedEventArgs e)
         {
             var oldSettings = _server.Settings.Clone();
+            var editedSettings = _server.Settings.Clone();
 
-            var wnd = new ServerSettingsWindow(_server.Settings)
+            var wnd = new ServerSettingsWindow(editedSettings)
             {
                 Owner = this
             };
 
             if (wnd.ShowDialog() == true)
             {
-                bool needRestart = NeedRestart(oldSettings, _server.Settings);
+                bool needRestart = NeedRestart(oldSettings, editedSettings);
+
+                CopySettings(_server.Settings, editedSettings);
 
                 if (needRestart)
                 {

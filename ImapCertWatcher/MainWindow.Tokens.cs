@@ -1,15 +1,19 @@
 ﻿using ImapCertWatcher.Models;
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
 
 namespace ImapCertWatcher
 {
     public partial class MainWindow
     {
+        private bool _suppressTokenComboTextChanged;
+        private bool _isFilteringTokenCombo;
         private async void BtnAddToken_Click(object sender, RoutedEventArgs e)
         {
             if (_api == null)
@@ -186,26 +190,244 @@ namespace ImapCertWatcher
 
         private void RebuildAvailableTokens()
         {
-            if (_tokenService == null || _tokenService.Tokens == null)
+            void apply()
+            {
+                var freeTokens = TokensVm?.FreeTokens?.ToList() ?? new List<TokenRecord>();
+                var busyTokens = TokensVm?.BusyTokens?.ToList() ?? new List<TokenRecord>();
+
+                var allTokens = freeTokens
+                    .Concat(busyTokens)
+                    .GroupBy(t => t.Id)
+                    .Select(g => g.First())
+                    .OrderBy(t => t.Sn)
+                    .ToList();
+
+                foreach (var cert in _allItems)
+                {
+                    var allowedTokens = allTokens
+                        .Where(t => !t.OwnerCertId.HasValue || t.OwnerCertId.Value == cert.Id)
+                        .Select(t => new TokenRecord
+                        {
+                            Id = t.Id,
+                            Sn = t.Sn,
+                            OwnerCertId = t.OwnerCertId,
+                            OwnerFio = t.OwnerFio
+                        })
+                        .ToList();
+
+                    if (cert.AvailableTokens == null)
+                        cert.AvailableTokens = new ObservableCollection<TokenRecord>();
+                    else
+                        cert.AvailableTokens.Clear();
+
+                    foreach (var token in allowedTokens)
+                        cert.AvailableTokens.Add(token);
+
+                    if (cert.TokenId.HasValue)
+                    {
+                        var selectedToken = cert.AvailableTokens.FirstOrDefault(t => t.Id == cert.TokenId.Value);
+
+                        if (selectedToken != null)
+                        {
+                            cert.SelectedToken = selectedToken;
+                        }
+                        else
+                        {
+                            cert.SelectedToken = null;
+                        }
+                    }
+                    else
+                    {
+                        cert.SelectedToken = null;
+                    }
+                }
+
+                dgCerts.Items.Refresh();
+            }
+
+            if (Dispatcher.CheckAccess())
+                apply();
+            else
+                Dispatcher.Invoke(apply);
+        }
+
+        private static TextBox GetTokenComboEditableTextBox(ComboBox comboBox)
+        {
+            if (comboBox == null)
+                return null;
+
+            comboBox.ApplyTemplate();
+            return comboBox.Template.FindName("PART_EditableTextBox", comboBox) as TextBox;
+        }
+
+        private void TokenComboBox_Loaded(object sender, RoutedEventArgs e)
+        {
+            var cb = sender as ComboBox;
+            if (cb == null)
                 return;
 
-            foreach (var cert in _allItems)
+            var tb = GetTokenComboEditableTextBox(cb);
+            if (tb == null)
+                return;
+
+            tb.Tag = cb;
+            tb.TextChanged -= TokenComboBoxEditableTextBox_TextChanged;
+            tb.TextChanged += TokenComboBoxEditableTextBox_TextChanged;
+        }
+
+        private void TokenComboBox_GotKeyboardFocus(object sender, RoutedEventArgs e)
+        {
+            var cb = sender as ComboBox;
+            if (cb == null || !cb.IsEnabled)
+                return;
+
+            _suppressTokenComboTextChanged = true;
+            _isFilteringTokenCombo = true;
+
+            try
             {
-                if (cert == null)
-                    continue;
+                ResetTokenComboItems(cb);
+            }
+            finally
+            {
+                _isFilteringTokenCombo = false;
+                _suppressTokenComboTextChanged = false;
+            }
 
-                if (cert.AvailableTokens == null)
-                    cert.AvailableTokens = new ObservableCollection<TokenRecord>();
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                var tb = GetTokenComboEditableTextBox(cb);
+                if (tb == null)
+                    return;
 
-                var target = cert.AvailableTokens;
-                target.Clear();
+                tb.SelectAll();
+                cb.IsDropDownOpen = true;
+            }), System.Windows.Threading.DispatcherPriority.Input);
+        }
 
-                foreach (var t in _tokenService.Tokens)
+        private void TokenComboBox_DropDownClosed(object sender, EventArgs e)
+        {
+            var cb = sender as ComboBox;
+            if (cb == null)
+                return;
+
+            _suppressTokenComboTextChanged = true;
+            _isFilteringTokenCombo = true;
+
+            try
+            {
+                ResetTokenComboItems(cb);
+
+                var tb = GetTokenComboEditableTextBox(cb);
+                if (tb != null)
                 {
-                    if (t != null && (t.OwnerCertId == null || t.OwnerCertId == cert.Id))
-                        target.Add(t);
+                    if (cb.DataContext is CertRecord cert)
+                        tb.Text = cert.TokenSn ?? "";
+                    else
+                        tb.Text = "";
                 }
             }
+            finally
+            {
+                _isFilteringTokenCombo = false;
+                _suppressTokenComboTextChanged = false;
+            }
+        }
+
+        private void TokenComboBoxEditableTextBox_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            if (_suppressTokenComboTextChanged)
+                return;
+
+            if (_isApplyingFromServer || _isAssigningToken)
+                return;
+
+            var tb = sender as TextBox;
+            if (tb == null)
+                return;
+
+            var cb = tb.Tag as ComboBox;
+            if (cb == null)
+                return;
+
+            _isFilteringTokenCombo = true;
+            try
+            {
+                ApplyTokenComboFilterSafe(cb, tb.Text);
+            }
+            finally
+            {
+                _isFilteringTokenCombo = false;
+            }
+
+            if (!cb.IsDropDownOpen)
+                cb.IsDropDownOpen = true;
+
+            tb.CaretIndex = tb.Text.Length;
+        }
+
+        private static void ResetTokenComboItems(ComboBox cb)
+        {
+            var cert = cb?.DataContext as CertRecord;
+            if (cert == null)
+                return;
+
+            cb.ItemsSource = cert.AvailableTokens;
+        }
+
+        private static void ApplyTokenComboFilterSafe(ComboBox cb, string filterText)
+        {
+            var cert = cb?.DataContext as CertRecord;
+            if (cert == null)
+                return;
+
+            var allTokens = cert.AvailableTokens?.ToList() ?? new List<TokenRecord>();
+            var text = (filterText ?? string.Empty).Trim();
+
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                cb.ItemsSource = cert.AvailableTokens;
+                return;
+            }
+
+            var filtered = allTokens
+                .Where(t => !string.IsNullOrWhiteSpace(t.Sn) &&
+                            t.Sn.IndexOf(text, StringComparison.OrdinalIgnoreCase) >= 0)
+                .ToList();
+
+            if (cert.TokenId.HasValue && filtered.All(t => t.Id != cert.TokenId.Value))
+            {
+                var currentToken = allTokens.FirstOrDefault(t => t.Id == cert.TokenId.Value);
+                if (currentToken != null)
+                    filtered.Insert(0, currentToken);
+            }
+
+            cb.ItemsSource = filtered;
+        }
+
+
+        private void CommitCertificatesGridEditSafe()
+        {
+            try
+            {
+                if (dgCerts != null)
+                {
+                    dgCerts.CommitEdit(DataGridEditingUnit.Cell, true);
+                    dgCerts.CommitEdit(DataGridEditingUnit.Row, true);
+                }
+            }
+            catch
+            {
+                // специально ничего не делаем
+            }
+        }
+
+        private void ReloadFromServerAfterTokenEdit()
+        {
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                _ = LoadFromServer();
+            }), System.Windows.Threading.DispatcherPriority.Background);
         }
 
         private async void TokenComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -222,29 +444,41 @@ namespace ImapCertWatcher
             if (_isAssigningToken)
                 return;
 
-            if (e.AddedItems.Count == 0)
+            if (_isFilteringTokenCombo)
                 return;
 
             if (!(sender is ComboBox cb))
                 return;
 
-            if (!cb.IsKeyboardFocusWithin && !cb.IsDropDownOpen)
-                return;
-
             if (!(cb.DataContext is CertRecord cert))
                 return;
 
-            var token = cb.SelectedItem as TokenRecord;
+            if (cert.IsDeleted || cert.IsRevoked)
+                return;
+
+            if (e.AddedItems == null || e.AddedItems.Count == 0)
+                return;
+
+            var token = e.AddedItems[0] as TokenRecord;
             if (token == null)
                 return;
 
-            if (cert.TokenId == token.Id)
+            var previousToken = e.RemovedItems != null && e.RemovedItems.Count > 0
+                ? e.RemovedItems[0] as TokenRecord
+                : null;
+
+            if (previousToken != null && previousToken.Id == token.Id)
+                return;
+
+            if (!cb.IsKeyboardFocusWithin && !cb.IsDropDownOpen)
                 return;
 
             _isAssigningToken = true;
 
             try
             {
+                CommitCertificatesGridEditSafe();
+
                 var ok = await _tokenService.Assign(cert.Id, token.Id);
 
                 if (!ok)
@@ -255,17 +489,27 @@ namespace ImapCertWatcher
                         MessageBoxButton.OK,
                         MessageBoxImage.Error);
 
-                    await LoadFromServer();
+                    ReloadFromServerAfterTokenEdit();
                     return;
                 }
 
-                await LoadFromServer();
+                cert.TokenId = token.Id;
+                cert.TokenSn = token.Sn;
+                cert.SelectedToken = cert.AvailableTokens?.FirstOrDefault(t => t.Id == token.Id);
+
                 AddToMiniLog($"Назначен токен {token.Sn} → {cert.Fio}");
+
+                ReloadFromServerAfterTokenEdit();
             }
             catch (Exception ex)
             {
-                await LoadFromServer();
-                MessageBox.Show("Ошибка назначения токена:\n" + ex.Message);
+                MessageBox.Show(
+                    "Ошибка назначения токена:\n" + ex.Message,
+                    "Ошибка",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+
+                ReloadFromServerAfterTokenEdit();
             }
             finally
             {

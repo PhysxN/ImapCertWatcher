@@ -11,6 +11,9 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Data;
+using System.Windows.Media;
 
 namespace ImapCertWatcher
 {
@@ -178,14 +181,45 @@ namespace ImapCertWatcher
             }
         }
 
-        private void SaveServerSettingsSilently()
+        private void ApplyUiToSettings()
         {
+            PushBindingsToSource(this);
+
             _settings.MailPassword = MailPasswordBox.Password;
             _settings.FbPassword = DbPasswordBox.Password;
             _settings.BimoidPassword = BimoidPasswordBox.Password;
 
             _settings.ImapNewCertificatesFolder = cmbNewCertsFolder.Text;
             _settings.ImapRevocationsFolder = cmbRevocationsFolder.Text;
+        }
+
+        private void PushBindingsToSource(DependencyObject parent)
+        {
+            if (parent == null)
+                return;
+
+            if (parent is TextBox tb)
+                tb.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
+
+            if (parent is CheckBox cb)
+                cb.GetBindingExpression(CheckBox.IsCheckedProperty)?.UpdateSource();
+
+            if (parent is ComboBox combo)
+            {
+                combo.GetBindingExpression(ComboBox.TextProperty)?.UpdateSource();
+                combo.GetBindingExpression(ComboBox.SelectedItemProperty)?.UpdateSource();
+                combo.GetBindingExpression(ComboBox.SelectedValueProperty)?.UpdateSource();
+            }
+
+            int count = VisualTreeHelper.GetChildrenCount(parent);
+            for (int i = 0; i < count; i++)
+                PushBindingsToSource(VisualTreeHelper.GetChild(parent, i));
+        }
+
+
+        private void SaveServerSettingsSilently()
+        {
+            ApplyUiToSettings();
 
             var settingsPath = Path.Combine(
                 AppDomain.CurrentDomain.BaseDirectory,
@@ -263,14 +297,9 @@ namespace ImapCertWatcher
 
         private void Save_Click(object sender, RoutedEventArgs e)
         {
-            _settings.MailPassword = MailPasswordBox.Password;
-            _settings.FbPassword = DbPasswordBox.Password;
-            _settings.BimoidPassword = BimoidPasswordBox.Password;
+            ApplyUiToSettings();
 
-            _settings.ImapNewCertificatesFolder = cmbNewCertsFolder.Text;
-            _settings.ImapRevocationsFolder = cmbRevocationsFolder.Text;
-
-            var settingsPath = System.IO.Path.Combine(
+            var settingsPath = Path.Combine(
                 AppDomain.CurrentDomain.BaseDirectory,
                 "server.settings.txt");
 
@@ -291,9 +320,11 @@ namespace ImapCertWatcher
             {
                 Cursor = System.Windows.Input.Cursors.Wait;
 
+                ApplyUiToSettings();
+
                 await _backendService.TestMailAsync(
                     _settings,
-                    MailPasswordBox.Password);
+                    _settings.MailPassword);
 
                 MessageBox.Show(
                     "Подключение к почте успешно!",
@@ -321,9 +352,11 @@ namespace ImapCertWatcher
             {
                 Cursor = System.Windows.Input.Cursors.Wait;
 
+                ApplyUiToSettings();
+
                 _backendService.TestDb(
                     _settings,
-                    DbPasswordBox.Password);
+                    _settings.FbPassword);
 
                 MessageBox.Show(
                     "Подключение к Firebird успешно!",
@@ -349,7 +382,8 @@ namespace ImapCertWatcher
         {
             try
             {
-                _settings.BimoidPassword = BimoidPasswordBox.Password;
+                ApplyUiToSettings();
+
                 _notificationManager.SendTestMessage();
 
                 MessageBox.Show(
@@ -372,7 +406,7 @@ namespace ImapCertWatcher
         {
             try
             {
-                _settings.BimoidPassword = BimoidPasswordBox.Password;
+                ApplyUiToSettings();
 
                 var fake = new CertRecord
                 {
@@ -422,6 +456,8 @@ namespace ImapCertWatcher
             try
             {
                 Cursor = System.Windows.Input.Cursors.Wait;
+
+                ApplyUiToSettings();
 
                 var result = await owner.RunFullCertificatesCheckFromSettingsAsync();
 
@@ -474,6 +510,8 @@ namespace ImapCertWatcher
             try
             {
                 Cursor = System.Windows.Input.Cursors.Wait;
+
+                ApplyUiToSettings();
 
                 var result = await owner.RunFullRevocationsCheckFromSettingsAsync();
 
