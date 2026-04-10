@@ -192,11 +192,8 @@ namespace ImapCertWatcher
         {
             void apply()
             {
-                var freeTokens = TokensVm?.FreeTokens?.ToList() ?? new List<TokenRecord>();
-                var busyTokens = TokensVm?.BusyTokens?.ToList() ?? new List<TokenRecord>();
-
-                var allTokens = freeTokens
-                    .Concat(busyTokens)
+                var allTokens = (_tokenService?.Tokens?.ToList() ?? new List<TokenRecord>())
+                    .Where(t => t != null)
                     .GroupBy(t => t.Id)
                     .Select(g => g.First())
                     .OrderBy(t => t.Sn)
@@ -226,15 +223,7 @@ namespace ImapCertWatcher
                     if (cert.TokenId.HasValue)
                     {
                         var selectedToken = cert.AvailableTokens.FirstOrDefault(t => t.Id == cert.TokenId.Value);
-
-                        if (selectedToken != null)
-                        {
-                            cert.SelectedToken = selectedToken;
-                        }
-                        else
-                        {
-                            cert.SelectedToken = null;
-                        }
+                        cert.SelectedToken = selectedToken;
                     }
                     else
                     {

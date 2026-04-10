@@ -325,7 +325,103 @@
             </DataTrigger>
         </Style.Triggers>
     </Style>
-    
+
+    <Style x:Key="ThemeSwitchToggleStyle" TargetType="{x:Type ToggleButton}">
+        <Setter Property="Width" Value="62"/>
+        <Setter Property="Height" Value="28"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Focusable" Value="False"/>
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="{x:Type ToggleButton}">
+                    <Grid Width="{TemplateBinding Width}" Height="{TemplateBinding Height}">
+                        <!-- Светлая дорожка -->
+                        <Border x:Name="LightTrack"
+                            CornerRadius="14"
+                            Background="#dedede"
+                            Opacity="1"/>
+
+                        <!-- Тёмная дорожка -->
+                        <Border x:Name="DarkTrack"
+                            CornerRadius="14"
+                            Background="#FF1D1D2B"
+                            Opacity="0"/>
+
+                        <!-- Ползунок -->
+                        <Border x:Name="SwitchThumb"
+                            Width="20"
+                            Height="20"
+                            CornerRadius="10"
+                            Background="White"
+                            HorizontalAlignment="Left"
+                            VerticalAlignment="Center"
+                            Margin="4,0,0,0">
+                            <Border.Effect>
+                                <DropShadowEffect BlurRadius="8"
+                                              ShadowDepth="1"
+                                              Opacity="0.20"/>
+                            </Border.Effect>
+                        </Border>
+                    </Grid>
+
+                    <ControlTemplate.Triggers>
+
+                        <EventTrigger RoutedEvent="ToggleButton.Checked">
+                            <BeginStoryboard>
+                                <Storyboard FillBehavior="HoldEnd">
+                                    <ThicknessAnimation Storyboard.TargetName="SwitchThumb"
+                                Storyboard.TargetProperty="Margin"
+                                To="38,0,0,0"
+                                Duration="0:0:0.30"
+                                AccelerationRatio="0.15"
+                                DecelerationRatio="0.85"/>
+                                    
+                                    <DoubleAnimation Storyboard.TargetName="LightTrack"
+                                                 Storyboard.TargetProperty="Opacity"
+                                                 To="0"
+                                                 Duration="0:0:0.30"/>
+
+                                    <DoubleAnimation Storyboard.TargetName="DarkTrack"
+                                                 Storyboard.TargetProperty="Opacity"
+                                                 To="1"
+                                                 Duration="0:0:0.30"/>
+                                </Storyboard>
+                            </BeginStoryboard>
+                        </EventTrigger>
+
+                        <EventTrigger RoutedEvent="ToggleButton.Unchecked">
+                            <BeginStoryboard>
+                                <Storyboard FillBehavior="HoldEnd">
+                                    <ThicknessAnimation Storyboard.TargetName="SwitchThumb"
+                                                    Storyboard.TargetProperty="Margin"
+                                                    To="4,0,0,0"
+                                                    Duration="0:0:0.30"
+                                                    AccelerationRatio="0.15"
+                                                    DecelerationRatio="0.85"/>
+
+                                    <DoubleAnimation Storyboard.TargetName="LightTrack"
+                                                 Storyboard.TargetProperty="Opacity"
+                                                 To="1"
+                                                 Duration="0:0:0.30"/>
+
+                                    <DoubleAnimation Storyboard.TargetName="DarkTrack"
+                                                 Storyboard.TargetProperty="Opacity"
+                                                 To="0"
+                                                 Duration="0:0:0.30"/>
+                                </Storyboard>
+                            </BeginStoryboard>
+                        </EventTrigger>
+
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.60"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
     <!-- ==================== CHECK / RADIO ==================== -->
 
     <Style x:Key="ModernCheckBoxStyle" TargetType="CheckBox">

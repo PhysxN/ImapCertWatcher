@@ -35,18 +35,21 @@ namespace ImapCertWatcher
                 case ServerConnectionState.Connecting:
                     txtServerStatus.Text = "🟡 Подключение к серверу...";
                     txtServerStatus.Foreground = Brushes.Gold;
+                    txtNextCheck.Visibility = Visibility.Visible;
                     break;
 
                 case ServerConnectionState.Online:
                     txtServerStatus.Text = "🟢 Сервер готов";
                     txtServerStatus.Foreground = Brushes.LimeGreen;
                     txtNextCheck.Visibility = Visibility.Visible;
+                    ApplyOfflineUiState(false);
                     break;
 
                 case ServerConnectionState.Busy:
                     txtServerStatus.Text = "🟠 Сервер работает";
                     txtServerStatus.Foreground = Brushes.Orange;
                     txtNextCheck.Visibility = Visibility.Collapsed;
+                    ApplyOfflineUiState(false);
                     break;
 
                 case ServerConnectionState.Offline:
@@ -54,11 +57,14 @@ namespace ImapCertWatcher
                     txtServerStatus.Foreground = Brushes.Red;
                     txtNextCheck.Text = "Следующая проверка: --:--";
                     txtNextCheck.Visibility = Visibility.Visible;
+                    ApplyOfflineUiState(true);
                     break;
             }
 
             AdjustPollingInterval();
         }
+
+
 
         private async void ServerMonitorTimer_Tick(object sender, EventArgs e)
         {
@@ -76,6 +82,24 @@ namespace ImapCertWatcher
             _serverMonitorTimer.Start();
 
             _ = UpdateServerMonitor();
+        }
+
+        private async Task ReloadDataAfterServerWorkAsync()
+        {
+            try
+            {
+                statusText.Text = "Обновление данных после проверки...";
+                AddToMiniLog("Сервер завершил работу, перечитываем данные");
+
+                await LoadFromServer();
+
+                statusText.Text = "Данные обновлены";
+                AddToMiniLog("Данные обновлены после завершения проверки");
+            }
+            catch (Exception ex)
+            {
+                AddToMiniLog("Ошибка автообновления: " + ex.Message);
+            }
         }
 
         private void AdjustPollingInterval()
@@ -186,24 +210,7 @@ namespace ImapCertWatcher
                 if (wasBusy && !isBusy && _reloadAfterServerWork)
                 {
                     _reloadAfterServerWork = false;
-
-                    Dispatcher.InvokeAsync(async () =>
-                    {
-                        try
-                        {
-                            statusText.Text = "Обновление данных после проверки...";
-                            AddToMiniLog("Сервер завершил работу, перечитываем данные");
-
-                            await LoadFromServer();
-
-                            statusText.Text = "Данные обновлены";
-                            AddToMiniLog("Данные обновлены после завершения проверки");
-                        }
-                        catch (Exception ex)
-                        {
-                            AddToMiniLog("Ошибка автообновления: " + ex.Message);
-                        }
-                    });
+                    _ = ReloadDataAfterServerWorkAsync();
                 }
             }
             catch

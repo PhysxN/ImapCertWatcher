@@ -158,16 +158,6 @@ namespace ImapCertWatcher
             }
         }
 
-        private async void LogsTab_SelectionChanged(object sender, SelectionChangedEventArgs e)
-        {
-            if (e.Source is TabControl tabControl &&
-                tabControl.SelectedItem is TabItem selectedTab &&
-                selectedTab.Header?.ToString() == "Логи")
-            {
-                await LoadLogs();
-                AddToMiniLog("Автообновление логов при переходе на вкладку");
-            }
-        }
 
         private async void BtnRefreshLogs_Click(object sender, RoutedEventArgs e)
         {

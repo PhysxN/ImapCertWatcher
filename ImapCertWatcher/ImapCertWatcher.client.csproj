@@ -116,6 +116,7 @@
       <DependentUpon>ConfirmDialog.xaml</DependentUpon>
     </Compile>
     <Compile Include="Converter.cs" />
+    <Compile Include="Converters\RevokedDisplayToToolTipConverter.cs" />
     <Compile Include="MainWindow.Archives.cs" />
     <Compile Include="MainWindow.DataGrid.cs" />
     <Compile Include="MainWindow.Lifecycle.cs" />
@@ -203,6 +204,12 @@
     <Content Include="loading.gif">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+    <Resource Include="Resources\Icons\theme-moon.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Resource>
+    <Resource Include="Resources\Icons\theme-sun.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Resource>
   </ItemGroup>
   <ItemGroup />
   <ItemGroup>

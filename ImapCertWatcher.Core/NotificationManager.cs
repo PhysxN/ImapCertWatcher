@@ -95,7 +95,7 @@ namespace ImapCertWatcher.Services
                 var expiring = records
                     .Where(r => r != null
                                 && !r.IsDeleted
-                                && r.DaysLeft > 0
+                                && r.DaysLeft >= 0
                                 && r.DaysLeft <= threshold
                                 && !string.IsNullOrWhiteSpace(r.Fio))
                     .ToList();
@@ -523,8 +523,8 @@ namespace ImapCertWatcher.Services
                 {
                     try
                     {
-                        DateTime created = File.GetCreationTime(file);
-                        if (created < border)
+                        DateTime lastWrite = File.GetLastWriteTime(file);
+                        if (lastWrite < border)
                             File.Delete(file);
                     }
                     catch

@@ -15,6 +15,9 @@ namespace ImapCertWatcher.ViewModels
         private string _searchText = "";
         private bool _showBusyTokens;
 
+        public bool ShouldShowBusyTokensSection =>
+    _showBusyTokens || !string.IsNullOrWhiteSpace(_searchText);
+
         public ObservableCollection<TokenRecord> FreeTokens { get; } =
             new ObservableCollection<TokenRecord>();
 
@@ -37,6 +40,7 @@ namespace ImapCertWatcher.ViewModels
 
                 _searchText = newValue;
                 OnPropertyChanged(nameof(SearchText));
+                OnPropertyChanged(nameof(ShouldShowBusyTokensSection));
                 ApplyFilter();
             }
         }
@@ -51,6 +55,7 @@ namespace ImapCertWatcher.ViewModels
 
                 _showBusyTokens = value;
                 OnPropertyChanged(nameof(ShowBusyTokens));
+                OnPropertyChanged(nameof(ShouldShowBusyTokensSection));
                 ApplyFilter();
             }
         }
@@ -103,6 +108,9 @@ namespace ImapCertWatcher.ViewModels
             FreeTokens.Clear();
             BusyTokens.Clear();
 
+            bool forceShowBusyBySearch = !string.IsNullOrWhiteSpace(_searchText);
+            bool showBusy = _showBusyTokens || forceShowBusyBySearch;
+
             foreach (var t in _service.Tokens)
             {
                 if (t == null)
@@ -113,7 +121,7 @@ namespace ImapCertWatcher.ViewModels
 
                 if (t.OwnerCertId == null)
                     FreeTokens.Add(t);
-                else if (ShowBusyTokens)
+                else if (showBusy)
                     BusyTokens.Add(t);
             }
         }

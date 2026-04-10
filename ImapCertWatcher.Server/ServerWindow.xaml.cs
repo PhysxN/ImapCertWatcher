@@ -112,7 +112,6 @@ namespace ImapCertWatcher.Server
                 InitTray();
 
                 SetStatus("Сервер работает");
-                AppendLog("ServerHost запущен");
             }
             catch (Exception ex)
             {

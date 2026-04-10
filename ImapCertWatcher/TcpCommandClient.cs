@@ -9,8 +9,8 @@ namespace ImapCertWatcher.Client
     public static class TcpCommandClient
     {
         private const int ConnectTimeoutMs = 5000;
-        private const int ReadTimeoutMs = 15000;
-        private const int MaxResponseLength = 20_000_000; // защита от мусорной длины
+        private const int ReadTimeoutMs = 60000;
+        private const int MaxResponseLength = 80_000_000; // должен покрывать base64-ответы для ZIP до 50 МБ
         private static readonly Encoding Utf8NoBom = new UTF8Encoding(false);
 
         public static async Task<string> SendAsync(string host, int port, string command)

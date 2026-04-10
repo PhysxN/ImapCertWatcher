@@ -29,11 +29,11 @@ namespace ImapCertWatcher.Services
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
         private static readonly Regex BodyFioRegex = new Regex(
-            @"ФИО(?:\s+владельца(?:\s+сертификата)?)?\s*:\s*([А-ЯЁA-Z][^\r\n\.]{3,120})",
+            @"ФИО(?:\s+владельца(?:\s+сертификата)?)?\s*(?:\:|\-|\—)?\s*([А-ЯЁA-Z][^\r\n\.]{3,120})",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
         private static readonly Regex BodyRevokeDateRegex = new Regex(
-            @"Дата\s+отзыва\s+сертификата\s*:\s*(\d{2}\.\d{2}\.\d{4}(?:\s+\d{2}:\d{2}:\d{2})?)",
+            @"Дата\s+отзыва\s+сертификата\s*(?:\:|\-|\—)?\s*(\d{2}\.\d{2}\.\d{4}(?:\s+\d{2}:\d{2}:\d{2})?)",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
 
@@ -186,15 +186,23 @@ namespace ImapCertWatcher.Services
                                             out DateTime? revokeDate,
                                             out string skipReason))
                                     {
-                                        if (!MarkProcessed(folder, uidStr))
+                                        if (LooksLikeRevocationCandidate(message))
                                         {
-                                            Log($"UID={uidStr}: пропуск, {skipReason}, но письмо не удалось пометить обработанным");
+                                            Log($"UID={uidStr}: письмо похоже на аннулирование, но не разобралось ({skipReason}). Письмо НЕ помечено обработанным");
                                             finalized = false;
                                         }
                                         else
                                         {
-                                            Log($"UID={uidStr}: пропуск, {skipReason}, помечено обработанным");
-                                            finalized = true;
+                                            if (!MarkProcessed(folder, uidStr))
+                                            {
+                                                Log($"UID={uidStr}: пропуск, {skipReason}, но письмо не удалось пометить обработанным");
+                                                finalized = false;
+                                            }
+                                            else
+                                            {
+                                                Log($"UID={uidStr}: пропуск, {skipReason}, помечено обработанным");
+                                                finalized = true;
+                                            }
                                         }
                                     }
                                     else
@@ -366,6 +374,27 @@ namespace ImapCertWatcher.Services
             }
 
             return true;
+        }
+
+        private static bool LooksLikeRevocationCandidate(MimeMessage message)
+        {
+            if (message == null)
+                return false;
+
+            string subjectRaw = message.Subject ?? "";
+            string bodyRaw = GetBodyText(message);
+
+            if (SubjectCertRegex.IsMatch(subjectRaw))
+                return true;
+
+            if (ContainsRevokePhrase(subjectRaw) || ContainsRevokePhrase(bodyRaw))
+                return true;
+
+            var bodyNorm = NormalizeForMatch(bodyRaw);
+
+            return bodyNorm.Contains("дата отзыва сертификата") ||
+                   bodyNorm.Contains("фио владельца сертификата") ||
+                   bodyNorm.Contains("фио:");
         }
 
         private static string GetBodyText(MimeMessage msg)

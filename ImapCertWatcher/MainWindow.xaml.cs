@@ -14,6 +14,9 @@ using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Threading;
+using System.Windows.Media;
+using System.Windows.Media.Animation;
+using System.Windows.Controls;
 
 namespace ImapCertWatcher
 {
@@ -35,8 +38,13 @@ namespace ImapCertWatcher
         private bool _isDarkTheme = false;
         private bool _certsLoadedOnce = false;        
         private bool _isAssigningToken = false;
+        private bool _isOfflineUiLocked;
+        private bool _shouldOpenCertificatesTabWhenConnectionRestored = true;
         private TokenService _tokenService;
         private TokensViewModel _tokensVm;
+        private bool _isUpdatingThemeToggleState = false;
+        private int _themeToggleRequestVersion = 0;
+        private bool _isThemeVisualStateApplying = false;
 
 
         private DispatcherTimer _serverMonitorTimer;
@@ -125,21 +133,8 @@ namespace ImapCertWatcher
                 // Настройка DataGrid и обработчиков
                 dgCerts.CanUserAddRows = false;
                 dgCerts.ItemsSource = _items;
-                dgCerts.SelectionChanged += (s, e) =>
-                {
-                    bool hasSelection = dgCerts.SelectedItem != null;
 
-                    btnDeleteSelected.IsEnabled = hasSelection;
-                    btnRestoreSelected.IsEnabled = hasSelection;
-                };
-
-                // стартовое состояние
-                btnDeleteSelected.IsEnabled = false;
-                btnRestoreSelected.IsEnabled = false;
-
-                dgCerts.CellEditEnding += DgCerts_CellEditEnding;
-                dgCerts.BeginningEdit += DgCerts_BeginningEdit;
-                dgCerts.PreparingCellForEdit += DgCerts_PreparingCellForEdit;
+                UpdateDeleteRestoreButtonState();
 
             }
             catch (Exception ex)
@@ -202,15 +197,8 @@ namespace ImapCertWatcher
             try
             {
                 _isDarkTheme = _clientSettings?.DarkTheme == true;
-
-                chkDarkTheme.Checked -= ChkDarkTheme_Changed;
-                chkDarkTheme.Unchecked -= ChkDarkTheme_Changed;
-
-                chkDarkTheme.IsChecked = _isDarkTheme;
                 ApplyTheme(_isDarkTheme);
-
-                chkDarkTheme.Checked += ChkDarkTheme_Changed;
-                chkDarkTheme.Unchecked += ChkDarkTheme_Changed;
+                SyncThemeToggleSwitchState();
             }
             catch (Exception ex)
             {
@@ -243,9 +231,16 @@ namespace ImapCertWatcher
         {
             var dictionaries = Application.Current.Resources.MergedDictionaries;
 
-            // Удаляем старую тему (она всегда первая)
-            if (dictionaries.Count > 0)
-                dictionaries.RemoveAt(0);
+            for (int i = dictionaries.Count - 1; i >= 0; i--)
+            {
+                var source = dictionaries[i].Source?.OriginalString ?? "";
+
+                if (source.EndsWith("Themes/LightTheme.xaml", StringComparison.OrdinalIgnoreCase) ||
+                    source.EndsWith("Themes/DarkTheme.xaml", StringComparison.OrdinalIgnoreCase))
+                {
+                    dictionaries.RemoveAt(i);
+                }
+            }
 
             var themeDict = new ResourceDictionary
             {
@@ -257,19 +252,146 @@ namespace ImapCertWatcher
             };
 
             dictionaries.Insert(0, themeDict);
+
+            SyncThemeToggleSwitchState();
         }
 
-        private void ChkDarkTheme_Changed(object sender, RoutedEventArgs e)
+        private void SyncThemeToggleSwitchState()
         {
-            _isDarkTheme = chkDarkTheme.IsChecked == true;
+            if (themeToggleSwitch == null)
+                return;
 
-            if (_clientSettings != null)
-                _clientSettings.DarkTheme = _isDarkTheme;
+            _isUpdatingThemeToggleState = true;
+            try
+            {
+                themeToggleSwitch.IsChecked = _isDarkTheme;
+                themeToggleSwitch.ToolTip = _isDarkTheme
+                    ? "Переключить на светлую тему"
+                    : "Переключить на тёмную тему";
+            }
+            finally
+            {
+                _isUpdatingThemeToggleState = false;
+            }
 
-            ApplyTheme(_isDarkTheme);
-            SaveThemeSettings();
+            if (themeToggleSwitch.IsLoaded)
+                ApplyThemeToggleVisualState(_isDarkTheme);
+        }
 
-            Log($"[UI] Тема изменена: {(_isDarkTheme ? "Тёмная" : "Светлая")}");
+        private void ThemeToggleSwitch_Loaded(object sender, RoutedEventArgs e)
+        {
+            ApplyThemeToggleVisualState(_isDarkTheme);
+        }
+
+        private void ApplyThemeToggleVisualState(bool isDark)
+        {
+            if (themeToggleSwitch == null)
+                return;
+
+            themeToggleSwitch.ApplyTemplate();
+
+            var lightTrack = themeToggleSwitch.Template.FindName("LightTrack", themeToggleSwitch) as Border;
+            var darkTrack = themeToggleSwitch.Template.FindName("DarkTrack", themeToggleSwitch) as Border;
+            var switchThumb = themeToggleSwitch.Template.FindName("SwitchThumb", themeToggleSwitch) as Border;
+
+            if (lightTrack == null || darkTrack == null || switchThumb == null)
+                return;
+
+            _isThemeVisualStateApplying = true;
+            try
+            {
+                lightTrack.BeginAnimation(UIElement.OpacityProperty, null);
+                darkTrack.BeginAnimation(UIElement.OpacityProperty, null);
+                switchThumb.BeginAnimation(FrameworkElement.MarginProperty, null);
+
+                lightTrack.Opacity = isDark ? 0 : 1;
+                darkTrack.Opacity = isDark ? 1 : 0;
+                switchThumb.Margin = isDark
+                    ? new Thickness(38, 0, 0, 0)
+                    : new Thickness(4, 0, 0, 0);
+            }
+            finally
+            {
+                _isThemeVisualStateApplying = false;
+            }
+        }
+
+        private async Task AnimateWindowOpacityAsync(double to, int durationMs)
+        {
+            var tcs = new TaskCompletionSource<bool>();
+
+            var animation = new DoubleAnimation
+            {
+                To = to,
+                Duration = TimeSpan.FromMilliseconds(durationMs),
+                FillBehavior = FillBehavior.HoldEnd
+            };
+
+            animation.Completed += (s, e) => tcs.TrySetResult(true);
+
+            BeginAnimation(Window.OpacityProperty, animation);
+
+            await tcs.Task;
+        }
+
+        private async void ThemeToggleSwitch_Checked(object sender, RoutedEventArgs e)
+        {
+            await ApplyThemeFromSwitchAsync(true);
+        }
+
+        private async void ThemeToggleSwitch_Unchecked(object sender, RoutedEventArgs e)
+        {
+            await ApplyThemeFromSwitchAsync(false);
+        }
+
+        private async Task ApplyThemeFromSwitchAsync(bool dark)
+        {
+            if (_isUpdatingThemeToggleState || _isThemeVisualStateApplying)
+                return;
+
+            try
+            {
+                if (_isDarkTheme == dark)
+                    return;
+
+                int requestVersion = ++_themeToggleRequestVersion;
+
+                await Task.Delay(25);
+
+                if (requestVersion != _themeToggleRequestVersion)
+                    return;
+
+                await AnimateWindowOpacityAsync(0.94, 35);
+
+                _isDarkTheme = dark;
+
+                if (_clientSettings != null)
+                    _clientSettings.DarkTheme = _isDarkTheme;
+
+                ApplyTheme(_isDarkTheme);
+                SyncThemeToggleSwitchState();
+
+                if (dgCerts != null)
+                    dgCerts.Items.Refresh();
+
+                SaveThemeSettings();
+
+                await AnimateWindowOpacityAsync(1.0, 45);
+
+                Log($"[UI] Тема изменена: {(_isDarkTheme ? "Тёмная" : "Светлая")}");
+            }
+            catch (Exception ex)
+            {
+                Opacity = 1.0;
+
+                MessageBox.Show(
+                    "Ошибка переключения темы:\n" + ex.Message,
+                    "Ошибка",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+
+                SyncThemeToggleSwitchState();
+            }
         }
 
         // ========== ЭКСПОРТ В EXCEL С ИСПОЛЬЗОВАНИЕМ CSV ==========
@@ -569,6 +691,113 @@ namespace ImapCertWatcher
             }
 
             RebuildAvailableTokens();
+        }
+
+        private void SelectCertificatesTab()
+        {
+            if (!Dispatcher.CheckAccess())
+            {
+                Dispatcher.Invoke(SelectCertificatesTab);
+                return;
+            }
+
+            if (tabCertificates == null || mainTabControl == null)
+                return;
+
+            if (tabCertificates.Visibility != Visibility.Visible || !tabCertificates.IsEnabled)
+                return;
+
+            _isSwitchingTabInternally = true;
+            try
+            {
+                mainTabControl.SelectedItem = tabCertificates;
+            }
+            finally
+            {
+                _isSwitchingTabInternally = false;
+            }
+        }
+
+        private void ApplyOfflineUiState(bool isOffline)
+        {
+            if (!Dispatcher.CheckAccess())
+            {
+                Dispatcher.Invoke(() => ApplyOfflineUiState(isOffline));
+                return;
+            }
+
+            if (_isOfflineUiLocked == isOffline)
+                return;
+
+            _isOfflineUiLocked = isOffline;
+
+            if (isOffline)
+            {
+                _shouldOpenCertificatesTabWhenConnectionRestored = true;
+
+                _isSwitchingTabInternally = true;
+                try
+                {
+                    mainTabControl.SelectedItem = tabSettings;
+                }
+                finally
+                {
+                    _isSwitchingTabInternally = false;
+                }
+
+                tabCertificates.Visibility = Visibility.Collapsed;
+                tabTokens.Visibility = Visibility.Collapsed;
+                tabLogs.Visibility = Visibility.Collapsed;
+                tabSettings.Visibility = Visibility.Visible;
+
+                tabCertificates.IsEnabled = false;
+                tabTokens.IsEnabled = false;
+                tabLogs.IsEnabled = false;
+                tabSettings.IsEnabled = true;
+
+                txtServerStatus.Text = "🔴 Сервер OFFLINE";
+                txtServerStatus.Foreground = Brushes.Red;
+                txtNextCheck.Text = "Следующая проверка: --:--";
+                txtNextCheck.Visibility = Visibility.Visible;
+
+                if (statusText != null)
+                    statusText.Text = "Нет связи с сервером. Доступны только настройки.";
+
+                if (tokensStatusText != null)
+                    tokensStatusText.Text = "Нет связи с сервером.";
+
+                if (logStatusText != null)
+                    logStatusText.Text = "Нет связи с сервером.";
+            }
+            else
+            {
+                tabCertificates.Visibility = Visibility.Visible;
+                tabTokens.Visibility = Visibility.Visible;
+                tabLogs.Visibility = Visibility.Visible;
+                tabSettings.Visibility = Visibility.Visible;
+
+                tabCertificates.IsEnabled = true;
+                tabTokens.IsEnabled = true;
+                tabLogs.IsEnabled = true;
+                tabSettings.IsEnabled = true;
+
+                if (_shouldOpenCertificatesTabWhenConnectionRestored)
+                {
+                    SelectCertificatesTab();
+                    _shouldOpenCertificatesTabWhenConnectionRestored = false;
+                }
+
+                if (statusText != null)
+                    statusText.Text = "Готов";
+
+                if (tokensStatusText != null)
+                    tokensStatusText.Text = "Токены загружены";
+
+                if (logStatusText != null)
+                    logStatusText.Text = "Логи загружены";
+            }
+
+            mainTabControl.UpdateLayout();
         }
 
         private async void BtnSaveSettings_Click(object sender, RoutedEventArgs e)

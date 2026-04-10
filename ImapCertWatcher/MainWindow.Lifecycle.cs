@@ -43,11 +43,19 @@ namespace ImapCertWatcher
 
                 _tokenService.TokensChanged += RebuildAvailableTokens;
 
-                await _tokenService.Reload();
-
                 await ReportProgressStep("Подключение к серверу...", 20);
 
-                await LoadFromServer();
+                try
+                {
+                    await _tokenService.Reload();
+                }
+                catch (Exception ex)
+                {
+                    SetServerState(ServerConnectionState.Offline);
+                    AddToMiniLog("Сервер недоступен, токены не загружены: " + ex.Message);
+                }
+
+                await LoadFromServer(false);
 
                 _certsLoadedOnce = _serverState == ServerConnectionState.Online;
 

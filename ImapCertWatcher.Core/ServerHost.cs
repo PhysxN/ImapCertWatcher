@@ -110,13 +110,7 @@ namespace ImapCertWatcher.Server
 
             var originalCmd = cmd.Trim();
             var upperCmd = originalCmd.ToUpperInvariant();
-
             var command = upperCmd.Split('|')[0];
-            if (!command.StartsWith("GET_") &&
-    command != "STATUS")
-            {
-                _log("CMD IN: " + originalCmd);
-            }
 
             switch (command)
             {
@@ -227,7 +221,6 @@ namespace ImapCertWatcher.Server
                         var list = _db.LoadAll(true);
                         var json = JsonConvert.SerializeObject(list);
 
-                        _log("GET_CERTS -> send " + list.Count + " records");
 
                         return "CERTS " + json;
                     }
@@ -254,7 +247,6 @@ namespace ImapCertWatcher.Server
 
                             _db.MarkAsDeleted(did, deleted);
 
-                            _log($"MARK_DELETED OK: ID={did}, Deleted={deleted}");
 
                             return "OK DELETED UPDATED\n";
                         }
@@ -290,11 +282,9 @@ namespace ImapCertWatcher.Server
                                 return "ERROR|UPDATE_NOTE|BAD_DATA";
                             }
 
-                            _log($"UPDATE_NOTE received: ID={nid}");
 
                             _db.UpdateNote(nid, note);
 
-                            _log($"UPDATE_NOTE OK: ID={nid}");
 
                             return "OK NOTE UPDATED\n";
                         }
@@ -332,7 +322,6 @@ namespace ImapCertWatcher.Server
                                 return "ERROR|ADD_ARCHIVE|BAD_DATA";
                             }
 
-                            _log($"ADD_ARCHIVE received: ID={certId}, Cert={fileName}, Size={data.Length} bytes");
 
                             bool saved = _db.SaveArchiveToDb(certId, fileName, data);
 
@@ -342,7 +331,6 @@ namespace ImapCertWatcher.Server
                                 return "ERROR|ADD_ARCHIVE|SAVE_FAILED";
                             }
 
-                            _log($"ADD_ARCHIVE OK: ID={certId}");
 
                             return "OK ARCHIVE SAVED\n";
                         }
@@ -368,12 +356,10 @@ namespace ImapCertWatcher.Server
                         if (result.data == null || result.data.Length == 0)
                             return "ARCHIVE EMPTY\n";
 
-                        _log($"GET_ARCHIVE request: ID={gid}");
 
                         string fileName = result.fileName;
                         var base64 = Convert.ToBase64String(result.data);
 
-                        _log($"GET_ARCHIVE OK: ID={gid}, Size={result.data.Length}");
 
                         return "ARCHIVE|" + fileName + "|" + base64;
                     }
@@ -392,11 +378,9 @@ namespace ImapCertWatcher.Server
 
                             string building = bparts[2] ?? "";
 
-                            _log($"SET_BUILDING received: ID={bid}, Building='{building}'");
 
                             _db.UpdateBuilding(bid, building);
 
-                            _log($"SET_BUILDING OK: ID={bid}");
 
                             return "OK BUILDING UPDATED\n";
                         }
@@ -619,8 +603,25 @@ namespace ImapCertWatcher.Server
                     _currentStage = "Saving data";
                 }
 
-                if (newCerts.Count > 0)
-                    _notifications.NotifyNewUsers(newCerts);
+                try
+                {
+                    if (newCerts.Count > 0)
+                        _notifications.NotifyNewUsers(newCerts);
+                }
+                catch (Exception notifyEx)
+                {
+                    _log("NEW USERS NOTIFY ERROR: " + notifyEx.Message);
+                }
+
+                try
+                {
+                    var activeCerts = _db.LoadAll(showDeleted: false);
+                    _notifications.NotifyExpiringCerts(activeCerts);
+                }
+                catch (Exception notifyEx)
+                {
+                    _log("EXPIRING NOTIFY ERROR: " + notifyEx.Message);
+                }
 
                 _lastCheckTime = DateTime.Now;
 
@@ -696,8 +697,25 @@ namespace ImapCertWatcher.Server
                     _currentStage = "Saving data";
                 }
 
-                if (newCerts.Count > 0)
-                    _notifications.NotifyNewUsers(newCerts);
+                try
+                {
+                    if (newCerts.Count > 0)
+                        _notifications.NotifyNewUsers(newCerts);
+                }
+                catch (Exception notifyEx)
+                {
+                    _log("NEW USERS NOTIFY ERROR: " + notifyEx.Message);
+                }
+
+                try
+                {
+                    var activeCerts = _db.LoadAll(showDeleted: false);
+                    _notifications.NotifyExpiringCerts(activeCerts);
+                }
+                catch (Exception notifyEx)
+                {
+                    _log("EXPIRING NOTIFY ERROR: " + notifyEx.Message);
+                }
 
                 _lastCheckTime = DateTime.Now;
 
@@ -835,8 +853,25 @@ namespace ImapCertWatcher.Server
                     _currentStage = "Saving data";
                 }
 
-                if (newCerts.Count > 0)
-                    _notifications.NotifyNewUsers(newCerts);
+                try
+                {
+                    if (newCerts.Count > 0)
+                        _notifications.NotifyNewUsers(newCerts);
+                }
+                catch (Exception notifyEx)
+                {
+                    _log("NEW USERS NOTIFY ERROR: " + notifyEx.Message);
+                }
+
+                try
+                {
+                    var activeCerts = _db.LoadAll(showDeleted: false);
+                    _notifications.NotifyExpiringCerts(activeCerts);
+                }
+                catch (Exception notifyEx)
+                {
+                    _log("EXPIRING NOTIFY ERROR: " + notifyEx.Message);
+                }
 
                 _lastCheckTime = DateTime.Now;
 
@@ -981,8 +1016,25 @@ namespace ImapCertWatcher.Server
                     _currentStage = "Saving data";
                 }
 
-                if (newCerts.Count > 0)
-                    _notifications.NotifyNewUsers(newCerts);
+                try
+                {
+                    if (newCerts.Count > 0)
+                        _notifications.NotifyNewUsers(newCerts);
+                }
+                catch (Exception notifyEx)
+                {
+                    _log("NEW USERS NOTIFY ERROR: " + notifyEx.Message);
+                }
+
+                try
+                {
+                    var activeCerts = _db.LoadAll(showDeleted: false);
+                    _notifications.NotifyExpiringCerts(activeCerts);
+                }
+                catch (Exception notifyEx)
+                {
+                    _log("EXPIRING NOTIFY ERROR: " + notifyEx.Message);
+                }
 
                 _lastCheckTime = DateTime.Now;
 
