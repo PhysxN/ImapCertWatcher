@@ -121,7 +121,7 @@ namespace ImapCertWatcher.Server
                         if (task.IsCompleted)
                             return task.GetAwaiter().GetResult();
 
-                        return "OK";
+                        return "STARTED FAST_CERTS_CHECK";
                     }
 
                 case "FAST_REVOKES_CHECK":
@@ -131,7 +131,7 @@ namespace ImapCertWatcher.Server
                         if (task.IsCompleted)
                             return task.GetAwaiter().GetResult();
 
-                        return "OK";
+                        return "STARTED FAST_REVOKES_CHECK";
                     }
 
                 case "FULL_CERTS_CHECK":
@@ -141,7 +141,7 @@ namespace ImapCertWatcher.Server
                         if (task.IsCompleted)
                             return task.GetAwaiter().GetResult();
 
-                        return "OK";
+                        return "STARTED FULL_CERTS_CHECK";
                     }
 
                 case "FULL_REVOKES_CHECK":
@@ -151,7 +151,7 @@ namespace ImapCertWatcher.Server
                         if (task.IsCompleted)
                             return task.GetAwaiter().GetResult();
 
-                        return "OK";
+                        return "STARTED FULL_REVOKES_CHECK";
                     }
 
                 case "FAST_CHECK":
@@ -161,7 +161,7 @@ namespace ImapCertWatcher.Server
                         if (task.IsCompleted)
                             return task.GetAwaiter().GetResult();
 
-                        return "OK";
+                        return "STARTED FAST_CHECK";
                     }
 
                 case "FULL_CHECK":
@@ -171,9 +171,8 @@ namespace ImapCertWatcher.Server
                         if (task.IsCompleted)
                             return task.GetAwaiter().GetResult();
 
-                        return "OK";
+                        return "STARTED FULL_CHECK";
                     }
-
                 case "STATUS":
                     {
                         bool isBusy = _checkLock.CurrentCount == 0;
@@ -343,25 +342,31 @@ namespace ImapCertWatcher.Server
 
                 case "GET_ARCHIVE":
                     {
-                        var gparts = originalCmd.Split('|');
+                        try
+                        {
+                            var gparts = originalCmd.Split('|');
 
-                        if (gparts.Length < 2)
-                            return "ARCHIVE EMPTY\n";
+                            if (gparts.Length < 2)
+                                return "ARCHIVE EMPTY\n";
 
-                        if (!int.TryParse(gparts[1], out int gid))
-                            return "ARCHIVE EMPTY\n";
+                            if (!int.TryParse(gparts[1], out int gid))
+                                return "ARCHIVE EMPTY\n";
 
-                        var result = _db.GetArchiveFromDb(gid);
+                            var result = _db.GetArchiveFromDb(gid);
 
-                        if (result.data == null || result.data.Length == 0)
-                            return "ARCHIVE EMPTY\n";
+                            if (result.data == null || result.data.Length == 0)
+                                return "ARCHIVE EMPTY\n";
 
+                            string fileName = result.fileName;
+                            var base64 = Convert.ToBase64String(result.data);
 
-                        string fileName = result.fileName;
-                        var base64 = Convert.ToBase64String(result.data);
-
-
-                        return "ARCHIVE|" + fileName + "|" + base64;
+                            return "ARCHIVE|" + fileName + "|" + base64;
+                        }
+                        catch (Exception ex)
+                        {
+                            _log("GET_ARCHIVE ERROR: " + ex.Message);
+                            return "ERROR|GET_ARCHIVE|" + ex.Message.Replace("\r", " ").Replace("\n", " ");
+                        }
                     }
 
                 case "SET_BUILDING":
@@ -393,11 +398,26 @@ namespace ImapCertWatcher.Server
 
                 case "RESET_REVOKES":
                     {
+                        if (!_checkLock.Wait(0))
+                            return "BUSY RUNNING";
+
                         try
                         {
+                            lock (_stateLock)
+                            {
+                                _progressPercent = 10;
+                                _currentStage = "Reset revocations";
+                            }
+
                             _log("RESET_REVOKES started");
 
                             _db.ResetRevocations();
+
+                            lock (_stateLock)
+                            {
+                                _progressPercent = 100;
+                                _currentStage = "IDLE";
+                            }
 
                             _log("RESET_REVOKES finished");
 
@@ -405,11 +425,20 @@ namespace ImapCertWatcher.Server
                         }
                         catch (Exception ex)
                         {
+                            lock (_stateLock)
+                            {
+                                _progressPercent = 0;
+                                _currentStage = "IDLE";
+                            }
+
                             _log("RESET_REVOKES ERROR: " + ex.Message);
                             return "ERROR|RESET_REVOKES|" + ex.Message.Replace("\r", " ").Replace("\n", " ");
                         }
+                        finally
+                        {
+                            _checkLock.Release();
+                        }
                     }
-
                 case "GET_TOKENS":
                     {
                         try
@@ -586,13 +615,67 @@ namespace ImapCertWatcher.Server
                     _currentStage = "Checking mail";
                 }
 
+                string certsError = null;
+                string revokesError = null;
+
                 using (var timeoutCts = new CancellationTokenSource(TimeSpan.FromMinutes(5)))
                 using (var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(token, timeoutCts.Token))
                 {
-                    await Task.WhenAll(
-                        Task.Run(() => _newWatcher.ProcessNewCertificates(false, linkedCts.Token), linkedCts.Token),
-                        Task.Run(() => _revokeWatcher.ProcessRevocations(false, linkedCts.Token), linkedCts.Token)
-                    );
+                    var certsTask = Task.Run(() =>
+                    {
+                        try
+                        {
+                            _newWatcher.ProcessNewCertificates(false, linkedCts.Token);
+                            return null;
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            throw;
+                        }
+                        catch (Exception ex)
+                        {
+                            return ex.Message;
+                        }
+                    }, linkedCts.Token);
+
+                    var revokesTask = Task.Run(() =>
+                    {
+                        try
+                        {
+                            _revokeWatcher.ProcessRevocations(false, linkedCts.Token);
+                            return null;
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            throw;
+                        }
+                        catch (Exception ex)
+                        {
+                            return ex.Message;
+                        }
+                    }, linkedCts.Token);
+
+                    await Task.WhenAll(certsTask, revokesTask);
+
+                    certsError = certsTask.Result;
+                    revokesError = revokesTask.Result;
+                }
+
+                if (!string.IsNullOrWhiteSpace(certsError) || !string.IsNullOrWhiteSpace(revokesError))
+                {
+                    lock (_stateLock)
+                    {
+                        _progressPercent = 0;
+                        _currentStage = "IDLE";
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(certsError))
+                        _log("FAST CHECK CERTS ERROR: " + certsError);
+
+                    if (!string.IsNullOrWhiteSpace(revokesError))
+                        _log("FAST CHECK REVOKES ERROR: " + revokesError);
+
+                    return "ERROR FAST CHECK";
                 }
 
                 var newCerts = _db.GetCertificatesAddedAfter(startedAt);
@@ -673,6 +756,17 @@ namespace ImapCertWatcher.Server
 
             try
             {
+                var sinceLast = DateTime.Now - _lastCheckTime;
+
+                if (sinceLast < MinCheckInterval)
+                {
+                    var wait = MinCheckInterval - sinceLast;
+
+                    _log($"FAST CERTS CHECK skipped. Wait {wait.TotalMinutes:F1} min");
+
+                    return $"BUSY WAIT {(int)Math.Ceiling(wait.TotalMinutes)} MIN";
+                }
+
                 _log("FAST CERTS CHECK started");
 
                 lock (_stateLock)
@@ -683,10 +777,39 @@ namespace ImapCertWatcher.Server
 
                 var startedAt = DateTime.UtcNow;
 
+                string watcherError = null;
+
                 using (var timeoutCts = new CancellationTokenSource(TimeSpan.FromMinutes(5)))
                 using (var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(token, timeoutCts.Token))
                 {
-                    await Task.Run(() => _newWatcher.ProcessNewCertificates(false, linkedCts.Token), linkedCts.Token);
+                    watcherError = await Task.Run(() =>
+                    {
+                        try
+                        {
+                            _newWatcher.ProcessNewCertificates(false, linkedCts.Token);
+                            return null;
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            throw;
+                        }
+                        catch (Exception ex)
+                        {
+                            return ex.Message;
+                        }
+                    }, linkedCts.Token);
+                }
+
+                if (!string.IsNullOrWhiteSpace(watcherError))
+                {
+                    lock (_stateLock)
+                    {
+                        _progressPercent = 0;
+                        _currentStage = "IDLE";
+                    }
+
+                    _log("FAST CERTS CHECK ERROR: " + watcherError);
+                    return "ERROR FAST CERTS CHECK";
                 }
 
                 var newCerts = _db.GetCertificatesAddedAfter(startedAt);
@@ -767,6 +890,17 @@ namespace ImapCertWatcher.Server
 
             try
             {
+                var sinceLast = DateTime.Now - _lastCheckTime;
+
+                if (sinceLast < MinCheckInterval)
+                {
+                    var wait = MinCheckInterval - sinceLast;
+
+                    _log($"FAST REVOKES CHECK skipped. Wait {wait.TotalMinutes:F1} min");
+
+                    return $"BUSY WAIT {(int)Math.Ceiling(wait.TotalMinutes)} MIN";
+                }
+
                 _log("FAST REVOKES CHECK started");
 
                 lock (_stateLock)
@@ -775,10 +909,39 @@ namespace ImapCertWatcher.Server
                     _currentStage = "Checking new revocations";
                 }
 
+                string watcherError = null;
+
                 using (var timeoutCts = new CancellationTokenSource(TimeSpan.FromMinutes(5)))
                 using (var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(token, timeoutCts.Token))
                 {
-                    await Task.Run(() => _revokeWatcher.ProcessRevocations(false, linkedCts.Token), linkedCts.Token);
+                    watcherError = await Task.Run(() =>
+                    {
+                        try
+                        {
+                            _revokeWatcher.ProcessRevocations(false, linkedCts.Token);
+                            return null;
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            throw;
+                        }
+                        catch (Exception ex)
+                        {
+                            return ex.Message;
+                        }
+                    }, linkedCts.Token);
+                }
+
+                if (!string.IsNullOrWhiteSpace(watcherError))
+                {
+                    lock (_stateLock)
+                    {
+                        _progressPercent = 0;
+                        _currentStage = "IDLE";
+                    }
+
+                    _log("FAST REVOKES CHECK ERROR: " + watcherError);
+                    return "ERROR FAST REVOKES CHECK";
                 }
 
                 _lastCheckTime = DateTime.Now;
@@ -839,10 +1002,39 @@ namespace ImapCertWatcher.Server
                     _currentStage = "Full certificates check";
                 }
 
+                string watcherError = null;
+
                 using (var timeoutCts = new CancellationTokenSource(TimeSpan.FromMinutes(15)))
                 using (var linked = CancellationTokenSource.CreateLinkedTokenSource(token, timeoutCts.Token))
                 {
-                    await Task.Run(() => _newWatcher.ProcessNewCertificates(true, linked.Token), linked.Token);
+                    watcherError = await Task.Run(() =>
+                    {
+                        try
+                        {
+                            _newWatcher.ProcessNewCertificates(true, linked.Token);
+                            return null;
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            throw;
+                        }
+                        catch (Exception ex)
+                        {
+                            return ex.Message;
+                        }
+                    }, linked.Token);
+                }
+
+                if (!string.IsNullOrWhiteSpace(watcherError))
+                {
+                    lock (_stateLock)
+                    {
+                        _progressPercent = 0;
+                        _currentStage = "IDLE";
+                    }
+
+                    _log("FULL CERTS CHECK ERROR: " + watcherError);
+                    return "ERROR FULL CERTS CHECK";
                 }
 
                 var newCerts = _db.GetCertificatesAddedAfter(startedAt);
@@ -929,12 +1121,40 @@ namespace ImapCertWatcher.Server
                     _currentStage = "Full revocations check";
                 }
 
+                string watcherError = null;
+
                 using (var timeoutCts = new CancellationTokenSource(TimeSpan.FromMinutes(15)))
                 using (var linked = CancellationTokenSource.CreateLinkedTokenSource(token, timeoutCts.Token))
                 {
-                    await Task.Run(() => _revokeWatcher.ProcessRevocations(true, linked.Token), linked.Token);
+                    watcherError = await Task.Run(() =>
+                    {
+                        try
+                        {
+                            _revokeWatcher.ProcessRevocations(true, linked.Token);
+                            return null;
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            throw;
+                        }
+                        catch (Exception ex)
+                        {
+                            return ex.Message;
+                        }
+                    }, linked.Token);
                 }
 
+                if (!string.IsNullOrWhiteSpace(watcherError))
+                {
+                    lock (_stateLock)
+                    {
+                        _progressPercent = 0;
+                        _currentStage = "IDLE";
+                    }
+
+                    _log("FULL REVOKES CHECK ERROR: " + watcherError);
+                    return "ERROR FULL REVOKES CHECK";
+                }
 
                 _lastCheckTime = DateTime.Now;
 
@@ -994,10 +1214,40 @@ namespace ImapCertWatcher.Server
                     _currentStage = "Full check started";
                 }
 
+                string certsError = null;
+                string revokesError = null;
+
                 using (var timeoutCts = new CancellationTokenSource(TimeSpan.FromMinutes(15)))
                 using (var linked = CancellationTokenSource.CreateLinkedTokenSource(token, timeoutCts.Token))
                 {
-                    await Task.Run(() => _newWatcher.ProcessNewCertificates(true, linked.Token), linked.Token);
+                    certsError = await Task.Run(() =>
+                    {
+                        try
+                        {
+                            _newWatcher.ProcessNewCertificates(true, linked.Token);
+                            return null;
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            throw;
+                        }
+                        catch (Exception ex)
+                        {
+                            return ex.Message;
+                        }
+                    }, linked.Token);
+
+                    if (!string.IsNullOrWhiteSpace(certsError))
+                    {
+                        lock (_stateLock)
+                        {
+                            _progressPercent = 0;
+                            _currentStage = "IDLE";
+                        }
+
+                        _log("FULL CHECK CERTS ERROR: " + certsError);
+                        return "ERROR FULL CHECK";
+                    }
 
                     lock (_stateLock)
                     {
@@ -1005,7 +1255,34 @@ namespace ImapCertWatcher.Server
                         _currentStage = "Checking revocations";
                     }
 
-                    await Task.Run(() => _revokeWatcher.ProcessRevocations(true, linked.Token), linked.Token);
+                    revokesError = await Task.Run(() =>
+                    {
+                        try
+                        {
+                            _revokeWatcher.ProcessRevocations(true, linked.Token);
+                            return null;
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            throw;
+                        }
+                        catch (Exception ex)
+                        {
+                            return ex.Message;
+                        }
+                    }, linked.Token);
+                }
+
+                if (!string.IsNullOrWhiteSpace(revokesError))
+                {
+                    lock (_stateLock)
+                    {
+                        _progressPercent = 0;
+                        _currentStage = "IDLE";
+                    }
+
+                    _log("FULL CHECK REVOKES ERROR: " + revokesError);
+                    return "ERROR FULL CHECK";
                 }
 
                 var newCerts = _db.GetCertificatesAddedAfter(startedAt);
@@ -1078,6 +1355,7 @@ namespace ImapCertWatcher.Server
                 _checkLock.Release();
             }
         }
+
         private string GetLastServerLogLines(int count = 300)
         {
             try
@@ -1087,12 +1365,17 @@ namespace ImapCertWatcher.Server
                 if (!File.Exists(logFile))
                     return "";
 
-                var lastLines = File.ReadLines(logFile, Encoding.UTF8)
-                    .Reverse()
-                    .Take(count)
-                    .Reverse();
+                var queue = new System.Collections.Generic.Queue<string>(count);
 
-                return string.Join(Environment.NewLine, lastLines);
+                foreach (var line in File.ReadLines(logFile, Encoding.UTF8))
+                {
+                    if (queue.Count >= count)
+                        queue.Dequeue();
+
+                    queue.Enqueue(line);
+                }
+
+                return string.Join(Environment.NewLine, queue);
             }
             catch (Exception ex)
             {

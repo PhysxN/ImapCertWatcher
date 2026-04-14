@@ -89,12 +89,16 @@ namespace ImapCertWatcher.Services
                         }
                         catch (Exception ex)
                         {
-                            Log($"IMAP connect attempt {attempt} failed: {ex.Message}");
+                            if (attempt < 2)
+                            {
+                                Log($"IMAP connect attempt {attempt} failed: {ex.Message}");
+                                Task.Delay(3000, token).GetAwaiter().GetResult();
+                                continue;
+                            }
 
-                            if (attempt == 2)
-                                throw;
-
-                            Task.Delay(3000, token).GetAwaiter().GetResult();
+                            throw new InvalidOperationException(
+                                $"Ошибка подключения к IMAP {_settings.MailHost}:{_settings.MailPort}: {ex.Message}",
+                                ex);
                         }
                     }
 
@@ -225,7 +229,17 @@ namespace ImapCertWatcher.Services
 
                                         Log($"UID={uidStr}: {resultMessage}. Сертификат: {certNumber}, ФИО: {fio}, дата {dateText}");
 
-                                        if (!MarkProcessed(folder, uidStr))
+                                        bool isProcessingError =
+                                            !ok &&
+                                            resultMessage != null &&
+                                            resultMessage.StartsWith("ошибка", StringComparison.OrdinalIgnoreCase);
+
+                                        if (isProcessingError)
+                                        {
+                                            Log($"UID={uidStr}: письмо НЕ помечено обработанным из-за ошибки при применении аннулирования");
+                                            finalized = false;
+                                        }
+                                        else if (!MarkProcessed(folder, uidStr))
                                         {
                                             Log($"UID={uidStr}: письмо обработано, но не удалось пометить его как обработанное");
                                             finalized = false;
@@ -280,9 +294,8 @@ namespace ImapCertWatcher.Services
                 Log("Обработка аннулирований отменена");
                 throw;
             }
-            catch (Exception ex)
+            catch
             {
-                Log("Ошибка: " + ex.Message);
                 throw;
             }
         }
@@ -301,11 +314,6 @@ namespace ImapCertWatcher.Services
             }
         }
 
-        public Task CheckRevocationsFastAsync(CancellationToken token)
-        {
-            ProcessRevocations(false, token);
-            return Task.CompletedTask;
-        }
 
 
         private static string StripHtml(string html)

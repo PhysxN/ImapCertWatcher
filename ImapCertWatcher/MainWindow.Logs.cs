@@ -99,10 +99,17 @@ namespace ImapCertWatcher
                 return;
             }
 
-            var lines = File.ReadAllLines(latestSessionLog.FullName);
-            var lastLines = lines.Skip(Math.Max(0, lines.Length - 1000));
+            var queue = new System.Collections.Generic.Queue<string>(1000);
 
-            txtLogs.Text = string.Join(Environment.NewLine, lastLines);
+            foreach (var line in File.ReadLines(latestSessionLog.FullName))
+            {
+                if (queue.Count >= 1000)
+                    queue.Dequeue();
+
+                queue.Enqueue(line);
+            }
+
+            txtLogs.Text = string.Join(Environment.NewLine, queue);
             logStatusText.Text = $"Локальный лог клиента ({latestSessionLog.LastWriteTime:dd.MM.yyyy HH:mm})";
             txtLogs.ScrollToEnd();
 

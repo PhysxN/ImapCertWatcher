@@ -136,16 +136,20 @@ namespace ImapCertWatcher.Data
 
                     if (!CheckTableExists(conn, "PROCESSED_MAILS"))
                         CreateProcessedMailsTable(conn);
-                    else
-                        CreateIndexIfNotExists(conn, "UQ_PROCESSED_MAILS", "PROCESSED_MAILS", "FOLDER_PATH, MAIL_UID, KIND", true);
+
+                    EnsureProcessedMailsSchema(conn);
 
                     if (!CheckTableExists(conn, "IMAP_LAST_UID"))
                         CreateImapLastUidTable(conn);
 
+                    EnsureImapLastUidSchema(conn);
+
                     if (!CheckTableExists(conn, "TOKENS"))
                         CreateTokensTable(conn);
-                    else
-                        CreateIndexIfNotExists(conn, "UQ_TOKENS_SN", "TOKENS", "SN", true);
+
+                    EnsureTokensSchema(conn);
+
+                    EnsureInsertTriggers(conn);
                 }
             }
             catch (Exception ex)
@@ -528,6 +532,143 @@ ON TOKENS (SN)";
                 cmd.Parameters.AddWithValue("@col", columnName.ToUpperInvariant());
                 var r = Convert.ToInt32(cmd.ExecuteScalar());
                 return r > 0;
+            }
+        }
+
+        private bool ColumnExists(FbConnection conn, string tableName, string columnName)
+        {
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = @"
+SELECT COUNT(*)
+FROM RDB$RELATION_FIELDS
+WHERE RDB$RELATION_NAME = @tableName
+  AND RDB$FIELD_NAME = @columnName";
+
+                cmd.Parameters.AddWithValue("@tableName", tableName.ToUpperInvariant());
+                cmd.Parameters.AddWithValue("@columnName", columnName.ToUpperInvariant());
+
+                var r = Convert.ToInt32(cmd.ExecuteScalar());
+                return r > 0;
+            }
+        }
+
+        private void EnsureColumn(FbConnection conn, string tableName, string columnName, string columnDefinition)
+        {
+            if (ColumnExists(conn, tableName, columnName))
+                return;
+
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = $"ALTER TABLE {tableName} ADD {columnName} {columnDefinition}";
+                cmd.ExecuteNonQuery();
+                Log($"Добавлен столбец {tableName}.{columnName}");
+            }
+        }
+
+        private void EnsureProcessedMailsSchema(FbConnection conn)
+        {
+            EnsureColumn(conn, "PROCESSED_MAILS", "FOLDER_PATH", "VARCHAR(300)");
+            EnsureColumn(conn, "PROCESSED_MAILS", "MAIL_UID", "VARCHAR(50)");
+            EnsureColumn(conn, "PROCESSED_MAILS", "KIND", "VARCHAR(20)");
+            EnsureColumn(conn, "PROCESSED_MAILS", "PROCESSED_DATE", "TIMESTAMP");
+
+            CreateIndexIfNotExists(
+                conn,
+                "UQ_PROCESSED_MAILS",
+                "PROCESSED_MAILS",
+                "FOLDER_PATH, MAIL_UID, KIND",
+                true);
+        }
+
+        private void EnsureImapLastUidSchema(FbConnection conn)
+        {
+            EnsureColumn(conn, "IMAP_LAST_UID", "FOLDER_PATH", "VARCHAR(500)");
+            EnsureColumn(conn, "IMAP_LAST_UID", "LAST_UID", "BIGINT");
+        }
+
+        private void EnsureTokensSchema(FbConnection conn)
+        {
+            EnsureColumn(conn, "TOKENS", "SN", "VARCHAR(100)");
+            CreateIndexIfNotExists(conn, "UQ_TOKENS_SN", "TOKENS", "SN", true);
+        }
+
+        private bool TriggerExists(FbConnection conn, string triggerName)
+        {
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = @"
+SELECT COUNT(*)
+FROM RDB$TRIGGERS
+WHERE UPPER(RDB$TRIGGER_NAME) = @name";
+
+                cmd.Parameters.AddWithValue("@name", triggerName.ToUpperInvariant());
+                var cnt = Convert.ToInt32(cmd.ExecuteScalar());
+                return cnt > 0;
+            }
+        }
+
+        private void CreateTriggerIfNotExists(FbConnection conn, string triggerName, string triggerSql)
+        {
+            if (TriggerExists(conn, triggerName))
+                return;
+
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = triggerSql;
+                cmd.ExecuteNonQuery();
+                Log($"Создан триггер {triggerName}");
+            }
+        }
+
+        private void EnsureInsertTriggers(FbConnection conn)
+        {
+            if (CheckTableExists(conn, "CERTS") && ColumnExists(conn, "CERTS", "ID"))
+            {
+                CreateTriggerIfNotExists(conn, "TRG_CERTS_BI", @"
+CREATE TRIGGER TRG_CERTS_BI FOR CERTS
+ACTIVE BEFORE INSERT POSITION 0
+AS
+BEGIN
+  IF (NEW.ID IS NULL) THEN
+    NEW.ID = NEXT VALUE FOR SEQ_CERTS_ID;
+END");
+            }
+
+            if (CheckTableExists(conn, "CERT_ARCHIVES") && ColumnExists(conn, "CERT_ARCHIVES", "ID"))
+            {
+                CreateTriggerIfNotExists(conn, "TRG_CERT_ARCHIVES_BI", @"
+CREATE TRIGGER TRG_CERT_ARCHIVES_BI FOR CERT_ARCHIVES
+ACTIVE BEFORE INSERT POSITION 0
+AS
+BEGIN
+  IF (NEW.ID IS NULL) THEN
+    NEW.ID = NEXT VALUE FOR SEQ_CERT_ARCHIVES_ID;
+END");
+            }
+
+            if (CheckTableExists(conn, "PROCESSED_MAILS") && ColumnExists(conn, "PROCESSED_MAILS", "ID"))
+            {
+                CreateTriggerIfNotExists(conn, "TRG_PROCESSED_MAILS_BI", @"
+CREATE TRIGGER TRG_PROCESSED_MAILS_BI FOR PROCESSED_MAILS
+ACTIVE BEFORE INSERT POSITION 0
+AS
+BEGIN
+  IF (NEW.ID IS NULL) THEN
+    NEW.ID = NEXT VALUE FOR SEQ_PROCESSED_MAILS_ID;
+END");
+            }
+
+            if (CheckTableExists(conn, "TOKENS") && ColumnExists(conn, "TOKENS", "ID"))
+            {
+                CreateTriggerIfNotExists(conn, "TRG_TOKENS_BI", @"
+CREATE TRIGGER TRG_TOKENS_BI FOR TOKENS
+ACTIVE BEFORE INSERT POSITION 0
+AS
+BEGIN
+  IF (NEW.ID IS NULL) THEN
+    NEW.ID = NEXT VALUE FOR SEQ_TOKENS_ID;
+END");
             }
         }
 
@@ -1743,6 +1884,12 @@ WHERE TOKEN_ID = @tokenId";
                             }
                         }
 
+                        if (previousOwnerCertId.HasValue && previousOwnerCertId.Value != certId)
+                        {
+                            throw new InvalidOperationException(
+                                "Токен уже назначен другой записи. Обновите данные и повторите действие.");
+                        }
+
                         using (var cmd = conn.CreateCommand())
                         {
                             cmd.Transaction = tr;
@@ -1779,11 +1926,10 @@ WHERE ID = @certId";
                 }
             }
 
-            if (previousOwnerCertId.HasValue && previousOwnerCertId.Value != certId)
+            if (previousOwnerCertId.HasValue && previousOwnerCertId.Value == certId)
             {
                 Log(
-                    $"AssignToken: токен '{LogValue(tokenSn)}' (ID={tokenId}) назначен сертификату ID={certId}, ФИО='{LogValue(certFio)}'. " +
-                    $"Ранее токен был привязан к сертификату ID={previousOwnerCertId.Value}, ФИО='{LogValue(previousOwnerFio)}'.");
+                    $"AssignToken: токен '{LogValue(tokenSn)}' (ID={tokenId}) подтверждён за сертификатом ID={certId}, ФИО='{LogValue(certFio)}'.");
             }
             else
             {

@@ -95,6 +95,7 @@ namespace ImapCertWatcher.Services
                 var expiring = records
                     .Where(r => r != null
                                 && !r.IsDeleted
+                                && r.DateEnd != DateTime.MinValue
                                 && r.DaysLeft >= 0
                                 && r.DaysLeft <= threshold
                                 && !string.IsNullOrWhiteSpace(r.Fio))
@@ -124,7 +125,12 @@ namespace ImapCertWatcher.Services
 
                     foreach (var rec in group)
                     {
-                        string key = $"expiring:{rec.Id}";
+                        string buildingKey = string.IsNullOrWhiteSpace(building)
+                            ? "UNKNOWN"
+                            : building.Trim().ToUpperInvariant();
+
+                        string key = $"expiring:{buildingKey}:{rec.Id}";
+
                         if (_state.ExpiringLastSent.TryGetValue(key, out var last) &&
                             last.Date == today)
                             continue;
@@ -151,7 +157,11 @@ namespace ImapCertWatcher.Services
                     {
                         foreach (var rec in toNotify)
                         {
-                            _state.ExpiringLastSent[$"expiring:{rec.Id}"] = today;
+                            string buildingKey = string.IsNullOrWhiteSpace(building)
+                                ? "UNKNOWN"
+                                : building.Trim().ToUpperInvariant();
+
+                            _state.ExpiringLastSent[$"expiring:{buildingKey}:{rec.Id}"] = today;
                         }
 
                         totalSent += toNotify.Count;
@@ -580,6 +590,17 @@ namespace ImapCertWatcher.Services
                 }
 
                 _state = state;
+
+                int beforeExpiringCount = _state.ExpiringLastSent.Count;
+                int beforeNewUserCount = _state.NewUserLastSent.Count;
+
+                CleanupState();
+
+                if (_state.ExpiringLastSent.Count != beforeExpiringCount ||
+                    _state.NewUserLastSent.Count != beforeNewUserCount)
+                {
+                    SaveState();
+                }
             }
             catch (Exception ex)
             {
@@ -588,10 +609,33 @@ namespace ImapCertWatcher.Services
             }
         }
 
+        private void CleanupState()
+        {
+            DateTime border = DateTime.Today.AddDays(-45);
+
+            var oldExpiringKeys = _state.ExpiringLastSent
+                .Where(kv => kv.Value.Date < border)
+                .Select(kv => kv.Key)
+                .ToList();
+
+            foreach (var key in oldExpiringKeys)
+                _state.ExpiringLastSent.Remove(key);
+
+            var oldNewUserKeys = _state.NewUserLastSent
+                .Where(kv => kv.Value.Date < border)
+                .Select(kv => kv.Key)
+                .ToList();
+
+            foreach (var key in oldNewUserKeys)
+                _state.NewUserLastSent.Remove(key);
+        }
+
         private void SaveState()
         {
             try
             {
+                CleanupState();
+
                 var sb = new StringBuilder();
 
                 foreach (var kv in _state.ExpiringLastSent)

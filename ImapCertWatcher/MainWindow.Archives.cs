@@ -97,6 +97,38 @@ namespace ImapCertWatcher
                     return;
                 }
 
+                string certFolder = GetCertFolderPath(record);
+
+                if (Directory.Exists(certFolder))
+                {
+                    try
+                    {
+                        Directory.Delete(certFolder, true);
+                    }
+                    catch (Exception ex)
+                    {
+                        try
+                        {
+                            string movedFolder = certFolder + "_old_" + DateTime.Now.Ticks;
+                            Directory.Move(certFolder, movedFolder);
+
+                            AddToMiniLog("Старая локальная копия архива была занята и перемещена: " + movedFolder);
+                        }
+                        catch (Exception moveEx)
+                        {
+                            AddToMiniLog("Не удалось очистить старую локальную копию архива: " + ex.Message);
+                            AddToMiniLog("Не удалось переместить старую локальную копию архива: " + moveEx.Message);
+
+                            MessageBox.Show(
+                                "Архив на сервер загружен, но старая локальная копия не была очищена.\n" +
+                                "При следующем открытии может открыться старая локальная версия.\n\n" +
+                                "Закройте файлы архива и удалите папку вручную, затем откройте архив снова.",
+                                "Предупреждение",
+                                MessageBoxButton.OK,
+                                MessageBoxImage.Warning);
+                        }
+                    }
+                }
                 record.HasArchive = true;
 
                 AddToMiniLog($"Архив {fileName} добавлен к записи {record.Fio}");
@@ -147,7 +179,10 @@ namespace ImapCertWatcher
             if (Mouse.OverrideCursor == Cursors.Wait)
                 return;
 
-            if (!(dgCerts.SelectedItem is CertRecord record))
+            var record = (sender as FrameworkElement)?.DataContext as CertRecord
+                         ?? dgCerts.SelectedItem as CertRecord;
+
+            if (record == null)
             {
                 MessageBox.Show("Не выбрана запись");
                 return;
@@ -186,10 +221,34 @@ namespace ImapCertWatcher
 
                 var response = await _api.SendCommand($"GET_ARCHIVE|{certId}");
 
-                if (string.IsNullOrWhiteSpace(response) || !response.StartsWith("ARCHIVE|"))
+                if (string.IsNullOrWhiteSpace(response))
+                {
+                    MessageBox.Show("Нет ответа от сервера");
+                    statusText.Text = "Ошибка загрузки архива";
+                    return;
+                }
+
+                response = response.Trim();
+
+                if (response.StartsWith("ARCHIVE EMPTY", StringComparison.OrdinalIgnoreCase))
                 {
                     MessageBox.Show("Архив не найден");
                     statusText.Text = "Архив не найден";
+                    return;
+                }
+
+                if (response.StartsWith("ERROR|GET_ARCHIVE|", StringComparison.OrdinalIgnoreCase) ||
+                    response.StartsWith("ERROR|SERVER|", StringComparison.OrdinalIgnoreCase))
+                {
+                    MessageBox.Show("Ошибка получения архива:\n" + response);
+                    statusText.Text = "Ошибка загрузки архива";
+                    return;
+                }
+
+                if (!response.StartsWith("ARCHIVE|", StringComparison.OrdinalIgnoreCase))
+                {
+                    MessageBox.Show("Некорректный ответ сервера:\n" + response);
+                    statusText.Text = "Ошибка загрузки архива";
                     return;
                 }
 

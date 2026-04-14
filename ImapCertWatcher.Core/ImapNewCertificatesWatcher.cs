@@ -107,12 +107,16 @@ namespace ImapCertWatcher.Services
                         }
                         catch (Exception ex)
                         {
-                            Log($"IMAP connect attempt {attempt} failed: {ex.Message}");
+                            if (attempt < 2)
+                            {
+                                Log($"IMAP connect attempt {attempt} failed: {ex.Message}");
+                                Task.Delay(3000, token).GetAwaiter().GetResult();
+                                continue;
+                            }
 
-                            if (attempt == 2)
-                                throw;
-
-                            Task.Delay(3000, token).GetAwaiter().GetResult();
+                            throw new InvalidOperationException(
+                                $"Ошибка подключения к IMAP {_settings.MailHost}:{_settings.MailPort}: {ex.Message}",
+                                ex);
                         }
                     }
 
@@ -167,9 +171,8 @@ namespace ImapCertWatcher.Services
                 Log("Обработка новых сертификатов отменена");
                 throw;
             }
-            catch (Exception ex)
+            catch
             {
-                Log($"КРИТИЧЕСКАЯ ОШИБКА: {ex.Message}");
                 throw;
             }
         }
@@ -178,14 +181,13 @@ namespace ImapCertWatcher.Services
         // CORE LOGIC
         // =====================================================================
 
-        private void ProcessFolderRecursive(
-            ImapClient client,
-            IMailFolder folder,
-            bool checkAllMessages,
-            ref int total,
-            ref int addedOrUpdated,
-            ref int skipped,
-            CancellationToken token)
+        private void ProcessFolderRecursive(ImapClient client,
+                                            IMailFolder folder,
+                                            bool checkAllMessages,
+                                            ref int total,
+                                            ref int addedOrUpdated,
+                                            ref int skipped,
+                                            CancellationToken token)
         {
             token.ThrowIfCancellationRequested();
 
@@ -307,6 +309,7 @@ namespace ImapCertWatcher.Services
                                 folder,
                                 message,
                                 uid.ToString(),
+                                checkAllMessages,
                                 ref addedOrUpdated,
                                 ref skipped);
                         }
@@ -380,6 +383,7 @@ namespace ImapCertWatcher.Services
             IMailFolder folder,
             MimeMessage message,
             string uidStr,
+            bool forceReprocess,
             ref int addedOrUpdated,
             ref int skipped)
         {
@@ -388,7 +392,7 @@ namespace ImapCertWatcher.Services
                 ? "(без темы)"
                 : message.Subject.Trim();
 
-            if (_db.IsMailProcessed(folderPath, uidStr, "NEW"))
+            if (!forceReprocess && _db.IsMailProcessed(folderPath, uidStr, "NEW"))
             {
                 skipped++;
                 Log($"UID={uidStr} | Тема=\"{subject}\" | ПРОПУЩЕНО (уже обработано)");
@@ -425,7 +429,11 @@ namespace ImapCertWatcher.Services
                 try
                 {
                     string fromAddress = message.From.Mailboxes.FirstOrDefault()?.Address ?? "";
-                    var zipResult = ProcessZip(zipPath, folderPath, uidStr, fromAddress);
+                    var messageDate = message.Date != DateTimeOffset.MinValue
+                        ? message.Date.LocalDateTime
+                        : DateTime.Now;
+
+                    var zipResult = ProcessZip(zipPath, folderPath, uidStr, fromAddress, messageDate);
 
                     if (zipResult.savedAny)
                         anySaved = true;
@@ -475,7 +483,7 @@ namespace ImapCertWatcher.Services
         // ZIP → CER → DB
         // =====================================================================
 
-        private (bool savedAny, bool hadErrors) ProcessZip(string zipPath, string folderPath, string uidStr, string fromAddress)
+        private (bool savedAny, bool hadErrors) ProcessZip(string zipPath, string folderPath, string uidStr, string fromAddress, DateTime messageDate)
         {
             bool savedAny = false;
             bool hadErrors = false;
@@ -517,7 +525,7 @@ namespace ImapCertWatcher.Services
                         FromAddress = fromAddress,
                         FolderPath = folderPath,
                         MailUid = uidStr,
-                        MessageDate = DateTime.UtcNow
+                        MessageDate = messageDate
                     };
 
                     bool wasUpdated;

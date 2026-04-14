@@ -492,6 +492,24 @@ namespace ImapCertWatcher.Server
             target.BimoidDelayBetweenMessagesMs = source.BimoidDelayBetweenMessagesMs;
         }
 
+        private void CopyRuntimeSafeSettings(ServerSettings target, ServerSettings source)
+        {
+            target.NotifyDaysThreshold = source.NotifyDaysThreshold;
+            target.NotifyOnlyInWorkHours = source.NotifyOnlyInWorkHours;
+            target.AutoStartServer = source.AutoStartServer;
+            target.MinimizeToTrayOnClose = source.MinimizeToTrayOnClose;
+
+            target.BimoidAccountsKrasnoflotskaya = source.BimoidAccountsKrasnoflotskaya;
+            target.BimoidAccountsPionerskaya = source.BimoidAccountsPionerskaya;
+            target.BimoidSenderExePath = source.BimoidSenderExePath;
+            target.BimoidJobDirectory = source.BimoidJobDirectory;
+            target.BimoidServer = source.BimoidServer;
+            target.BimoidPort = source.BimoidPort;
+            target.BimoidLogin = source.BimoidLogin;
+            target.BimoidPassword = source.BimoidPassword;
+            target.BimoidDelayBetweenMessagesMs = source.BimoidDelayBetweenMessagesMs;
+        }
+
         private void Settings_Click(object sender, RoutedEventArgs e)
         {
             var oldSettings = _server.Settings.Clone();
@@ -502,24 +520,27 @@ namespace ImapCertWatcher.Server
                 Owner = this
             };
 
-            if (wnd.ShowDialog() == true)
+            if (wnd.ShowDialog() != true)
+                return;
+
+            bool needRestart = NeedRestart(oldSettings, editedSettings);
+
+            if (needRestart)
             {
-                bool needRestart = NeedRestart(oldSettings, editedSettings);
+                CopyRuntimeSafeSettings(_server.Settings, editedSettings);
 
+                MessageBox.Show(
+                    "Настройки сохранены.\nИзменения БД / IMAP / TCP-порта / таймера будут применены после перезапуска сервера.",
+                    "Перезапуск требуется",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+
+                AppendLog("Настройки сохранены. Критичные изменения отложены до перезапуска сервера.");
+            }
+            else
+            {
                 CopySettings(_server.Settings, editedSettings);
-
-                if (needRestart)
-                {
-                    MessageBox.Show(
-                        "Некоторые изменения вступят в силу после перезапуска сервера.",
-                        "Перезапуск требуется",
-                        MessageBoxButton.OK,
-                        MessageBoxImage.Information);
-                }
-                else
-                {
-                    AppendLog("Настройки применены без перезапуска.");
-                }
+                AppendLog("Настройки применены без перезапуска.");
             }
         }
 

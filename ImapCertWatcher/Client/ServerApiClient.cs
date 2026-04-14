@@ -34,14 +34,6 @@ namespace ImapCertWatcher.Client
                 "GET_TOKENS");
         }
 
-        public async Task<List<TokenRecord>> GetFreeTokens()
-        {
-            return await GetListResponse<TokenRecord>(
-                "GET_FREE_TOKENS",
-                "TOKENS ",
-                "ERROR|GET_FREE_TOKENS|",
-                "GET_FREE_TOKENS");
-        }
 
         public async Task<string> AssignToken(int certId, int tokenId)
         {
@@ -106,6 +98,15 @@ namespace ImapCertWatcher.Client
             if (response.StartsWith("LOG "))
                 return response.Substring(4);
 
+            if (response.StartsWith("ERROR|", StringComparison.OrdinalIgnoreCase))
+            {
+                int lastPipe = response.LastIndexOf('|');
+                if (lastPipe >= 0 && lastPipe < response.Length - 1)
+                    throw new InvalidOperationException(response.Substring(lastPipe + 1).Trim());
+
+                throw new InvalidOperationException(response);
+            }
+
             return response;
         }
 
@@ -131,15 +132,13 @@ namespace ImapCertWatcher.Client
         {
             var response = await SendCommand(command);
 
-            if (string.IsNullOrWhiteSpace(response))
+            if (string.IsNullOrEmpty(response))
                 throw new InvalidOperationException("Пустой ответ сервера на " + operationName + ".");
 
-            response = response.Trim();
-
-            if (response.StartsWith(errorPrefix))
+            if (response.StartsWith(errorPrefix, StringComparison.Ordinal))
                 throw new InvalidOperationException(response.Substring(errorPrefix.Length));
 
-            if (!response.StartsWith(successPrefix))
+            if (!response.StartsWith(successPrefix, StringComparison.Ordinal))
                 throw new InvalidOperationException(
                     "Некорректный ответ сервера на " + operationName + ": " + response);
 

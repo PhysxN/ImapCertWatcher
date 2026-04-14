@@ -36,6 +36,7 @@ namespace ImapCertWatcher
                     txtServerStatus.Text = "🟡 Подключение к серверу...";
                     txtServerStatus.Foreground = Brushes.Gold;
                     txtNextCheck.Visibility = Visibility.Visible;
+                    ApplyBusyUiState(true);
                     break;
 
                 case ServerConnectionState.Online:
@@ -43,6 +44,7 @@ namespace ImapCertWatcher
                     txtServerStatus.Foreground = Brushes.LimeGreen;
                     txtNextCheck.Visibility = Visibility.Visible;
                     ApplyOfflineUiState(false);
+                    ApplyBusyUiState(false);
                     break;
 
                 case ServerConnectionState.Busy:
@@ -50,6 +52,7 @@ namespace ImapCertWatcher
                     txtServerStatus.Foreground = Brushes.Orange;
                     txtNextCheck.Visibility = Visibility.Collapsed;
                     ApplyOfflineUiState(false);
+                    ApplyBusyUiState(true);
                     break;
 
                 case ServerConnectionState.Offline:
@@ -58,13 +61,24 @@ namespace ImapCertWatcher
                     txtNextCheck.Text = "Следующая проверка: --:--";
                     txtNextCheck.Visibility = Visibility.Visible;
                     ApplyOfflineUiState(true);
+                    ApplyBusyUiState(true);
                     break;
             }
 
             AdjustPollingInterval();
         }
 
+        private void ApplyBusyUiState(bool isBusy)
+        {
+            if (btnCheckNewCerts != null)
+                btnCheckNewCerts.IsEnabled = !isBusy;
 
+            if (btnCheckNewRevokes != null)
+                btnCheckNewRevokes.IsEnabled = !isBusy;
+
+            if (grpMaintenance != null)
+                grpMaintenance.IsEnabled = !isBusy && !_isOfflineUiLocked;
+        }
 
         private async void ServerMonitorTimer_Tick(object sender, EventArgs e)
         {
@@ -99,6 +113,24 @@ namespace ImapCertWatcher
             catch (Exception ex)
             {
                 AddToMiniLog("Ошибка автообновления: " + ex.Message);
+            }
+        }
+
+        private async Task ReloadDataAfterReconnectAsync()
+        {
+            try
+            {
+                statusText.Text = "Связь восстановлена, обновляем данные...";
+                AddToMiniLog("Связь с сервером восстановлена, перечитываем данные");
+
+                await LoadFromServer();
+
+                statusText.Text = "Данные обновлены после восстановления связи";
+                AddToMiniLog("Данные обновлены после восстановления связи");
+            }
+            catch (Exception ex)
+            {
+                AddToMiniLog("Ошибка обновления после восстановления связи: " + ex.Message);
             }
         }
 
@@ -181,8 +213,13 @@ namespace ImapCertWatcher
                 }
 
                 bool wasBusy = _serverWasBusy;
+                bool wasOffline = _isOfflineUiLocked;
+
                 _serverWasBusy = isBusy;
                 _reconnectDelaySeconds = 2;
+
+                if (wasOffline)
+                    _reloadAfterReconnectWhenIdle = true;
 
                 SetServerState(isBusy
                     ? ServerConnectionState.Busy
@@ -210,7 +247,13 @@ namespace ImapCertWatcher
                 if (wasBusy && !isBusy && _reloadAfterServerWork)
                 {
                     _reloadAfterServerWork = false;
+                    _reloadAfterReconnectWhenIdle = false;
                     _ = ReloadDataAfterServerWorkAsync();
+                }
+                else if (!isBusy && _reloadAfterReconnectWhenIdle && !_isLoadingFromServer)
+                {
+                    _reloadAfterReconnectWhenIdle = false;
+                    _ = ReloadDataAfterReconnectAsync();
                 }
             }
             catch
@@ -218,6 +261,7 @@ namespace ImapCertWatcher
                 SetServerState(ServerConnectionState.Offline);
             }
         }
+
         private void StartConnectingAnimation()
         {
             if (_connectingAnimationTimer == null)
@@ -285,7 +329,7 @@ namespace ImapCertWatcher
 
                 AddToMiniLog("SERVER: " + response);
 
-                if (response.StartsWith("OK"))
+                if (response.StartsWith("STARTED", StringComparison.OrdinalIgnoreCase))
                 {
                     if (isCheckCommand)
                     {
@@ -306,21 +350,46 @@ namespace ImapCertWatcher
                         statusText.Text = "Запущена быстрая проверка";
                     else if (cmd == "FULL_CHECK")
                         statusText.Text = "Запущена полная проверка";
-                    else if (cmd == "RESET_REVOKES")
-                        statusText.Text = "Аннулирования сброшены";
                     else
-                        statusText.Text = "Команда принята сервером";
+                        statusText.Text = "Команда запущена";
 
+                    return;
+                }
+
+                if (response.StartsWith("OK"))
+                {
                     if (cmd == "RESET_REVOKES")
                     {
+                        statusText.Text = "Аннулирования сброшены";
                         await LoadFromServer();
                         AddToMiniLog("Данные обновлены после RESET_REVOKES");
+                    }
+                    else if (isCheckCommand)
+                    {
+                        statusText.Text = "Проверка завершена";
+                        SetServerState(ServerConnectionState.Online);
+                    }
+                    else
+                    {
+                        statusText.Text = "Команда выполнена";
                     }
 
                     return;
                 }
 
-                if (response.StartsWith("BUSY"))
+
+                if (response.StartsWith("BUSY WAIT", StringComparison.OrdinalIgnoreCase))
+                {
+                    _reloadAfterServerWork = false;
+                    _serverWasBusy = false;
+
+                    SetServerState(ServerConnectionState.Online);
+                    statusText.Text = "Повторную проверку пока запускать рано";
+                    AddToMiniLog("Сервер отклонил запуск: " + response);
+                    return;
+                }
+
+                if (response.StartsWith("BUSY", StringComparison.OrdinalIgnoreCase))
                 {
                     if (isCheckCommand)
                     {
@@ -507,29 +576,55 @@ namespace ImapCertWatcher
             if (r2 != MessageBoxResult.Yes)
                 return;
 
-            var resp = await _api.ResetRevokes();
-
-            if (string.IsNullOrWhiteSpace(resp))
+            try
             {
-                MessageBox.Show("Нет ответа от сервера");
-                return;
+                var resp = await _api.ResetRevokes();
+
+                if (string.IsNullOrWhiteSpace(resp))
+                {
+                    MessageBox.Show("Нет ответа от сервера");
+                    statusText.Text = "Нет ответа от сервера";
+                    return;
+                }
+
+                AddToMiniLog("RESET_REVOKES: " + resp);
+
+                if (resp.StartsWith("BUSY", StringComparison.OrdinalIgnoreCase))
+                {
+                    statusText.Text = "Сервер занят";
+                    MessageBox.Show(
+                        "Сервер сейчас выполняет другую операцию.\nСброс аннулирований пока недоступен.",
+                        "Сервер занят",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Information);
+                    return;
+                }
+
+                if (!resp.StartsWith("OK", StringComparison.OrdinalIgnoreCase))
+                {
+                    MessageBox.Show(
+                        "Ошибка сброса аннулирований:\n" + resp,
+                        "Ошибка",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Error);
+                    statusText.Text = "Ошибка сброса аннулирований";
+                    return;
+                }
+
+                await LoadFromServer();
+                statusText.Text = "Аннулирования сброшены";
             }
-
-            AddToMiniLog("RESET_REVOKES: " + resp);
-
-            if (!resp.StartsWith("OK"))
+            catch (Exception ex)
             {
                 MessageBox.Show(
-                    "Ошибка сброса аннулирований:\n" + resp,
+                    "Ошибка сброса аннулирований:\n" + ex.Message,
                     "Ошибка",
                     MessageBoxButton.OK,
                     MessageBoxImage.Error);
-                statusText.Text = "Ошибка сброса аннулирований";
-                return;
-            }
 
-            await LoadFromServer();
-            statusText.Text = "Аннулирования сброшены";
+                statusText.Text = "Ошибка сброса аннулирований";
+                AddToMiniLog("RESET_REVOKES ERROR: " + ex.Message);
+            }
         }
     }
 }

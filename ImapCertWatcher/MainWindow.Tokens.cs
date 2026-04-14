@@ -37,49 +37,63 @@ namespace ImapCertWatcher
 
             sn = sn.Trim().ToUpperInvariant();
 
-            var response = await _api.AddToken(sn);
-
-            if (string.IsNullOrWhiteSpace(response))
+            try
             {
-                MessageBox.Show("Нет ответа от сервера");
-                return;
+                var response = await _api.AddToken(sn);
+
+                if (string.IsNullOrWhiteSpace(response))
+                {
+                    MessageBox.Show("Нет ответа от сервера");
+                    return;
+                }
+
+                response = response.Trim();
+
+                if (response.StartsWith("ERROR|ADD_TOKEN|TOKEN_ALREADY_EXISTS"))
+                {
+                    MessageBox.Show(
+                        "Токен с таким серийным номером уже существует.",
+                        "Дубликат",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Warning);
+                    return;
+                }
+
+                if (response.StartsWith("ERROR|ADD_TOKEN|"))
+                {
+                    MessageBox.Show(
+                        "Ошибка добавления токена:\n" + response.Substring("ERROR|ADD_TOKEN|".Length),
+                        "Ошибка",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Error);
+                    return;
+                }
+
+                if (!response.StartsWith("OK"))
+                {
+                    MessageBox.Show(
+                        "Ошибка добавления токена:\n" + response,
+                        "Ошибка",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Error);
+                    return;
+                }
+
+                await LoadFromServer();
+                AddToMiniLog($"Токен {sn} добавлен");
             }
-
-            response = response.Trim();
-
-            if (response.StartsWith("ERROR|ADD_TOKEN|TOKEN_ALREADY_EXISTS"))
+            catch (Exception ex)
             {
                 MessageBox.Show(
-                    "Токен с таким серийным номером уже существует.",
-                    "Дубликат",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Warning);
-                return;
-            }
-
-            if (response.StartsWith("ERROR|ADD_TOKEN|"))
-            {
-                MessageBox.Show(
-                    "Ошибка добавления токена:\n" + response.Substring("ERROR|ADD_TOKEN|".Length),
+                    "Ошибка добавления токена:\n" + ex.Message,
                     "Ошибка",
                     MessageBoxButton.OK,
                     MessageBoxImage.Error);
-                return;
-            }
 
-            if (!response.StartsWith("OK"))
-            {
-                MessageBox.Show(
-                    "Ошибка добавления токена:\n" + response,
-                    "Ошибка",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Error);
-                return;
+                AddToMiniLog("Ошибка добавления токена: " + ex.Message);
             }
-
-            await LoadFromServer();
-            AddToMiniLog($"Токен {sn} добавлен");
         }
+
         private async void BtnUnassignToken_Click(object sender, RoutedEventArgs e)
         {
             if (_api == null)
@@ -110,20 +124,33 @@ namespace ImapCertWatcher
                 MessageBoxImage.Question) != MessageBoxResult.Yes)
                 return;
 
-            var ok = await _tokenService.Unassign(token.Id);
+            try
+            {
+                var ok = await _tokenService.Unassign(token.Id);
 
-            if (!ok)
+                if (!ok)
+                {
+                    MessageBox.Show(
+                        "Ошибка освобождения токена:\n" + (_tokenService.LastErrorMessage ?? "Нет ответа от сервера"),
+                        "Ошибка",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Error);
+                    return;
+                }
+
+                await LoadFromServer();
+                AddToMiniLog($"Токен {token.Sn} освобожден");
+            }
+            catch (Exception ex)
             {
                 MessageBox.Show(
-                    "Ошибка освобождения токена:\n" + (_tokenService.LastErrorMessage ?? "Нет ответа от сервера"),
+                    "Ошибка освобождения токена:\n" + ex.Message,
                     "Ошибка",
                     MessageBoxButton.OK,
                     MessageBoxImage.Error);
-                return;
-            }
 
-            await LoadFromServer();
-            AddToMiniLog($"Токен {token.Sn} освобожден");
+                AddToMiniLog("Ошибка освобождения токена: " + ex.Message);
+            }
         }
 
         private async void BtnDeleteToken_Click(object sender, RoutedEventArgs e)
@@ -160,26 +187,39 @@ namespace ImapCertWatcher
                 MessageBoxImage.Question) != MessageBoxResult.Yes)
                 return;
 
-            var ok = await _tokenService.Delete(token.Id);
+            try
+            {
+                var ok = await _tokenService.Delete(token.Id);
 
-            if (!ok)
+                if (!ok)
+                {
+                    MessageBox.Show(
+                        "Ошибка удаления токена:\n" + (_tokenService.LastErrorMessage ?? "Нет ответа от сервера"),
+                        "Ошибка",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Error);
+                    return;
+                }
+
+                if (_tokenService.Tokens.Any(t => t.Id == token.Id))
+                {
+                    MessageBox.Show("Сервер ответил OK, но токен остался в списке.");
+                    return;
+                }
+
+                await LoadFromServer();
+                AddToMiniLog($"Токен {token.Sn} удалён");
+            }
+            catch (Exception ex)
             {
                 MessageBox.Show(
-                    "Ошибка удаления токена:\n" + (_tokenService.LastErrorMessage ?? "Нет ответа от сервера"),
+                    "Ошибка удаления токена:\n" + ex.Message,
                     "Ошибка",
                     MessageBoxButton.OK,
                     MessageBoxImage.Error);
-                return;
-            }
 
-            if (_tokenService.Tokens.Any(t => t.Id == token.Id))
-            {
-                MessageBox.Show("Сервер ответил OK, но токен остался в списке.");
-                return;
+                AddToMiniLog("Ошибка удаления токена: " + ex.Message);
             }
-
-            await LoadFromServer();
-            AddToMiniLog($"Токен {token.Sn} удалён");
         }
 
         private bool TryGetToken(object sender, out TokenRecord token)
@@ -190,6 +230,9 @@ namespace ImapCertWatcher
 
         private void RebuildAvailableTokens()
         {
+            if (_isLoadingFromServer || _isApplyingFromServer)
+                return;
+
             void apply()
             {
                 var allTokens = (_tokenService?.Tokens?.ToList() ?? new List<TokenRecord>())
@@ -201,6 +244,10 @@ namespace ImapCertWatcher
 
                 foreach (var cert in _allItems)
                 {
+                    var actualSelectedToken = cert.TokenId.HasValue
+                        ? allTokens.FirstOrDefault(t => t.Id == cert.TokenId.Value)
+                        : null;
+
                     var allowedTokens = allTokens
                         .Where(t => !t.OwnerCertId.HasValue || t.OwnerCertId.Value == cert.Id)
                         .Select(t => new TokenRecord
@@ -220,10 +267,9 @@ namespace ImapCertWatcher
                     foreach (var token in allowedTokens)
                         cert.AvailableTokens.Add(token);
 
-                    if (cert.TokenId.HasValue)
+                    if (actualSelectedToken != null && actualSelectedToken.OwnerCertId == cert.Id)
                     {
-                        var selectedToken = cert.AvailableTokens.FirstOrDefault(t => t.Id == cert.TokenId.Value);
-                        cert.SelectedToken = selectedToken;
+                        cert.SelectedToken = cert.AvailableTokens.FirstOrDefault(t => t.Id == actualSelectedToken.Id);
                     }
                     else
                     {

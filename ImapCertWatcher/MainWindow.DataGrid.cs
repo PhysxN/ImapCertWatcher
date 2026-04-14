@@ -104,8 +104,12 @@ namespace ImapCertWatcher
         private async Task<bool> LoadFromServer(bool showErrorDialog = false)
         {
             if (_isLoadingFromServer)
+            {
+                _reloadRequestedWhileLoading = true;
                 return false;
+            }
 
+            _reloadRequestedWhileLoading = false;
             _isLoadingFromServer = true;
             SetServerState(ServerConnectionState.Connecting);
 
@@ -143,6 +147,8 @@ namespace ImapCertWatcher
                     catch (Exception tokenEx)
                     {
                         AddToMiniLog("Ошибка загрузки токенов: " + tokenEx.Message);
+
+                        _tokenService.Tokens.Clear();
                     }
                 }
 
@@ -173,6 +179,19 @@ namespace ImapCertWatcher
                                     OwnerFio = t.OwnerFio
                                 })
                                 .ToList();
+
+                            if (item.TokenId.HasValue &&
+                                allowedTokens.All(t => t.Id != item.TokenId.Value) &&
+                                !string.IsNullOrWhiteSpace(item.TokenSn))
+                            {
+                                allowedTokens.Insert(0, new TokenRecord
+                                {
+                                    Id = item.TokenId.Value,
+                                    Sn = item.TokenSn,
+                                    OwnerCertId = item.Id,
+                                    OwnerFio = item.Fio
+                                });
+                            }
 
                             item.AvailableTokens = new ObservableCollection<TokenRecord>(allowedTokens);
 
@@ -233,9 +252,38 @@ namespace ImapCertWatcher
             finally
             {
                 _isLoadingFromServer = false;
+
+                if (_reloadRequestedWhileLoading)
+                {
+                    _reloadRequestedWhileLoading = false;
+
+                    var _ = Dispatcher.BeginInvoke(
+                        new Action(RunDeferredReloadFromServer),
+                        DispatcherPriority.Background);
+                }
             }
         }
 
+        private void RunDeferredReloadFromServer()
+        {
+            var _ = LoadFromServer();
+        }
+
+        private void DgCerts_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            var source = e.OriginalSource as DependencyObject;
+
+            while (source != null && !(source is DataGridRow))
+                source = VisualTreeHelper.GetParent(source);
+
+            var row = source as DataGridRow;
+            if (row == null)
+                return;
+
+            row.IsSelected = true;
+            dgCerts.SelectedItem = row.Item;
+            row.Focus();
+        }
         private void ApplySearchFilter()
         {
             try
@@ -251,6 +299,7 @@ namespace ImapCertWatcher
                 {
                     query = query.Where(x =>
                         !x.IsDeleted &&
+                        x.DateEnd != DateTime.MinValue &&
                         x.DaysLeft >= 0);
                 }
 
@@ -322,7 +371,9 @@ namespace ImapCertWatcher
         {
             _showDeleted = chkShowDeleted.IsChecked == true;
             ApplySearchFilter();
-            AddToMiniLog(_showDeleted ? "Показаны удаленные" : "Скрыты удаленные");
+            AddToMiniLog(_showDeleted
+                ? "Показаны все сертификаты"
+                : "Показаны только актуальные сертификаты");
         }
 
         private void UpdateDeleteRestoreButtonState()
@@ -349,68 +400,6 @@ namespace ImapCertWatcher
             UpdateDeleteRestoreButtonState();
         }
 
-        private async void BuildingComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
-        {
-            if (_api == null)
-            {
-                MessageBox.Show("Сервер не подключен");
-                return;
-            }
-
-            if (_isApplyingFromServer)
-                return;
-
-            if (_isSavingBuilding)
-                return;
-
-            if (!(sender is ComboBox comboBox))
-                return;
-
-            if (!(comboBox.DataContext is CertRecord record))
-                return;
-
-            if (e.AddedItems.Count == 0)
-                return;
-
-            string newValue = e.AddedItems[0] as string ?? "";
-            string oldValue = e.RemovedItems.Count > 0
-                ? e.RemovedItems[0] as string ?? ""
-                : record.Building ?? "";
-
-            if (string.Equals(newValue, oldValue, StringComparison.Ordinal))
-                return;
-
-            _isSavingBuilding = true;
-
-            try
-            {
-                var resp = await _api.UpdateBuilding(record.Id, newValue);
-
-                if (string.IsNullOrEmpty(resp) || !resp.StartsWith("OK"))
-                {
-                    record.Building = oldValue;
-                    CollectionViewSource.GetDefaultView(comboBox.ItemsSource)?.Refresh();
-                    MessageBox.Show("Ошибка сохранения здания");
-                    return;
-                }
-
-                AddToMiniLog(
-                    $"Здание изменено: {record.Fio} → {(string.IsNullOrWhiteSpace(newValue) ? "<пусто>" : newValue)}");
-
-                statusText.Text = "Здание сохранено";
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show("Ошибка сохранения здания:\n" + ex.Message);
-
-                record.Building = oldValue;
-                CollectionViewSource.GetDefaultView(comboBox.ItemsSource)?.Refresh();
-            }
-            finally
-            {
-                _isSavingBuilding = false;
-            }
-        }
 
         private async void BuildingQuickButton_Click(object sender, RoutedEventArgs e)
         {
@@ -468,17 +457,6 @@ namespace ImapCertWatcher
             }
         }
 
-        private void DgCerts_PreparingCellForEdit(object sender, DataGridPreparingCellForEditEventArgs e)
-        {
-        }
-
-        private void DgCerts_BeginningEdit(object sender, DataGridBeginningEditEventArgs e)
-        {
-        }
-
-        private void DgCerts_CellEditEnding(object sender, DataGridCellEditEndingEventArgs e)
-        {
-        }
 
         private void BtnDeleteRestoreSelected_Click(object sender, RoutedEventArgs e)
         {
@@ -613,6 +591,12 @@ namespace ImapCertWatcher
                         ? Color.FromArgb(255, 80, 80, 80)
                         : Color.FromArgb(255, 220, 220, 220));
                 }
+                else if (record.DateEnd == DateTime.MinValue)
+                {
+                    e.Row.Background = new SolidColorBrush(_isDarkTheme
+                        ? Color.FromArgb(255, 70, 70, 90)
+                        : Color.FromArgb(255, 230, 230, 245));
+                }
                 else if (record.DaysLeft <= 10)
                 {
                     e.Row.Background = new SolidColorBrush(_isDarkTheme
@@ -631,7 +615,6 @@ namespace ImapCertWatcher
                         ? Color.FromArgb(255, 50, 80, 50)
                         : Color.FromArgb(255, 200, 255, 200));
                 }
-
                 e.Row.Foreground = new SolidColorBrush(_isDarkTheme
                     ? Colors.White
                     : Colors.Black);
@@ -769,23 +752,44 @@ namespace ImapCertWatcher
 
             var header = tab.Header?.ToString();
 
-            if (header == "Сертификаты")
+            try
             {
-                if (!_certsLoadedOnce)
+                if (header == "Сертификаты")
                 {
-                    await LoadFromServer();
-                    _certsLoadedOnce = _serverState == ServerConnectionState.Online;
+                    if (!_certsLoadedOnce)
+                    {
+                        await LoadFromServer();
+                        _certsLoadedOnce = _serverState == ServerConnectionState.Online;
+                    }
+                }
+                else if (header == "Токены")
+                {
+                    if (_serverState == ServerConnectionState.Online && _tokenService != null)
+                    {
+                        await _tokenService.Reload();
+
+                        if (tokensStatusText != null)
+                            tokensStatusText.Text = $"Загружено токенов: {_tokenService.Tokens.Count}";
+                    }
+                }
+                else if (header == "Логи")
+                {
+                    await LoadLogs();
                 }
             }
-            else if (header == "Токены")
+            catch (Exception ex)
             {
-                if (_tokenService != null && _tokenService.Tokens.Count == 0)
-                    await _tokenService.Reload();
+                AddToMiniLog("Ошибка при переключении вкладки: " + ex.Message);
+
+                if (header == "Токены" && tokensStatusText != null)
+                    tokensStatusText.Text = "Ошибка загрузки токенов";
             }
-            else if (header == "Логи")
-            {
-                await LoadLogs();
-            }
+        }
+
+        private void NoteTextBox_Loaded(object sender, RoutedEventArgs e)
+        {
+            if (sender is TextBox tb)
+                tb.Tag = tb.Text ?? "";
         }
 
         private async void NoteTextBox_LostFocus(object sender, RoutedEventArgs e)
@@ -793,27 +797,42 @@ namespace ImapCertWatcher
             if (_api == null)
                 return;
 
-            if (sender is TextBox tb && tb.DataContext is CertRecord record)
+            if (_isApplyingFromServer)
+                return;
+
+            if (!(sender is TextBox tb) || !(tb.DataContext is CertRecord record))
+                return;
+
+            string oldNote = tb.Tag as string ?? "";
+            string newNote = tb.Text ?? "";
+
+            if (string.Equals(newNote, oldNote, StringComparison.Ordinal))
+                return;
+
+            try
             {
-                try
+                string base64Note = Convert.ToBase64String(Encoding.UTF8.GetBytes(newNote));
+
+                var resp = await _api.UpdateNote(record.Id, base64Note);
+
+                if (string.IsNullOrEmpty(resp) || !resp.StartsWith("OK"))
                 {
-                    string note = tb.Text ?? "";
-                    string base64Note = Convert.ToBase64String(Encoding.UTF8.GetBytes(note));
+                    record.Note = oldNote;
+                    tb.Text = oldNote;
 
-                    var resp = await _api.UpdateNote(record.Id, base64Note);
-
-                    if (string.IsNullOrEmpty(resp) || !resp.StartsWith("OK"))
-                    {
-                        MessageBox.Show("Ошибка сохранения примечания");
-                        return;
-                    }
-
-                    AddToMiniLog("Примечание сохранено");
+                    MessageBox.Show("Ошибка сохранения примечания");
+                    return;
                 }
-                catch (Exception ex)
-                {
-                    MessageBox.Show("Ошибка сохранения примечания:\n" + ex.Message);
-                }
+
+                tb.Tag = newNote;
+                AddToMiniLog("Примечание сохранено");
+            }
+            catch (Exception ex)
+            {
+                record.Note = oldNote;
+                tb.Text = oldNote;
+
+                MessageBox.Show("Ошибка сохранения примечания:\n" + ex.Message);
             }
         }
     }

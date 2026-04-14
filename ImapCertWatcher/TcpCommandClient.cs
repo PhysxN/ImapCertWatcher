@@ -44,7 +44,15 @@ namespace ImapCertWatcher.Client
                     NewLine = "\n"
                 })
                 {
-                    await writer.WriteLineAsync(command ?? string.Empty);
+                    var writeTask = writer.WriteLineAsync(command ?? string.Empty);
+                    var writeCompleted = await Task.WhenAny(
+                        writeTask,
+                        Task.Delay(ReadTimeoutMs));
+
+                    if (writeCompleted != writeTask)
+                        throw new TimeoutException("Таймаут отправки команды на сервер.");
+
+                    await writeTask;
 
                     var lengthLineTask = reader.ReadLineAsync();
                     var lengthLineCompleted = await Task.WhenAny(

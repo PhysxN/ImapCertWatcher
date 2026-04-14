@@ -14,6 +14,8 @@ namespace ImapCertWatcher.Server
         private readonly int _port;
         private readonly Func<string, string> _commandHandler;
         private static readonly Encoding Utf8NoBom = new UTF8Encoding(false);
+        private const int IoTimeoutMs = 60000;
+        private const int MaxLoggedCommandLength = 300;
 
         private TcpListener _listener;
         private CancellationTokenSource _cts;
@@ -123,15 +125,15 @@ namespace ImapCertWatcher.Server
             {
                 try
                 {
-                    client.ReceiveTimeout = 60000;
-                    client.SendTimeout = 60000;
+                    client.ReceiveTimeout = IoTimeoutMs;
+                    client.SendTimeout = IoTimeoutMs;
 
-                    var request = await reader.ReadLineAsync();
+                    var request = await ReadLineWithTimeoutAsync(reader, IoTimeoutMs);
 
                     if (string.IsNullOrWhiteSpace(request))
                         return;
 
-                    Console.WriteLine("[SERVER] CMD: " + request);
+                    Console.WriteLine("[SERVER] CMD: " + DescribeCommand(request));
 
                     string response;
                     try
@@ -144,10 +146,13 @@ namespace ImapCertWatcher.Server
                         Console.WriteLine("[SERVER HANDLER ERROR] " + ex.Message);
                     }
 
-                    await writer.WriteLineAsync(response.Length.ToString(CultureInfo.InvariantCulture));
+                    await WriteLineWithTimeoutAsync(
+                        writer,
+                        response.Length.ToString(CultureInfo.InvariantCulture),
+                        IoTimeoutMs);
 
                     if (response.Length > 0)
-                        await writer.WriteAsync(response);
+                        await WriteWithTimeoutAsync(writer, response, IoTimeoutMs);
 
                     await writer.FlushAsync();
 
@@ -158,6 +163,65 @@ namespace ImapCertWatcher.Server
                     Console.WriteLine("[SERVER ERROR] " + ex.Message);
                 }
             }
+        }
+
+        private static async Task<string> ReadLineWithTimeoutAsync(StreamReader reader, int timeoutMs)
+        {
+            var readTask = reader.ReadLineAsync();
+            var completed = await Task.WhenAny(readTask, Task.Delay(timeoutMs));
+
+            if (completed != readTask)
+                throw new TimeoutException("Timeout while reading client request.");
+
+            return await readTask;
+        }
+
+        private static async Task WriteLineWithTimeoutAsync(StreamWriter writer, string text, int timeoutMs)
+        {
+            var writeTask = writer.WriteLineAsync(text);
+            var completed = await Task.WhenAny(writeTask, Task.Delay(timeoutMs));
+
+            if (completed != writeTask)
+                throw new TimeoutException("Timeout while writing response length.");
+
+            await writeTask;
+        }
+
+        private static async Task WriteWithTimeoutAsync(StreamWriter writer, string text, int timeoutMs)
+        {
+            var writeTask = writer.WriteAsync(text);
+            var completed = await Task.WhenAny(writeTask, Task.Delay(timeoutMs));
+
+            if (completed != writeTask)
+                throw new TimeoutException("Timeout while writing response body.");
+
+            await writeTask;
+        }
+
+        private static string DescribeCommand(string request)
+        {
+            if (string.IsNullOrWhiteSpace(request))
+                return "<empty>";
+
+            int pipeIndex = request.IndexOf('|');
+            string commandName = pipeIndex >= 0
+                ? request.Substring(0, pipeIndex)
+                : request;
+
+            if (string.Equals(commandName, "ADD_ARCHIVE", StringComparison.OrdinalIgnoreCase))
+            {
+                var parts = request.Split(new[] { '|' }, 4);
+
+                if (parts.Length >= 3)
+                    return $"ADD_ARCHIVE|{parts[1]}|{parts[2]}|<base64 omitted>";
+
+                return "ADD_ARCHIVE|<base64 omitted>";
+            }
+
+            if (request.Length > MaxLoggedCommandLength)
+                return request.Substring(0, MaxLoggedCommandLength) + "...";
+
+            return request;
         }
 
         private static string SanitizeSingleLine(string text)

@@ -45,15 +45,6 @@ namespace ImapCertWatcher
 
                 await ReportProgressStep("Подключение к серверу...", 20);
 
-                try
-                {
-                    await _tokenService.Reload();
-                }
-                catch (Exception ex)
-                {
-                    SetServerState(ServerConnectionState.Offline);
-                    AddToMiniLog("Сервер недоступен, токены не загружены: " + ex.Message);
-                }
 
                 await LoadFromServer(false);
 
@@ -62,13 +53,7 @@ namespace ImapCertWatcher
                 System.Diagnostics.Debug.WriteLine("Данные получены");
 
                 await ReportProgressStep("Анализ полученных данных...", 35);
-                _knownCertIds = new HashSet<int>(_allItems.Select(r => r.Id));
-
-                await ReportProgressStep("Формирование списков токенов...", 50);
-                RebuildAvailableTokens();
-
-                await ReportProgressStep("Применение фильтров...", 60);
-                ApplySearchFilter();
+                System.Diagnostics.Debug.WriteLine("Данные получены и применены");
 
                 await ReportProgressStep("Настройка таблицы...", 70);
                 AutoFitDataGridColumns();
@@ -149,19 +134,6 @@ namespace ImapCertWatcher
             catch (Exception ex)
             {
                 Log($"Ошибка при обновлении дней: {ex.Message}");
-            }
-        }
-
-        private void ManualRefreshDaysLeft()
-        {
-            try
-            {
-                RefreshDaysLeft(null, EventArgs.Empty);
-                AddToMiniLog("Ручное обновление дней выполнено");
-            }
-            catch (Exception ex)
-            {
-                Log($"Ошибка при ручном обновлении дней: {ex.Message}");
             }
         }
 

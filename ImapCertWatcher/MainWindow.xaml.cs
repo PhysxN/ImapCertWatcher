@@ -23,7 +23,6 @@ namespace ImapCertWatcher
     public partial class MainWindow : Window, INotifyPropertyChanged
     {
         private ClientSettings _clientSettings;
-        private HashSet<int> _knownCertIds = new HashSet<int>();
         private ServerApiClient _api;
 
         private ObservableCollection<CertRecord> _items = new ObservableCollection<CertRecord>();
@@ -51,11 +50,13 @@ namespace ImapCertWatcher
         private DispatcherTimer _connectingAnimationTimer;
         private int _connectingDots = 0;
         private bool _isLoadingFromServer = false;
+        private bool _reloadRequestedWhileLoading = false;
         private bool _isApplyingFromServer = false;
         private int _monitorBusyFlag = 0;
         private int _reconnectBusy = 0;
         private bool _reloadAfterServerWork = false;
         private bool _serverWasBusy = false;
+        private bool _reloadAfterReconnectWhenIdle = false;
 
 
         enum ServerConnectionState
@@ -72,12 +73,6 @@ namespace ImapCertWatcher
         private static readonly TimeSpan PollOnline = TimeSpan.FromSeconds(3);
         private static readonly TimeSpan PollConnecting = TimeSpan.FromSeconds(1);
 
-        // Список доступных зданий
-        public ObservableCollection<string> AvailableBuildings { get; } =
-                new ObservableCollection<string>
-                {
-                    "", "Краснофлотская", "Пионерская"
-                };
 
         public TokensViewModel TokensVm
         {
@@ -426,54 +421,35 @@ namespace ImapCertWatcher
                     return;
                 }
 
-                // Диалог выбора файла - теперь только Excel
-                var saveFileDialog = new SaveFileDialog
-                {
-                    Filter = "Excel files (*.xlsx)|*.xlsx",
-                    FileName = $"Сертификаты_ЭЦП_{DateTime.Now:yyyy-MM-dd_HH-mm}" +
-                              (exportSelectedOnly ? "_выделенный" : "") + ".xlsx"
-                };
+                string programFolder = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Exports");
+                Directory.CreateDirectory(programFolder);
 
-                if (saveFileDialog.ShowDialog() != true)
+                string fileName = $"Сертификаты_ЭЦП_{DateTime.Now:yyyy-MM-dd_HH-mm}" +
+                                  (exportSelectedOnly ? "_выделенный" : "") + ".xlsx";
+                string filePath = Path.Combine(programFolder, fileName);
+                string createdFilePath = await Task.Run(() =>
                 {
-                    return; // Пользователь отменил
-                }
-
-                string filePath = saveFileDialog.FileName;
-
-                // Генерация файла в фоновом потоке
-                await Task.Run(() =>
-                {
-                    TryGenerateExcelWithClosedXML(dataToExport, filePath);
+                    return TryGenerateExcelWithClosedXML(dataToExport, filePath);
                 });
 
-                // Сообщение об успехе
-                var openResult = MessageBox.Show("Excel файл успешно экспортирован. Открыть файл?",
-                                               "Экспорт завершен",
-                                               MessageBoxButton.YesNo,
-                                               MessageBoxImage.Question);
-
-                if (openResult == MessageBoxResult.Yes)
+                try
                 {
-                    try
+                    Process.Start(new ProcessStartInfo(createdFilePath)
                     {
-                        Process.Start(new ProcessStartInfo(filePath)
-                        {
-                            UseShellExecute = true
-                        });
-                    }
-                    catch (Exception ex)
-                    {
-                        MessageBox.Show($"Не удалось открыть файл: {ex.Message}", "Ошибка",
-                                      MessageBoxButton.OK, MessageBoxImage.Warning);
-                    }
+                        UseShellExecute = true
+                    });
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show($"Файл создан, но не удалось его открыть: {ex.Message}", "Предупреждение",
+                                  MessageBoxButton.OK, MessageBoxImage.Warning);
                 }
 
                 statusText.Text = exportSelectedOnly
-                    ? "Выделенная запись экспортирована в Excel"
-                    : $"Экспортировано записей в Excel: {dataToExport.Count}";
+                    ? "Выделенная запись экспортирована"
+                    : $"Экспортировано записей: {dataToExport.Count}";
 
-                AddToMiniLog($"Excel экспорт завершен: {dataToExport.Count} записей");
+                AddToMiniLog($"Экспорт завершен: {Path.GetFileName(createdFilePath)}");
             }
             catch (Exception ex)
             {
@@ -486,6 +462,12 @@ namespace ImapCertWatcher
             {
                 exportProgress.Visibility = Visibility.Collapsed;
             }
+        }
+        private static string FormatExportDate(DateTime value)
+        {
+            return value == DateTime.MinValue
+                ? ""
+                : value.ToString("dd.MM.yyyy");
         }
 
         private void GenerateCsvFile(ObservableCollection<CertRecord> data, string filePath)
@@ -504,7 +486,7 @@ namespace ImapCertWatcher
                     var building = EscapeCsvField(record.Building ?? "");
                     var note = EscapeCsvField(record.Note ?? "");
 
-                    writer.WriteLine($"{fio};{certNumber};{record.DateStart:dd.MM.yyyy};{record.DateEnd:dd.MM.yyyy};{record.DaysLeft};{building};{note};{status}");
+                    writer.WriteLine($"{fio};{certNumber};{FormatExportDate(record.DateStart)};{FormatExportDate(record.DateEnd)};{record.DaysLeft};{building};{note};{status}");
                 }
             }
         }
@@ -565,10 +547,25 @@ namespace ImapCertWatcher
                     worksheet.Cell(row, 1).Value = record.Fio ?? "";
                     worksheet.Cell(row, 2).Value = record.CertNumber ?? "";
                     worksheet.Cell(row, 3).Value = record.TokenSn ?? "";
-                    worksheet.Cell(row, 4).Value = record.DateStart;
-                    worksheet.Cell(row, 4).Style.NumberFormat.Format = "dd.MM.yyyy";
-                    worksheet.Cell(row, 5).Value = record.DateEnd;
-                    worksheet.Cell(row, 5).Style.NumberFormat.Format = "dd.MM.yyyy";
+                    if (record.DateStart == DateTime.MinValue)
+                    {
+                        worksheet.Cell(row, 4).Value = "";
+                    }
+                    else
+                    {
+                        worksheet.Cell(row, 4).Value = record.DateStart;
+                        worksheet.Cell(row, 4).Style.NumberFormat.Format = "dd.MM.yyyy";
+                    }
+
+                    if (record.DateEnd == DateTime.MinValue)
+                    {
+                        worksheet.Cell(row, 5).Value = "";
+                    }
+                    else
+                    {
+                        worksheet.Cell(row, 5).Value = record.DateEnd;
+                        worksheet.Cell(row, 5).Style.NumberFormat.Format = "dd.MM.yyyy";
+                    }
                     worksheet.Cell(row, 6).Value = record.DaysLeft;
                     worksheet.Cell(row, 7).Value = record.Building ?? "";
                     worksheet.Cell(row, 8).Value = record.Note ?? "";
@@ -576,26 +573,30 @@ namespace ImapCertWatcher
                         ? "Аннулирован"
                         : record.IsDeleted ? "Удален" : "Активен";
 
-                    // Цветовое кодирование по сроку действия
-                    if (!record.IsDeleted)
+                    // Цветовое кодирование по статусу
+                    if (record.IsRevoked)
                     {
-                        if (record.DaysLeft <= 10)
-                        {
-                            worksheet.Range(row, 1, row, 9).Style.Fill.BackgroundColor = ClosedXML.Excel.XLColor.LightCoral;
-                        }
-                        else if (record.DaysLeft <= 30)
-                        {
-                            worksheet.Range(row, 1, row, 9).Style.Fill.BackgroundColor = ClosedXML.Excel.XLColor.LightYellow;
-                        }
-                        else
-                        {
-                            worksheet.Range(row, 1, row, 9).Style.Fill.BackgroundColor = ClosedXML.Excel.XLColor.LightGreen;
-                        }
+                        worksheet.Range(row, 1, row, 9).Style.Fill.BackgroundColor = ClosedXML.Excel.XLColor.LightPink;
+                    }
+                    else if (record.IsDeleted)
+                    {
+                        worksheet.Range(row, 1, row, 9).Style.Fill.BackgroundColor = ClosedXML.Excel.XLColor.LightGray;
+                    }
+                    else if (record.DateEnd == DateTime.MinValue)
+                    {
+                        worksheet.Range(row, 1, row, 9).Style.Fill.BackgroundColor = ClosedXML.Excel.XLColor.LightSteelBlue;
+                    }
+                    else if (record.DaysLeft <= 10)
+                    {
+                        worksheet.Range(row, 1, row, 9).Style.Fill.BackgroundColor = ClosedXML.Excel.XLColor.LightCoral;
+                    }
+                    else if (record.DaysLeft <= 30)
+                    {
+                        worksheet.Range(row, 1, row, 9).Style.Fill.BackgroundColor = ClosedXML.Excel.XLColor.LightYellow;
                     }
                     else
                     {
-                        // Для удаленных записей - серый цвет
-                        worksheet.Range(row, 1, row, 9).Style.Fill.BackgroundColor = ClosedXML.Excel.XLColor.LightGray;
+                        worksheet.Range(row, 1, row, 9).Style.Fill.BackgroundColor = ClosedXML.Excel.XLColor.LightGreen;
                     }
 
                     // Применяем стиль границ ко всем ячейкам строки
@@ -636,18 +637,23 @@ namespace ImapCertWatcher
             return field;
         }
 
-        private void TryGenerateExcelWithClosedXML(ObservableCollection<CertRecord> data, string filePath)
+        private string TryGenerateExcelWithClosedXML(ObservableCollection<CertRecord> data, string filePath)
         {
             try
             {
                 GenerateExcelFile(data, filePath);
+                return filePath;
             }
             catch (Exception ex)
             {
                 // Если не удалось создать XLSX, пробуем создать CSV как запасной вариант
                 string csvPath = Path.ChangeExtension(filePath, ".csv");
                 GenerateCsvFile(data, csvPath);
-                throw new Exception($"Не удалось создать Excel файл: {ex.Message}. Создан CSV файл: {Path.GetFileName(csvPath)}");
+
+                AddToMiniLog($"Excel создать не удалось, создан CSV: {Path.GetFileName(csvPath)}");
+                AddToMiniLog($"Причина: {ex.Message}");
+
+                return csvPath;
             }
         }
 
@@ -669,7 +675,7 @@ namespace ImapCertWatcher
             }
         }
 
-        private async Task RecreateApiAndTokenServicesAsync()
+        private Task RecreateApiAndTokenServicesAsync()
         {
             if (_tokenService != null)
                 _tokenService.TokensChanged -= RebuildAvailableTokens;
@@ -681,16 +687,7 @@ namespace ImapCertWatcher
 
             _tokenService.TokensChanged += RebuildAvailableTokens;
 
-            try
-            {
-                await _tokenService.Reload();
-            }
-            catch (Exception ex)
-            {
-                AddToMiniLog("Не удалось обновить токены после смены настроек: " + ex.Message);
-            }
-
-            RebuildAvailableTokens();
+            return Task.CompletedTask;
         }
 
         private void SelectCertificatesTab()
@@ -754,6 +751,8 @@ namespace ImapCertWatcher
                 tabTokens.IsEnabled = false;
                 tabLogs.IsEnabled = false;
                 tabSettings.IsEnabled = true;
+                if (grpMaintenance != null)
+                    grpMaintenance.IsEnabled = false;
 
                 txtServerStatus.Text = "🔴 Сервер OFFLINE";
                 txtServerStatus.Foreground = Brushes.Red;
@@ -780,6 +779,8 @@ namespace ImapCertWatcher
                 tabTokens.IsEnabled = true;
                 tabLogs.IsEnabled = true;
                 tabSettings.IsEnabled = true;
+                if (grpMaintenance != null)
+                    grpMaintenance.IsEnabled = true;
 
                 if (_shouldOpenCertificatesTabWhenConnectionRestored)
                 {
@@ -789,12 +790,6 @@ namespace ImapCertWatcher
 
                 if (statusText != null)
                     statusText.Text = "Готов";
-
-                if (tokensStatusText != null)
-                    tokensStatusText.Text = "Токены загружены";
-
-                if (logStatusText != null)
-                    logStatusText.Text = "Логи загружены";
             }
 
             mainTabControl.UpdateLayout();

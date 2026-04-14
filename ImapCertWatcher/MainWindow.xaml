@@ -158,7 +158,7 @@
                                      Checked="BuildingFilter_Checked"/>
 
                         <CheckBox x:Name="chkShowDeleted"
-                                  Content="Показывать удаленные"
+                                  Content="Показывать все сертификаты"
                                   Style="{StaticResource ModernCheckBoxStyle}"
                                   Checked="ChkShowDeleted_Changed"
                                   Unchecked="ChkShowDeleted_Changed"/>
@@ -180,10 +180,8 @@
                               CanUserResizeColumns="True"
                               LoadingRow="DgCerts_LoadingRow"
                               SelectionChanged="DgCerts_SelectionChanged"
+                              PreviewMouseRightButtonDown="DgCerts_PreviewMouseRightButtonDown"
                               ContextMenuOpening="DgCerts_ContextMenuOpening"
-                              CellEditEnding="DgCerts_CellEditEnding"
-                              BeginningEdit="DgCerts_BeginningEdit"
-                              PreparingCellForEdit="DgCerts_PreparingCellForEdit"
                               Loaded="DgCerts_Loaded">
                         
                         <DataGrid.ContextMenu>
@@ -400,6 +398,7 @@
                                     <DataTemplate>
                                         <TextBox Text="{Binding Note, UpdateSourceTrigger=PropertyChanged}"
                                                  Style="{StaticResource DataGridTextBoxStyle}"
+                                                 Loaded="NoteTextBox_Loaded"
                                                  LostFocus="NoteTextBox_LostFocus"/>
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
@@ -734,7 +733,8 @@
 
                             <!-- Правая колонка -->
                             <StackPanel Grid.Column="2">
-                                <GroupBox Header="Обслуживание"
+                                <GroupBox x:Name="grpMaintenance"
+                                          Header="Обслуживание"
                                           Margin="0,0,0,12"
                                           Style="{StaticResource ModernGroupBoxStyle}">
                                     <StackPanel Margin="8">
@@ -760,7 +760,6 @@
                                                 ToolTip="Удаляет отметки аннулирования и историю REVOKE"/>
                                     </StackPanel>
                                 </GroupBox>
-
                             </StackPanel>
                         </Grid>
                     </ScrollViewer>
