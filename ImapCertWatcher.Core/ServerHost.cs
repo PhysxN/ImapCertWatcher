@@ -340,6 +340,181 @@ namespace ImapCertWatcher.Server
                         }
                     }
 
+                case "PREVIEW_CER":
+                    {
+                        string tempCerPath = null;
+
+                        try
+                        {
+                            var parts = originalCmd.Split(new[] { '|' }, 3);
+
+                            if (parts.Length < 3)
+                                return "ERROR|PREVIEW_CER|BAD_FORMAT";
+
+                            string fileName = Path.GetFileName(parts[1] ?? "");
+
+                            if (string.IsNullOrWhiteSpace(fileName))
+                                return "ERROR|PREVIEW_CER|BAD_FILE_NAME";
+
+                            if (!fileName.EndsWith(".cer", StringComparison.OrdinalIgnoreCase))
+                                return "ERROR|PREVIEW_CER|BAD_EXTENSION";
+
+                            byte[] fileData;
+                            try
+                            {
+                                fileData = Convert.FromBase64String(parts[2]);
+                            }
+                            catch
+                            {
+                                return "ERROR|PREVIEW_CER|BAD_DATA";
+                            }
+
+                            if (fileData == null || fileData.Length == 0)
+                                return "ERROR|PREVIEW_CER|EMPTY_FILE";
+
+                            if (fileData.Length > 5_000_000)
+                                return "ERROR|PREVIEW_CER|FILE_TOO_LARGE";
+
+                            tempCerPath = Path.Combine(
+                                Path.GetTempPath(),
+                                Guid.NewGuid().ToString("N") + ".cer");
+
+                            File.WriteAllBytes(tempCerPath, fileData);
+
+                            if (!CerCertificateParser.TryParse(tempCerPath, _log, out var certInfo, false) || certInfo == null)
+                                return "ERROR|PREVIEW_CER|PARSE_FAILED";
+
+                            var preview = new
+                            {
+                                Fio = certInfo.Fio ?? "",
+                                CertNumber = certInfo.CertNumber ?? "",
+                                DateStartText = certInfo.DateStart == DateTime.MinValue
+                                    ? ""
+                                    : certInfo.DateStart.ToString("dd.MM.yyyy"),
+                                DateEndText = certInfo.DateEnd == DateTime.MinValue
+                                    ? ""
+                                    : certInfo.DateEnd.ToString("dd.MM.yyyy")
+                            };
+
+                            return "CER_PREVIEW " + JsonConvert.SerializeObject(preview);
+                        }
+                        catch (Exception ex)
+                        {
+                            _log("PREVIEW_CER ERROR: " + ex.Message);
+                            return "ERROR|PREVIEW_CER|" + ex.Message.Replace("\r", " ").Replace("\n", " ");
+                        }
+                        finally
+                        {
+                            if (!string.IsNullOrWhiteSpace(tempCerPath))
+                            {
+                                try
+                                {
+                                    if (File.Exists(tempCerPath))
+                                        File.Delete(tempCerPath);
+                                }
+                                catch { }
+                            }
+                        }
+                    }
+
+                case "ADD_CER":
+                    {
+                        string tempCerPath = null;
+
+                        try
+                        {
+                            var parts = originalCmd.Split(new[] { '|' }, 3);
+
+                            if (parts.Length < 3)
+                                return "ERROR|ADD_CER|BAD_FORMAT";
+
+                            string fileName = Path.GetFileName(parts[1] ?? "");
+
+                            if (string.IsNullOrWhiteSpace(fileName))
+                                return "ERROR|ADD_CER|BAD_FILE_NAME";
+
+                            if (!fileName.EndsWith(".cer", StringComparison.OrdinalIgnoreCase))
+                                return "ERROR|ADD_CER|BAD_EXTENSION";
+
+                            byte[] fileData;
+                            try
+                            {
+                                fileData = Convert.FromBase64String(parts[2]);
+                            }
+                            catch
+                            {
+                                return "ERROR|ADD_CER|BAD_DATA";
+                            }
+
+                            if (fileData == null || fileData.Length == 0)
+                                return "ERROR|ADD_CER|EMPTY_FILE";
+
+                            if (fileData.Length > 5_000_000)
+                                return "ERROR|ADD_CER|FILE_TOO_LARGE";
+
+                            tempCerPath = Path.Combine(
+                                Path.GetTempPath(),
+                                Guid.NewGuid().ToString("N") + ".cer");
+
+                            File.WriteAllBytes(tempCerPath, fileData);
+
+                            if (!CerCertificateParser.TryParse(tempCerPath, _log, out var certInfo, true) || certInfo == null)
+                                return "ERROR|ADD_CER|PARSE_FAILED";
+
+                            if (string.IsNullOrWhiteSpace(certInfo.CertNumber))
+                                return "ERROR|ADD_CER|EMPTY_CERT_NUMBER";
+
+                            var entry = new CertEntry
+                            {
+                                Fio = certInfo.Fio,
+                                CertNumber = certInfo.CertNumber,
+                                DateStart = certInfo.DateStart,
+                                DateEnd = certInfo.DateEnd,
+                                FromAddress = "MANUAL_IMPORT",
+                                FolderPath = "MANUAL_IMPORT",
+                                MessageDate = DateTime.Now
+                            };
+
+                            var (wasUpdated, wasAdded, certId) = _db.InsertOrUpdateAndGetId(entry);
+
+                            if (certId <= 0)
+                                return "ERROR|ADD_CER|SAVE_FAILED";
+
+                            bool archiveSaved = _db.SaveArchiveToDb(certId, fileName, fileData);
+
+                            if (!archiveSaved)
+                                return "ERROR|ADD_CER|ARCHIVE_SAVE_FAILED";
+
+                            _log($"ADD_CER OK: CertID={certId}, file={fileName}, added={wasAdded}, updated={wasUpdated}");
+
+                            if (wasAdded)
+                                return "OK ADD_CER ADDED";
+
+                            if (wasUpdated)
+                                return "OK ADD_CER UPDATED";
+
+                            return "OK ADD_CER ALREADY_EXISTS";
+                        }
+                        catch (Exception ex)
+                        {
+                            _log("ADD_CER ERROR: " + ex.Message);
+                            return "ERROR|ADD_CER|" + ex.Message.Replace("\r", " ").Replace("\n", " ");
+                        }
+                        finally
+                        {
+                            if (!string.IsNullOrWhiteSpace(tempCerPath))
+                            {
+                                try
+                                {
+                                    if (File.Exists(tempCerPath))
+                                        File.Delete(tempCerPath);
+                                }
+                                catch { }
+                            }
+                        }
+                    }
+
+
                 case "GET_ARCHIVE":
                     {
                         try

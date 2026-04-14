@@ -83,7 +83,6 @@
   <ItemGroup>
     <Compile Include="CerCertificateParser.cs" />
     <Compile Include="CertEntry.cs" />
-    <Compile Include="CertEntryFactory.cs" />
     <Compile Include="CertRecord.cs" />
     <Compile Include="ClientSettings.cs" />
     <Compile Include="DbHelper.cs" />
@@ -97,10 +96,8 @@
     <Compile Include="Services\ServerSettingsBackendService.cs" />
     <Compile Include="SettingsLoader.cs" />
     <Compile Include="SettingsSaver.cs" />
-    <Compile Include="SigCertificateParser.cs" />
     <Compile Include="TcpCommandServer.cs" />
     <Compile Include="TokenRecord.cs" />
-    <Compile Include="Utils\AsyncHelper.cs" />
     <Compile Include="Utils\CryptoHelper.cs" />
     <Compile Include="Utils\SafeAsyncTimer.cs" />
     <Compile Include="ZipCerExtractor.cs" />

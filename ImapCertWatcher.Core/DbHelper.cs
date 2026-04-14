@@ -1066,13 +1066,6 @@ WHERE ID = @certId";
 
         #endregion
 
-        #region Find / duplicate checks / get by id
-
-
-
-
-
-        #endregion
 
         #region InsertOrUpdate (atomic variant included)
 

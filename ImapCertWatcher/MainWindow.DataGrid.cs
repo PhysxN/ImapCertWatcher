@@ -33,8 +33,18 @@ namespace ImapCertWatcher
                 {
                     try
                     {
+                        DataGridColumn noteColumn = null;
+
                         foreach (var column in dgCerts.Columns)
                         {
+                            string header = column.Header?.ToString() ?? "";
+
+                            if (string.Equals(header, "Примечание", StringComparison.Ordinal))
+                            {
+                                noteColumn = column;
+                                continue;
+                            }
+
                             if (column is DataGridTextColumn textColumn)
                             {
                                 AutoFitTextColumn(textColumn);
@@ -48,6 +58,9 @@ namespace ImapCertWatcher
                                 AutoFitCheckBoxColumn(checkBoxColumn);
                             }
                         }
+
+                        if (noteColumn != null)
+                            noteColumn.Width = new DataGridLength(1, DataGridLengthUnitType.Star);
 
                         dgCerts.UpdateLayout();
                     }
@@ -591,6 +604,12 @@ namespace ImapCertWatcher
                         ? Color.FromArgb(255, 80, 80, 80)
                         : Color.FromArgb(255, 220, 220, 220));
                 }
+                else if (record.IsExpired)
+                {
+                    e.Row.Background = new SolidColorBrush(_isDarkTheme
+                        ? Color.FromArgb(255, 85, 55, 25)
+                        : Color.FromArgb(255, 255, 230, 190));
+                }
                 else if (record.DateEnd == DateTime.MinValue)
                 {
                     e.Row.Background = new SolidColorBrush(_isDarkTheme
@@ -615,6 +634,7 @@ namespace ImapCertWatcher
                         ? Color.FromArgb(255, 50, 80, 50)
                         : Color.FromArgb(255, 200, 255, 200));
                 }
+
                 e.Row.Foreground = new SolidColorBrush(_isDarkTheme
                     ? Colors.White
                     : Colors.Black);

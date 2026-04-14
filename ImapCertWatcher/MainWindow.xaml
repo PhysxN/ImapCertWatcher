@@ -393,17 +393,6 @@
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
-                            <DataGridTemplateColumn Header="Примечание" Width="2*">
-                                <DataGridTemplateColumn.CellTemplate>
-                                    <DataTemplate>
-                                        <TextBox Text="{Binding Note, UpdateSourceTrigger=PropertyChanged}"
-                                                 Style="{StaticResource DataGridTextBoxStyle}"
-                                                 Loaded="NoteTextBox_Loaded"
-                                                 LostFocus="NoteTextBox_LostFocus"/>
-                                    </DataTemplate>
-                                </DataGridTemplateColumn.CellTemplate>
-                            </DataGridTemplateColumn>
-
                             <DataGridTemplateColumn Header="Статус" Width="120">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
@@ -430,6 +419,12 @@
                                         </Border>
 
                                         <DataTemplate.Triggers>
+                                            <DataTrigger Binding="{Binding IsExpired}" Value="True">
+                                                <Setter TargetName="statusBorder" Property="Background" Value="#FFF1D6"/>
+                                                <Setter TargetName="statusText" Property="Text" Value="Истек"/>
+                                                <Setter TargetName="statusText" Property="Foreground" Value="#A15C00"/>
+                                            </DataTrigger>
+
                                             <DataTrigger Binding="{Binding IsDeleted}" Value="True">
                                                 <Setter TargetName="statusBorder" Property="Background" Value="#E3E3E3"/>
                                                 <Setter TargetName="statusText" Property="Text" Value="Удалён"/>
@@ -442,10 +437,21 @@
                                                 <Setter TargetName="statusText" Property="Foreground" Value="#A12626"/>
                                                 <Setter TargetName="statusToolTip" Property="Visibility" Value="Visible"/>
                                                 <Setter TargetName="statusToolTipText"
-                                                        Property="Text"
-                                                        Value="{Binding RevokedDisplay, Converter={StaticResource RevokedDisplayToToolTipConverter}}"/>
+                            Property="Text"
+                            Value="{Binding RevokedDisplay, Converter={StaticResource RevokedDisplayToToolTipConverter}}"/>
                                             </DataTrigger>
                                         </DataTemplate.Triggers>
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+
+                            <DataGridTemplateColumn Header="Примечание" Width="*">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBox Text="{Binding Note, UpdateSourceTrigger=PropertyChanged}"
+                     Style="{StaticResource DataGridTextBoxStyle}"
+                     Loaded="NoteTextBox_Loaded"
+                     LostFocus="NoteTextBox_LostFocus"/>
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>

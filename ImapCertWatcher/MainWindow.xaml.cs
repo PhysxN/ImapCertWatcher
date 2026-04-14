@@ -17,6 +17,8 @@ using System.Windows.Threading;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Controls;
+using System.Runtime.InteropServices;
+using System.Windows.Interop;
 
 namespace ImapCertWatcher
 {
@@ -98,10 +100,14 @@ namespace ImapCertWatcher
         }
         public MainWindow()
         {
-
             try
             {
                 InitializeComponent();
+
+                SourceInitialized += MainWindow_SourceInitialized;
+                Closed += MainWindow_Closed;
+                Microsoft.Win32.SystemEvents.UserPreferenceChanged += SystemEvents_UserPreferenceChanged;
+
                 SetServerState(ServerConnectionState.Offline);
 
                 // Инициализация мини-лога
@@ -141,6 +147,60 @@ namespace ImapCertWatcher
             }
         }
 
+
+        private void MainWindow_SourceInitialized(object sender, EventArgs e)
+        {
+            ApplyTitleBarThemeFromWindows();
+        }
+
+        private void MainWindow_Closed(object sender, EventArgs e)
+        {
+            Microsoft.Win32.SystemEvents.UserPreferenceChanged -= SystemEvents_UserPreferenceChanged;
+        }
+
+        private void SystemEvents_UserPreferenceChanged(object sender, Microsoft.Win32.UserPreferenceChangedEventArgs e)
+        {
+            if (e.Category == Microsoft.Win32.UserPreferenceCategory.General ||
+                e.Category == Microsoft.Win32.UserPreferenceCategory.VisualStyle)
+            {
+                Dispatcher.BeginInvoke(new Action(ApplyTitleBarThemeFromWindows));
+            }
+        }
+
+        private void ApplyTitleBarThemeFromWindows()
+        {
+            try
+            {
+                ApplyImmersiveDarkMode(this, _isDarkTheme);
+            }
+            catch (Exception ex)
+            {
+                Log("Ошибка применения темы заголовка окна: " + ex.Message);
+            }
+        }
+
+
+        private static void ApplyImmersiveDarkMode(Window window, bool enabled)
+        {
+            var hwnd = new WindowInteropHelper(window).Handle;
+            if (hwnd == IntPtr.Zero)
+                return;
+
+            int useDark = enabled ? 1 : 0;
+
+            // Windows 11 / новые Windows 10
+            DwmSetWindowAttribute(hwnd, 20, ref useDark, sizeof(int));
+
+            // Старый вариант атрибута для части сборок Windows 10
+            DwmSetWindowAttribute(hwnd, 19, ref useDark, sizeof(int));
+        }
+
+        [DllImport("dwmapi.dll")]
+        private static extern int DwmSetWindowAttribute(
+            IntPtr hwnd,
+            int dwAttribute,
+            ref int pvAttribute,
+            int cbAttribute);
 
         public event Action DataLoaded;
 
@@ -224,6 +284,8 @@ namespace ImapCertWatcher
 
         private void ApplyTheme(bool dark)
         {
+            _isDarkTheme = dark;
+
             var dictionaries = Application.Current.Resources.MergedDictionaries;
 
             for (int i = dictionaries.Count - 1; i >= 0; i--)
@@ -249,6 +311,7 @@ namespace ImapCertWatcher
             dictionaries.Insert(0, themeDict);
 
             SyncThemeToggleSwitchState();
+            ApplyTitleBarThemeFromWindows();
         }
 
         private void SyncThemeToggleSwitchState()
@@ -364,7 +427,6 @@ namespace ImapCertWatcher
                     _clientSettings.DarkTheme = _isDarkTheme;
 
                 ApplyTheme(_isDarkTheme);
-                SyncThemeToggleSwitchState();
 
                 if (dgCerts != null)
                     dgCerts.Items.Refresh();
@@ -480,7 +542,13 @@ namespace ImapCertWatcher
                 // Данные
                 foreach (var record in data)
                 {
-                    var status = record.IsRevoked ? "Аннулирован" : record.IsDeleted ? "Удален" : "Активен";
+                    var status = record.IsRevoked
+                        ? "Аннулирован"
+                        : record.IsDeleted
+                            ? "Удален"
+                            : record.IsExpired
+                                ? "Истек"
+                                : "Активен";
                     var fio = EscapeCsvField(record.Fio ?? "");
                     var certNumber = EscapeCsvField(record.CertNumber ?? "");
                     var building = EscapeCsvField(record.Building ?? "");
@@ -571,8 +639,11 @@ namespace ImapCertWatcher
                     worksheet.Cell(row, 8).Value = record.Note ?? "";
                     worksheet.Cell(row, 9).Value = record.IsRevoked
                         ? "Аннулирован"
-                        : record.IsDeleted ? "Удален" : "Активен";
-
+                        : record.IsDeleted
+                            ? "Удален"
+                            : record.IsExpired
+                                ? "Истек"
+                                : "Активен";
                     // Цветовое кодирование по статусу
                     if (record.IsRevoked)
                     {
@@ -581,6 +652,10 @@ namespace ImapCertWatcher
                     else if (record.IsDeleted)
                     {
                         worksheet.Range(row, 1, row, 9).Style.Fill.BackgroundColor = ClosedXML.Excel.XLColor.LightGray;
+                    }
+                    else if (record.IsExpired)
+                    {
+                        worksheet.Range(row, 1, row, 9).Style.Fill.BackgroundColor = ClosedXML.Excel.XLColor.LightGoldenrodYellow;
                     }
                     else if (record.DateEnd == DateTime.MinValue)
                     {
@@ -598,7 +673,6 @@ namespace ImapCertWatcher
                     {
                         worksheet.Range(row, 1, row, 9).Style.Fill.BackgroundColor = ClosedXML.Excel.XLColor.LightGreen;
                     }
-
                     // Применяем стиль границ ко всем ячейкам строки
                     for (int col = 1; col <= headers.Length; col++)
                     {

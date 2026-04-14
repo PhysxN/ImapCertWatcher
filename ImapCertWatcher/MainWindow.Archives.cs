@@ -8,18 +8,239 @@ using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
+using Newtonsoft.Json.Linq;
 
 namespace ImapCertWatcher
 {
     public partial class MainWindow
     {
-        private void BtnLoadCer_Click(object sender, RoutedEventArgs e)
+        private async void BtnLoadCer_Click(object sender, RoutedEventArgs e)
         {
-            MessageBox.Show(
-                "Ручная загрузка сертификата временно отключена.",
-                "Временно недоступно",
-                MessageBoxButton.OK,
-                MessageBoxImage.Information);
+            if (_api == null)
+            {
+                MessageBox.Show("Сервер не подключен");
+                return;
+            }
+
+            var dlg = new OpenFileDialog
+            {
+                Filter = "CER (*.cer)|*.cer",
+                Multiselect = false,
+                CheckFileExists = true,
+                Title = "Выберите файл сертификата CER"
+            };
+
+            if (dlg.ShowDialog() != true)
+                return;
+
+            try
+            {
+                var fileInfo = new FileInfo(dlg.FileName);
+
+                if (!fileInfo.Exists)
+                {
+                    MessageBox.Show(
+                        "Файл не найден. Возможно, он был удален или перемещен.",
+                        "Ошибка",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Warning);
+                    return;
+                }
+
+                if (fileInfo.Length <= 0)
+                {
+                    MessageBox.Show(
+                        "Файл пустой.",
+                        "Ошибка",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Warning);
+                    return;
+                }
+
+                if (fileInfo.Length > 5_000_000)
+                {
+                    MessageBox.Show(
+                        "Файл слишком большой. Максимальный размер — 5 МБ.",
+                        "Ошибка",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Warning);
+                    return;
+                }
+
+                string fileName = Path.GetFileName(dlg.FileName);
+
+                if (!fileName.EndsWith(".cer", StringComparison.OrdinalIgnoreCase))
+                {
+                    MessageBox.Show(
+                        "Нужно выбрать файл с расширением .cer",
+                        "Ошибка",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Warning);
+                    return;
+                }
+
+                statusText.Text = "Проверка CER на сервере...";
+                AddToMiniLog("Предпросмотр CER: " + fileName);
+
+                byte[] bytes = File.ReadAllBytes(dlg.FileName);
+                string base64 = Convert.ToBase64String(bytes);
+
+                var previewResponse = await _api.PreviewCer(fileName, base64);
+
+                if (string.IsNullOrWhiteSpace(previewResponse))
+                {
+                    MessageBox.Show("Нет ответа от сервера");
+                    statusText.Text = "Ошибка предпросмотра CER";
+                    return;
+                }
+
+                if (!previewResponse.StartsWith("CER_PREVIEW ", StringComparison.OrdinalIgnoreCase))
+                {
+                    MessageBox.Show("Ошибка предпросмотра CER:\n" + previewResponse);
+                    statusText.Text = "Ошибка предпросмотра CER";
+                    return;
+                }
+
+                string json = previewResponse.Substring("CER_PREVIEW ".Length);
+                var preview = JObject.Parse(json);
+
+                string fio = preview["Fio"]?.ToString() ?? "";
+                string certNumber = preview["CertNumber"]?.ToString() ?? "";
+                string dateStartText = preview["DateStartText"]?.ToString() ?? "";
+                string dateEndText = preview["DateEndText"]?.ToString() ?? "";
+
+                var confirmResult = MessageBox.Show(
+                    "Добавить сертификат в базу?\n\n" +
+                    $"ФИО: {fio}\n" +
+                    $"Сертификат: {certNumber}\n" +
+                    $"Начало действия: {dateStartText}\n" +
+                    $"Окончание действия: {dateEndText}",
+                    "Подтверждение загрузки CER",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Question);
+
+                if (confirmResult != MessageBoxResult.Yes)
+                {
+                    statusText.Text = "Загрузка CER отменена";
+                    AddToMiniLog("Ручная загрузка CER отменена пользователем: " + fileName);
+                    return;
+                }
+
+                statusText.Text = "Добавление CER в базу...";
+                AddToMiniLog("Подтверждено добавление CER: " + fileName);
+
+                var addResponse = await _api.AddCer(fileName, base64);
+
+                if (string.IsNullOrWhiteSpace(addResponse))
+                {
+                    MessageBox.Show("Нет ответа от сервера");
+                    statusText.Text = "Ошибка загрузки CER";
+                    return;
+                }
+
+                if (!addResponse.StartsWith("OK", StringComparison.OrdinalIgnoreCase))
+                {
+                    MessageBox.Show("Ошибка загрузки CER:\n" + addResponse);
+                    statusText.Text = "Ошибка загрузки CER";
+                    return;
+                }
+
+                await LoadFromServer();
+
+                string resultTitle = "Результат загрузки CER";
+                string resultText;
+
+                if (addResponse.IndexOf("ADDED", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    statusText.Text = "CER добавлен в базу";
+                    AddToMiniLog("CER добавлен в базу: " + fileName);
+
+                    resultText =
+                        "Сертификат добавлен в базу.\n\n" +
+                        $"ФИО: {fio}\n" +
+                        $"Сертификат: {certNumber}\n" +
+                        $"Начало действия: {dateStartText}\n" +
+                        $"Окончание действия: {dateEndText}";
+                }
+                else if (addResponse.IndexOf("UPDATED", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    statusText.Text = "CER обновил существующую запись";
+                    AddToMiniLog("CER обновил существующую запись: " + fileName);
+
+                    resultText =
+                        "Найдена существующая запись по этому ФИО.\n" +
+                        "Она обновлена новым сертификатом.\n\n" +
+                        $"ФИО: {fio}\n" +
+                        $"Сертификат: {certNumber}\n" +
+                        $"Начало действия: {dateStartText}\n" +
+                        $"Окончание действия: {dateEndText}";
+                }
+                else if (addResponse.IndexOf("ALREADY_EXISTS", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    statusText.Text = "Такой сертификат уже есть в базе";
+                    AddToMiniLog("CER уже был в базе: " + fileName);
+
+                    resultText =
+                        "Такой сертификат уже есть в базе.\n" +
+                        "Новая запись не создавалась.\n" +
+                        "CER-файл сохранён в архив записи.\n\n" +
+                        $"ФИО: {fio}\n" +
+                        $"Сертификат: {certNumber}\n" +
+                        $"Начало действия: {dateStartText}\n" +
+                        $"Окончание действия: {dateEndText}";
+                }
+                else
+                {
+                    statusText.Text = "CER обработан";
+                    AddToMiniLog("CER обработан: " + fileName);
+
+                    resultText =
+                        "CER обработан сервером.\n\n" +
+                        $"ФИО: {fio}\n" +
+                        $"Сертификат: {certNumber}\n" +
+                        $"Начало действия: {dateStartText}\n" +
+                        $"Окончание действия: {dateEndText}";
+                }
+
+                MessageBox.Show(
+                    resultText,
+                    resultTitle,
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+
+            }
+            catch (FileNotFoundException)
+            {
+                MessageBox.Show(
+                    "Файл не найден. Возможно, он был удален или перемещен.",
+                    "Ошибка",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                MessageBox.Show(
+                    "Нет прав доступа к файлу.",
+                    "Ошибка",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+            }
+            catch (IOException ex)
+            {
+                MessageBox.Show(
+                    "Ошибка чтения файла:\n" + ex.Message,
+                    "Ошибка",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    "Неожиданная ошибка при загрузке CER:\n" + ex.Message,
+                    "Ошибка",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+            }
         }
 
         private async void AddArchiveMenuItem_Click(object sender, RoutedEventArgs e)

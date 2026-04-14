@@ -65,6 +65,16 @@ namespace ImapCertWatcher.Client
             return await SendCommandTrimmed($"ADD_ARCHIVE|{certId}|{file}|{base64}");
         }
 
+        public async Task<string> AddCer(string fileName, string base64)
+        {
+            return await SendCommandTrimmed($"ADD_CER|{fileName}|{base64}");
+        }
+
+        public async Task<string> PreviewCer(string fileName, string base64)
+        {
+            return await SendCommandTrimmed($"PREVIEW_CER|{fileName}|{base64}");
+        }
+
         public async Task<string> GetArchive(int certId)
         {
             return await SendCommandTrimmed($"GET_ARCHIVE|{certId}");

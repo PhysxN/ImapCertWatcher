@@ -24,7 +24,8 @@ namespace ImapCertWatcher.Utils
         public static bool TryParse(
             string cerFilePath,
             Action<string> log,
-            out CerCertificateInfo certInfo)
+            out CerCertificateInfo certInfo,
+            bool writeDetailedLog = true)
         {
             certInfo = null;
 
@@ -49,7 +50,9 @@ namespace ImapCertWatcher.Utils
                     Thumbprint = cert.Thumbprint
                 };
 
-                LogCertInfo(certInfo, log);
+                if (writeDetailedLog)
+                    LogCertInfo(certInfo, log);
+
                 return true;
             }
             catch (Exception ex)

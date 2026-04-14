@@ -79,6 +79,7 @@ namespace ImapCertWatcher.Models
                 _dateEnd = value;
                 OnPropertyChanged(nameof(DateEnd));
                 OnPropertyChanged(nameof(DaysLeft));
+                OnPropertyChanged(nameof(IsExpired));
             }
         }
 
@@ -90,6 +91,23 @@ namespace ImapCertWatcher.Models
                     return 0;
 
                 return (DateEnd.Date - DateTime.Now.Date).Days;
+            }
+        }
+
+        public bool IsExpired
+        {
+            get
+            {
+                if (IsDeleted)
+                    return false;
+
+                if (IsRevoked)
+                    return false;
+
+                if (DateEnd == DateTime.MinValue)
+                    return false;
+
+                return DateEnd.Date < DateTime.Now.Date;
             }
         }
 
@@ -143,6 +161,7 @@ namespace ImapCertWatcher.Models
                 _isDeleted = value;
                 OnPropertyChanged(nameof(IsDeleted));
                 OnPropertyChanged(nameof(CanEditToken));
+                OnPropertyChanged(nameof(IsExpired));
             }
         }
 
@@ -184,6 +203,7 @@ namespace ImapCertWatcher.Models
                 OnPropertyChanged(nameof(IsRevoked));
                 OnPropertyChanged(nameof(RevokedDisplay));
                 OnPropertyChanged(nameof(CanEditToken));
+                OnPropertyChanged(nameof(IsExpired));
             }
         }
 
@@ -371,6 +391,7 @@ namespace ImapCertWatcher.Models
         public void RefreshDaysLeft()
         {
             OnPropertyChanged(nameof(DaysLeft));
+            OnPropertyChanged(nameof(IsExpired));
         }
 
         private string FormatName(string value)
